@@ -1,0 +1,426 @@
+package dev.gpunoise;
+
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
+import java.nio.LongBuffer;
+import java.nio.IntBuffer;
+import java.util.IdentityHashMap;
+import java.util.Map;
+import org.lwjgl.PointerBuffer;
+import org.lwjgl.system.Configuration;
+import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.vulkan.*;
+import static org.lwjgl.vulkan.VK10.*;
+
+/** Reusable Vulkan resources for repeated NormalNoise submissions. */
+final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
+    static final int CAPACITY = 262_144;
+    private final VkInstance instance;
+    private final VkPhysicalDevice physical;
+    private final VkDevice device;
+    private final VkQueue queue;
+    private final int queueFamily;
+    private final NativeBuffer coordinates, results, permutations, octaves, samplerMetadata;
+    private final NativeBuffer graphCoordinates, graphNodes, graphSplinePoints, graphBlendedMetadata, graphBlendInputs, graphRoots;
+    private final NativeBuffer interpolationMetadata, interpolationOutput;
+    private final long shader, descriptorLayout, pipelineLayout, pipeline, descriptorPool, descriptorSet, commandPool;
+    private final long graphShader, graphDescriptorLayout, graphPipelineLayout, graphPipeline, graphDescriptorPool, graphDescriptorSet;
+    private final long interpolationShader, interpolationDescriptorLayout, interpolationPipelineLayout,
+            interpolationPipeline, interpolationDescriptorPool, interpolationDescriptorSet;
+    private final boolean ownsDevice;
+    /** Vulkan requires host-side external synchronization for queue operations. */
+    private final Object queueSubmitLock;
+    private ByteBuffer persistentResults;
+    private final Map<NativeBuffer, ByteBuffer> persistentMappings = new IdentityHashMap<>();
+    private final Map<GpuDensityGraph, GpuDensityGraphBuffer.Packed> packedGraphs = new IdentityHashMap<>();
+    // The startup parity pass uploads the full router graph, then terrain
+    // generation uploads a reduced graph. A boolean cache flag incorrectly
+    // treated those different layouts as interchangeable.
+    private GpuDensityGraph graphResourcesGraph;
+    private final long fence;
+    private final VkCommandBuffer commandBuffer;
+
+    PersistentVulkanNormalNoiseEngine(GpuDevice expected) throws Exception {
+        Configuration.STACK_SIZE.set(1_048_576);
+        MemoryStack stack = MemoryStack.stackPush();
+        try {
+            instance = createInstance(stack);
+            physical = findPhysical(instance, expected, stack);
+            queueFamily = findQueue(physical, stack);
+            VkDeviceQueueCreateInfo.Buffer qi = VkDeviceQueueCreateInfo.calloc(1, stack).sType$Default()
+                    .queueFamilyIndex(queueFamily).pQueuePriorities(stack.floats(1.0f));
+            VkPhysicalDeviceFeatures availableFeatures = VkPhysicalDeviceFeatures.calloc(stack);
+            vkGetPhysicalDeviceFeatures(physical, availableFeatures);
+            VkPhysicalDeviceFeatures enabledFeatures = VkPhysicalDeviceFeatures.calloc(stack)
+                    .shaderFloat64(availableFeatures.shaderFloat64());
+            VkDeviceCreateInfo di = VkDeviceCreateInfo.calloc(stack).sType$Default().pQueueCreateInfos(qi)
+                    .pEnabledFeatures(enabledFeatures);
+            PointerBuffer dh = stack.mallocPointer(1); check(vkCreateDevice(physical, di, null, dh), "create persistent device");
+            device = new VkDevice(dh.get(0), physical, di);
+            ownsDevice = true;
+            queueSubmitLock = new Object();
+            PointerBuffer qh = stack.mallocPointer(1); vkGetDeviceQueue(device, queueFamily, 0, qh); queue = new VkQueue(qh.get(0), device);
+            coordinates = buffer(CAPACITY * 32L, stack); // 32-byte global-noise sample records
+            // Graph dispatches can return up to 16 router roots per sample.
+            results = buffer(CAPACITY * 16L * 4L, stack);
+            graphCoordinates = buffer(CAPACITY * 16L, stack); graphNodes = buffer(1024L * GpuDensityGraphBuffer.NODE_BYTES, stack); graphSplinePoints = buffer(1024L * 64L * 16L, stack); graphBlendedMetadata = buffer(1024L * 192L, stack); graphBlendInputs = buffer(CAPACITY * 8L, stack); graphRoots = buffer(64L, stack);
+            interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack); interpolationOutput = buffer(CAPACITY * 40L, stack);
+            permutations = buffer(8 * 1024 * 1024L, stack); octaves = buffer(8 * 1024 * 1024L, stack); samplerMetadata = buffer(64 * 1024L, stack);
+            shader = shader(stack); descriptorLayout = descriptorLayout(stack); pipelineLayout = pipelineLayout(stack);
+            pipeline = pipeline(stack); descriptorPool = descriptorPool(stack); descriptorSet = descriptorSet(stack);
+            descriptors(stack); commandPool = commandPool(stack); commandBuffer = commandBuffer(stack); fence = fence(stack);
+            graphShader = graphShader(stack); graphDescriptorLayout = graphDescriptorLayout(stack);
+            graphPipelineLayout = graphPipelineLayout(stack); graphPipeline = graphPipeline(stack);
+            graphDescriptorPool = graphDescriptorPool(stack); graphDescriptorSet = graphDescriptorSet(stack);
+            graphDescriptors(stack);
+            interpolationShader = interpolationShader(stack); interpolationDescriptorLayout = interpolationDescriptorLayout(stack);
+            interpolationPipelineLayout = interpolationPipelineLayout(stack); interpolationPipeline = interpolationPipeline(stack);
+            interpolationDescriptorPool = interpolationDescriptorPool(stack); interpolationDescriptorSet = interpolationDescriptorSet(stack);
+            interpolationDescriptors(stack);
+            mapPersistentBuffers(stack);
+        } catch (Throwable failure) {
+            stack.close();
+            throw failure;
+        }
+        stack.close();
+    }
+
+    /** Creates an independent submission slot while sharing the parent Vulkan device. */
+    PersistentVulkanNormalNoiseEngine(PersistentVulkanNormalNoiseEngine parent) throws Exception {
+        instance = parent.instance;
+        physical = parent.physical;
+        device = parent.device;
+        queueFamily = parent.queueFamily;
+        queue = parent.queue;
+        ownsDevice = false;
+        queueSubmitLock = parent.queueSubmitLock;
+        Configuration.STACK_SIZE.set(1_048_576);
+        MemoryStack stack = MemoryStack.stackPush();
+        try {
+            coordinates = buffer(CAPACITY * 32L, stack);
+            results = buffer(CAPACITY * 16L * 4L, stack);
+            graphCoordinates = buffer(CAPACITY * 16L, stack);
+            graphNodes = buffer(1024L * GpuDensityGraphBuffer.NODE_BYTES, stack);
+            graphSplinePoints = buffer(1024L * 64L * 16L, stack);
+            graphBlendedMetadata = buffer(1024L * 192L, stack);
+            graphBlendInputs = buffer(CAPACITY * 8L, stack);
+            graphRoots = buffer(64L, stack);
+            interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack); interpolationOutput = buffer(CAPACITY * 40L, stack);
+            permutations = buffer(8 * 1024 * 1024L, stack);
+            octaves = buffer(8 * 1024 * 1024L, stack);
+            samplerMetadata = buffer(64 * 1024L, stack);
+            shader = shader(stack); descriptorLayout = descriptorLayout(stack); pipelineLayout = pipelineLayout(stack);
+            pipeline = pipeline(stack); descriptorPool = descriptorPool(stack); descriptorSet = descriptorSet(stack);
+            descriptors(stack); commandPool = commandPool(stack); commandBuffer = commandBuffer(stack); fence = fence(stack);
+            graphShader = graphShader(stack); graphDescriptorLayout = graphDescriptorLayout(stack);
+            graphPipelineLayout = graphPipelineLayout(stack); graphPipeline = graphPipeline(stack);
+            graphDescriptorPool = graphDescriptorPool(stack); graphDescriptorSet = graphDescriptorSet(stack);
+            graphDescriptors(stack);
+            interpolationShader = interpolationShader(stack); interpolationDescriptorLayout = interpolationDescriptorLayout(stack);
+            interpolationPipelineLayout = interpolationPipelineLayout(stack); interpolationPipeline = interpolationPipeline(stack);
+            interpolationDescriptorPool = interpolationDescriptorPool(stack); interpolationDescriptorSet = interpolationDescriptorSet(stack);
+            interpolationDescriptors(stack);
+            mapPersistentBuffers(stack);
+        } catch (Throwable failure) {
+            stack.close();
+            throw failure;
+        }
+        stack.close();
+    }
+
+    synchronized float[] submit(MinecraftNormalNoiseData data, float[] xs, float[] ys, float[] zs) throws Exception {
+        if (xs.length != ys.length || xs.length != zs.length || xs.length > CAPACITY) throw new IllegalArgumentException("invalid GPU sample batch");
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            GpuGlobalNoiseBatch batch = new GpuGlobalNoiseBatch();
+            for (int i = 0; i < xs.length; i++) batch.add(new GpuGlobalNoiseBatch.Sample(data, xs[i], ys[i], zs[i]));
+            return submit(batch.pack(), stack);
+        }
+    }
+
+    synchronized float[] submit(GpuGlobalNoiseBatch.Packed packed) throws Exception {
+        try (MemoryStack stack = MemoryStack.stackPush()) { return submit(packed, stack); }
+    }
+
+    synchronized float[] submitGraph(GpuDensityGraph graph, float[] xs, float[] ys, float[] zs, int resultNode) throws Exception {
+        if (xs.length != ys.length || xs.length != zs.length || xs.length > CAPACITY) throw new IllegalArgumentException("invalid graph batch");
+        GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
+        if (packed.nodeCount() > 1024) throw new IllegalArgumentException("density graph exceeds GPU node capacity");
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            ByteBuffer coords = stack.malloc(xs.length * 16).order(ByteOrder.nativeOrder());
+            for (int i = 0; i < xs.length; i++) coords.putFloat(xs[i]).putFloat(ys[i]).putFloat(zs[i]).putFloat(0);
+            coords.flip();
+            put(graphCoordinates, coords, stack);
+            if (graphResourcesGraph != graph) {
+                put(graphNodes, packed.nodes(), stack);
+                put(graphSplinePoints, packed.splinePoints(), stack);
+                put(graphBlendedMetadata, packed.blendedMetadata(), stack);
+            }
+            ByteBuffer blendInputs = stack.malloc(xs.length * 8).order(ByteOrder.nativeOrder());
+            for (int i = 0; i < xs.length; i++) blendInputs.putFloat(0.0f).putFloat(1.0f);
+            blendInputs.flip();
+            put(graphBlendInputs, blendInputs, stack);
+            ByteBuffer roots = stack.malloc(4).order(ByteOrder.nativeOrder()).putInt(resultNode).flip();
+            put(graphRoots, roots, stack);
+            if (graphResourcesGraph != graph) {
+                put(permutations, packed.permutations(), stack); put(octaves, packed.octaves(), stack); put(samplerMetadata, packed.samplerMetadata(), stack);
+                graphResourcesGraph = graph;
+            }
+            check(vkResetCommandBuffer(commandBuffer, 0), "reset graph command buffer");
+            check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin graph command buffer");
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipeline);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipelineLayout, 0, stack.longs(graphDescriptorSet), null);
+            ByteBuffer push = stack.malloc(16).order(ByteOrder.nativeOrder()).putInt(xs.length).putInt(packed.nodeCount()).putInt(1).putInt(0).flip();
+            vkCmdPushConstants(commandBuffer, graphPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
+            vkCmdDispatch(commandBuffer, (xs.length + 63) / 64, 1, 1);
+            VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(results.buffer).size(xs.length * 4L);
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, null, barrier, null);
+            check(vkEndCommandBuffer(commandBuffer), "end graph command buffer");
+            synchronized (queueSubmitLock) { check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default().pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit graph"); }
+            check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait graph"); check(vkResetFences(device, fence), "reset graph fence");
+            return readResults(xs.length, 1, stack);
+        }
+    }
+
+    /** Computes all router roots in one dispatch; graph nodes are evaluated once per sample. */
+    synchronized float[] submitGraphRoots(GpuDensityGraph graph, float[] xs, float[] ys, float[] zs) throws Exception {
+        if (xs.length != ys.length || xs.length != zs.length || xs.length > CAPACITY) throw new IllegalArgumentException("invalid graph batch");
+        GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
+        int rootCount = graph.routerRoots().length;
+        if (packed.nodeCount() > 1024 || rootCount > 16) throw new IllegalArgumentException("density graph exceeds GPU capacity");
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            ByteBuffer coords = stack.malloc(xs.length * 16).order(ByteOrder.nativeOrder());
+            for (int i = 0; i < xs.length; i++) coords.putFloat(xs[i]).putFloat(ys[i]).putFloat(zs[i]).putFloat(0);
+            coords.flip();
+            put(graphCoordinates, coords, stack);
+            if (graphResourcesGraph != graph) {
+                put(graphNodes, packed.nodes(), stack);
+                put(graphSplinePoints, packed.splinePoints(), stack); put(graphBlendedMetadata, packed.blendedMetadata(), stack);
+            }
+            ByteBuffer blendInputs = stack.malloc(xs.length * 8).order(ByteOrder.nativeOrder());
+            for (int i = 0; i < xs.length; i++) blendInputs.putFloat(0.0f).putFloat(1.0f);
+            blendInputs.flip(); put(graphBlendInputs, blendInputs, stack);
+            ByteBuffer roots = stack.malloc(rootCount * 4).order(ByteOrder.nativeOrder());
+            for (int root : graph.routerRoots()) roots.putInt(root);
+            roots.flip(); put(graphRoots, roots, stack);
+            if (graphResourcesGraph != graph) {
+                put(permutations, packed.permutations(), stack); put(octaves, packed.octaves(), stack); put(samplerMetadata, packed.samplerMetadata(), stack);
+                graphResourcesGraph = graph;
+            }
+            check(vkResetCommandBuffer(commandBuffer, 0), "reset graph roots command buffer");
+            check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin graph roots command buffer");
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipeline);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipelineLayout, 0, stack.longs(graphDescriptorSet), null);
+            ByteBuffer push = stack.malloc(16).order(ByteOrder.nativeOrder()).putInt(xs.length).putInt(packed.nodeCount()).putInt(rootCount).putInt(0).flip();
+            vkCmdPushConstants(commandBuffer, graphPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
+            vkCmdDispatch(commandBuffer, (xs.length + 63) / 64, 1, 1);
+            VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(results.buffer).size((long) xs.length * rootCount * 4L);
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, null, barrier, null);
+            check(vkEndCommandBuffer(commandBuffer), "end graph roots command buffer");
+            synchronized (queueSubmitLock) { check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default().pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit graph roots"); }
+            check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait graph roots"); check(vkResetFences(device, fence), "reset graph roots fence");
+            return readResults(xs.length, rootCount, stack);
+        }
+    }
+
+    private float[] submit(GpuGlobalNoiseBatch.Packed packed, MemoryStack stack) throws Exception {
+            graphResourcesGraph = null;
+            put(coordinates, packed.samples(), stack); put(permutations, packed.permutations(), stack);
+            put(octaves, packed.octaves(), stack); put(samplerMetadata, packed.samplerMetadata(), stack);
+            check(vkResetCommandBuffer(commandBuffer, 0), "reset persistent command buffer");
+            check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin persistent command buffer");
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(descriptorSet), null);
+            ByteBuffer push = stack.malloc(8).order(ByteOrder.nativeOrder()).putInt(packed.sampleCount()).putInt(packed.samplerCount()).flip();
+            vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
+            vkCmdDispatch(commandBuffer, (packed.sampleCount() + 63) / 64, 1, 1);
+            VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
+                    .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(results.buffer).size(packed.sampleCount() * 4L);
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, null, barrier, null);
+            check(vkEndCommandBuffer(commandBuffer), "end persistent command buffer");
+            VkSubmitInfo submit = VkSubmitInfo.calloc(stack).sType$Default().pCommandBuffers(stack.pointers(commandBuffer.address()));
+            synchronized (queueSubmitLock) { check(vkQueueSubmit(queue, submit, fence), "submit persistent noise"); }
+            check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait persistent noise");
+            check(vkResetFences(device, fence), "reset persistent fence");
+            return readResults(packed.sampleCount(), 1, stack);
+        }
+
+    /** Runs terrain graph roots and block interpolation in one Vulkan submission. */
+    synchronized GpuFusedResult submitGraphInterpolated(GpuDensityGraph graph, float[] xs, float[] ys, float[] zs,
+                                                   ByteBuffer metadata, int chunkCount, int blocksPerChunk) throws Exception {
+        if (xs.length != ys.length || xs.length != zs.length || xs.length > CAPACITY)
+            throw new IllegalArgumentException("invalid fused graph batch");
+        GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
+        int rootCount = graph.routerRoots().length;
+        int blockCount = Math.multiplyExact(chunkCount, blocksPerChunk);
+        int outputRoots = GpuTerrainRuntime.terrainOutputRootCount();
+        if (packed.nodeCount() > 1024 || rootCount > 16 || outputRoots > rootCount
+                || metadata.remaining() > interpolationMetadata.size
+                || blockCount * outputRoots * 4L > interpolationOutput.size) throw new IllegalArgumentException("fused batch exceeds GPU capacity");
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            ByteBuffer coords = stack.malloc(xs.length * 16).order(ByteOrder.nativeOrder());
+            for (int i = 0; i < xs.length; i++) coords.putFloat(xs[i]).putFloat(ys[i]).putFloat(zs[i]).putFloat(0);
+            coords.flip();
+            put(graphCoordinates, coords, stack);
+            if (graphResourcesGraph != graph) {
+                put(graphNodes, packed.nodes(), stack); put(graphSplinePoints, packed.splinePoints(), stack);
+                put(graphBlendedMetadata, packed.blendedMetadata(), stack);
+                put(permutations, packed.permutations(), stack); put(octaves, packed.octaves(), stack);
+                put(samplerMetadata, packed.samplerMetadata(), stack); graphResourcesGraph = graph;
+            }
+            ByteBuffer blendInputs = stack.malloc(xs.length * 8).order(ByteOrder.nativeOrder());
+            for (int i = 0; i < xs.length; i++) blendInputs.putFloat(0.0f).putFloat(1.0f);
+            blendInputs.flip(); put(graphBlendInputs, blendInputs, stack);
+            ByteBuffer roots = stack.malloc(rootCount * 4).order(ByteOrder.nativeOrder());
+            for (int root : graph.routerRoots()) roots.putInt(root);
+            roots.flip(); put(graphRoots, roots, stack); put(interpolationMetadata, metadata, stack);
+            check(vkResetCommandBuffer(commandBuffer, 0), "reset fused command buffer");
+            check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin fused command buffer");
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipeline);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipelineLayout, 0, stack.longs(graphDescriptorSet), null);
+            ByteBuffer graphPush = stack.malloc(16).order(ByteOrder.nativeOrder()).putInt(xs.length).putInt(packed.nodeCount()).putInt(rootCount).putInt(0).flip();
+            vkCmdPushConstants(commandBuffer, graphPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, graphPush);
+            vkCmdDispatch(commandBuffer, (xs.length + 63) / 64, 1, 1);
+            VkBufferMemoryBarrier.Buffer graphBarrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
+                    .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT)
+                    .buffer(results.buffer).size((long) xs.length * rootCount * 4L);
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, null, graphBarrier, null);
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, interpolationPipeline);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, interpolationPipelineLayout, 0, stack.longs(interpolationDescriptorSet), null);
+            // Evaluate all graph roots once and materialize the roots consumed
+            // by vanilla terrain density and aquifer code.
+            ByteBuffer interpolationPush = stack.malloc(16).order(ByteOrder.nativeOrder()).putInt(chunkCount).putInt(blocksPerChunk).putInt(rootCount).putInt(outputRoots).flip();
+            vkCmdPushConstants(commandBuffer, interpolationPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, interpolationPush);
+            vkCmdDispatch(commandBuffer, (blockCount + 63) / 64, 1, 1);
+            VkBufferMemoryBarrier.Buffer graphReadbackBarrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
+                    .srcAccessMask(VK_ACCESS_SHADER_READ_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
+                    .buffer(results.buffer).size((long) xs.length * rootCount * 4L);
+            VkBufferMemoryBarrier.Buffer outputBarrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
+                    .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
+                    .buffer(interpolationOutput.buffer).size((long) blockCount * outputRoots * 4L);
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, null,
+                    graphReadbackBarrier, null);
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, null,
+                    outputBarrier, null);
+            check(vkEndCommandBuffer(commandBuffer), "end fused command buffer");
+            synchronized (queueSubmitLock) { check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default().pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit fused graph"); }
+            check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait fused graph");
+            check(vkResetFences(device, fence), "reset fused graph fence");
+            interpolationOutput.invalidate(device, stack);
+            // The mapped buffer limit is expressed in bytes, while the
+            // FloatBuffer limit is expressed in floats. Set the limit after
+            // creating the typed view; otherwise a 4x-short view causes a
+            // BufferUnderflowException on valid GPU output.
+            FloatBuffer values = persistentMappings.get(interpolationOutput)
+                    .duplicate().order(ByteOrder.nativeOrder()).asFloatBuffer();
+            values.clear();
+            values.limit(blockCount * outputRoots);
+            float[] output = new float[blockCount * outputRoots];
+            values.get(output);
+            return new GpuFusedResult(output, null, outputRoots);
+        }
+    }
+    private float[] readResults(int samples, int valuesPerSample, MemoryStack stack) {
+        results.invalidate(device, stack);
+        float[] output = new float[samples * valuesPerSample];
+        ByteBuffer view = persistentResults.duplicate().order(ByteOrder.nativeOrder());
+        view.clear();
+        view.limit(output.length * Float.BYTES);
+        view.asFloatBuffer().get(output);
+        return output;
+    }
+
+    /** Executes the batched corner-to-block interpolation shader. */
+    synchronized float[] submitInterpolation(float[] corners, ByteBuffer metadata,
+                                              int chunkCount, int blocksPerChunk) throws Exception {
+        int blockCount = Math.multiplyExact(chunkCount, blocksPerChunk);
+        if (corners.length * 4L > results.size || metadata.remaining() > interpolationMetadata.size
+                || blockCount * 4L > interpolationOutput.size) throw new IllegalArgumentException("interpolation batch exceeds GPU capacity");
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            ByteBuffer cornerBytes = stack.malloc(corners.length * Float.BYTES).order(ByteOrder.nativeOrder());
+            cornerBytes.asFloatBuffer().put(corners); cornerBytes.position(0).limit(corners.length * Float.BYTES);
+            put(results, cornerBytes, stack); put(interpolationMetadata, metadata, stack);
+            check(vkResetCommandBuffer(commandBuffer, 0), "reset interpolation command buffer");
+            check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin interpolation command buffer");
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, interpolationPipeline);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, interpolationPipelineLayout, 0, stack.longs(interpolationDescriptorSet), null);
+            ByteBuffer push = stack.malloc(16).order(ByteOrder.nativeOrder()).putInt(chunkCount).putInt(blocksPerChunk).putInt(1).putInt(1).flip();
+            vkCmdPushConstants(commandBuffer, interpolationPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
+            vkCmdDispatch(commandBuffer, (blockCount + 63) / 64, 1, 1);
+            VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
+                    .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
+                    .buffer(interpolationOutput.buffer).size(blockCount * 4L);
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, null, barrier, null);
+            check(vkEndCommandBuffer(commandBuffer), "end interpolation command buffer");
+            synchronized (queueSubmitLock) { check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default().pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit interpolation"); }
+            check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait interpolation");
+            check(vkResetFences(device, fence), "reset interpolation fence");
+            interpolationOutput.invalidate(device, stack);
+            FloatBuffer values = persistentMappings.get(interpolationOutput)
+                    .duplicate().order(ByteOrder.nativeOrder()).asFloatBuffer();
+            values.clear();
+            values.limit(blockCount);
+            float[] output = new float[blockCount];
+            values.get(output);
+            return output;
+        }
+    }
+
+    private GpuDensityGraphBuffer.Packed packedGraph(GpuDensityGraph graph) {
+        GpuDensityGraphBuffer.Packed packed = packedGraphs.get(graph);
+        if (packed != null) return packed;
+        packed = GpuDensityGraphBuffer.pack(graph);
+        packedGraphs.put(graph, packed);
+        return packed;
+    }
+
+    private void mapPersistentBuffers(MemoryStack stack) {
+        NativeBuffer[] buffers = {coordinates, results, permutations, octaves, samplerMetadata,
+                graphCoordinates, graphNodes, graphSplinePoints, graphBlendedMetadata, graphBlendInputs, graphRoots,
+                interpolationMetadata, interpolationOutput};
+        for (NativeBuffer buffer : buffers) {
+            persistentMappings.put(buffer, buffer.map(device, stack).order(ByteOrder.nativeOrder()));
+        }
+        persistentResults = persistentMappings.get(results);
+    }
+
+    private void put(NativeBuffer target, ByteBuffer source, MemoryStack stack) {
+        ByteBuffer mapped = persistentMappings.get(target);
+        if (mapped == null) throw new IllegalStateException("unmapped persistent Vulkan buffer");
+        mapped.clear();
+        mapped.put(source.duplicate());
+        target.flush(device, stack);
+    }
+    private VkInstance createInstance(MemoryStack s) { VkApplicationInfo a=VkApplicationInfo.calloc(s).sType$Default().pApplicationName(s.UTF8("GPU Noise Persistent")).apiVersion(VK_API_VERSION_1_0); VkInstanceCreateInfo i=VkInstanceCreateInfo.calloc(s).sType$Default().pApplicationInfo(a); PointerBuffer h=s.mallocPointer(1); check(vkCreateInstance(i,null,h),"create instance"); return new VkInstance(h.get(0),i); }
+    private VkPhysicalDevice findPhysical(VkInstance i,GpuDevice e,MemoryStack s){IntBuffer n=s.ints(0);check(vkEnumeratePhysicalDevices(i,n,null),"enumerate");PointerBuffer h=s.mallocPointer(n.get(0));check(vkEnumeratePhysicalDevices(i,n,h),"enumerate");for(int k=0;k<n.get(0);k++){VkPhysicalDevice p=new VkPhysicalDevice(h.get(k),i);VkPhysicalDeviceProperties q=VkPhysicalDeviceProperties.malloc();try{vkGetPhysicalDeviceProperties(p,q);if(q.vendorID()==e.vendorId()&&q.deviceNameString().equals(e.name()))return p;}finally{q.free();}}throw new IllegalStateException("GPU disappeared");}
+    private int findQueue(VkPhysicalDevice p,MemoryStack s){IntBuffer n=s.ints(0);vkGetPhysicalDeviceQueueFamilyProperties(p,n,null);VkQueueFamilyProperties.Buffer f=VkQueueFamilyProperties.malloc(n.get(0),s);vkGetPhysicalDeviceQueueFamilyProperties(p,n,f);for(int i=0;i<n.get(0);i++)if((f.get(i).queueFlags()&VK_QUEUE_COMPUTE_BIT)!=0)return i;throw new IllegalStateException("no compute queue");}
+    private NativeBuffer buffer(long size,MemoryStack s){VkBufferCreateInfo i=VkBufferCreateInfo.calloc(s).sType$Default().size(size).usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT).sharingMode(VK_SHARING_MODE_EXCLUSIVE);LongBuffer h=s.longs(0);check(vkCreateBuffer(device,i,null,h),"create buffer");VkMemoryRequirements r=VkMemoryRequirements.malloc(s);vkGetBufferMemoryRequirements(device,h.get(0),r);VkPhysicalDeviceMemoryProperties m=VkPhysicalDeviceMemoryProperties.malloc(s);vkGetPhysicalDeviceMemoryProperties(physical,m);int t=-1;for(int x=0;x<m.memoryTypeCount();x++)if((r.memoryTypeBits()&(1<<x))!=0&&(m.memoryTypes(x).propertyFlags()&(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))==(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)){t=x;break;}if(t<0)throw new IllegalStateException("no host memory");VkMemoryAllocateInfo a=VkMemoryAllocateInfo.calloc(s).sType$Default().allocationSize(r.size()).memoryTypeIndex(t);LongBuffer mh=s.longs(0);check(vkAllocateMemory(device,a,null,mh),"allocate");check(vkBindBufferMemory(device,h.get(0),mh.get(0),0),"bind");return new NativeBuffer(h.get(0),mh.get(0),size);}
+    private long shader(MemoryStack s)throws Exception{try(var in=getClass().getResourceAsStream("/assets/gpunoise/shaders/minecraft_noise_batch.comp.spv")){byte[] b=in.readAllBytes();ByteBuffer c=MemoryUtil.memAlloc(b.length).put(b).flip();try{VkShaderModuleCreateInfo i=VkShaderModuleCreateInfo.calloc(s).sType$Default().pCode(c);LongBuffer h=s.longs(0);check(vkCreateShaderModule(device,i,null,h),"shader");return h.get(0);}finally{MemoryUtil.memFree(c);}}}
+    private long descriptorLayout(MemoryStack s){VkDescriptorSetLayoutBinding.Buffer b=VkDescriptorSetLayoutBinding.calloc(5,s);for(int i=0;i<5;i++)b.get(i).binding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);VkDescriptorSetLayoutCreateInfo i=VkDescriptorSetLayoutCreateInfo.calloc(s).sType$Default().pBindings(b);LongBuffer h=s.longs(0);check(vkCreateDescriptorSetLayout(device,i,null,h),"layout");return h.get(0);}
+    private long pipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(8);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(descriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"pipeline layout");return h.get(0);}
+    private long pipeline(MemoryStack s){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(shader).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(pipelineLayout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),"pipeline");return h.get(0);}
+    private long descriptorPool(MemoryStack s){VkDescriptorPoolSize.Buffer z=VkDescriptorPoolSize.calloc(1,s).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(5);VkDescriptorPoolCreateInfo i=VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(z);LongBuffer h=s.longs(0);check(vkCreateDescriptorPool(device,i,null,h),"pool");return h.get(0);}
+    private long descriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(descriptorPool).pSetLayouts(s.longs(descriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"set");return h.get(0);}
+    private void descriptors(MemoryStack s){NativeBuffer[] bs={coordinates,results,permutations,octaves,samplerMetadata};VkWriteDescriptorSet.Buffer w=VkWriteDescriptorSet.calloc(5,s);for(int i=0;i<5;i++){VkDescriptorBufferInfo.Buffer bi=VkDescriptorBufferInfo.calloc(1,s).buffer(bs[i].buffer).range(bs[i].size);w.get(i).sType$Default().dstSet(descriptorSet).dstBinding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bi);}vkUpdateDescriptorSets(device,w,null);}
+    private long graphShader(MemoryStack s)throws Exception{try(var in=getClass().getResourceAsStream("/assets/gpunoise/shaders/density_graph.comp.spv")){byte[] b=in.readAllBytes();ByteBuffer c=MemoryUtil.memAlloc(b.length).put(b).flip();try{VkShaderModuleCreateInfo i=VkShaderModuleCreateInfo.calloc(s).sType$Default().pCode(c);LongBuffer h=s.longs(0);check(vkCreateShaderModule(device,i,null,h),"graph shader");return h.get(0);}finally{MemoryUtil.memFree(c);}}}
+    private long graphDescriptorLayout(MemoryStack s){VkDescriptorSetLayoutBinding.Buffer b=VkDescriptorSetLayoutBinding.calloc(10,s);for(int i=0;i<10;i++)b.get(i).binding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);VkDescriptorSetLayoutCreateInfo i=VkDescriptorSetLayoutCreateInfo.calloc(s).sType$Default().pBindings(b);LongBuffer h=s.longs(0);check(vkCreateDescriptorSetLayout(device,i,null,h),"graph layout");return h.get(0);}
+    private long graphPipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(16);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(graphDescriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"graph pipeline layout");return h.get(0);}
+    private long graphPipeline(MemoryStack s){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(graphShader).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(graphPipelineLayout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),"graph pipeline");return h.get(0);}
+    private long graphDescriptorPool(MemoryStack s){VkDescriptorPoolSize.Buffer z=VkDescriptorPoolSize.calloc(1,s).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(10);VkDescriptorPoolCreateInfo i=VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(z);LongBuffer h=s.longs(0);check(vkCreateDescriptorPool(device,i,null,h),"graph pool");return h.get(0);}
+    private long graphDescriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(graphDescriptorPool).pSetLayouts(s.longs(graphDescriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"graph set");return h.get(0);}
+    private void graphDescriptors(MemoryStack s){NativeBuffer[] bs={graphCoordinates,results,graphNodes,permutations,octaves,samplerMetadata,graphSplinePoints,graphBlendedMetadata,graphBlendInputs,graphRoots};VkWriteDescriptorSet.Buffer w=VkWriteDescriptorSet.calloc(10,s);for(int i=0;i<10;i++){VkDescriptorBufferInfo.Buffer bi=VkDescriptorBufferInfo.calloc(1,s).buffer(bs[i].buffer).range(bs[i].size);w.get(i).sType$Default().dstSet(graphDescriptorSet).dstBinding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bi);}vkUpdateDescriptorSets(device,w,null);}
+    private long interpolationShader(MemoryStack s)throws Exception{try(var in=getClass().getResourceAsStream("/assets/gpunoise/shaders/noise_interpolation.comp.spv")){byte[] b=in.readAllBytes();ByteBuffer c=MemoryUtil.memAlloc(b.length).put(b).flip();try{VkShaderModuleCreateInfo i=VkShaderModuleCreateInfo.calloc(s).sType$Default().pCode(c);LongBuffer h=s.longs(0);check(vkCreateShaderModule(device,i,null,h),"interpolation shader");return h.get(0);}finally{MemoryUtil.memFree(c);}}}
+    private long interpolationDescriptorLayout(MemoryStack s){VkDescriptorSetLayoutBinding.Buffer b=VkDescriptorSetLayoutBinding.calloc(3,s);for(int i=0;i<3;i++)b.get(i).binding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);VkDescriptorSetLayoutCreateInfo i=VkDescriptorSetLayoutCreateInfo.calloc(s).sType$Default().pBindings(b);LongBuffer h=s.longs(0);check(vkCreateDescriptorSetLayout(device,i,null,h),"interpolation layout");return h.get(0);}
+    private long interpolationPipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(12);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(interpolationDescriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"interpolation pipeline layout");return h.get(0);}
+    private long interpolationPipeline(MemoryStack s){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(interpolationShader).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(interpolationPipelineLayout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),"interpolation pipeline");return h.get(0);}
+    private long interpolationDescriptorPool(MemoryStack s){VkDescriptorPoolSize.Buffer z=VkDescriptorPoolSize.calloc(1,s).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(3);VkDescriptorPoolCreateInfo i=VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(z);LongBuffer h=s.longs(0);check(vkCreateDescriptorPool(device,i,null,h),"interpolation pool");return h.get(0);}
+    private long interpolationDescriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(interpolationDescriptorPool).pSetLayouts(s.longs(interpolationDescriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"interpolation set");return h.get(0);}
+    private void interpolationDescriptors(MemoryStack s){NativeBuffer[] bs={results,interpolationOutput,interpolationMetadata};VkWriteDescriptorSet.Buffer w=VkWriteDescriptorSet.calloc(3,s);for(int i=0;i<3;i++){VkDescriptorBufferInfo.Buffer bi=VkDescriptorBufferInfo.calloc(1,s).buffer(bs[i].buffer).range(bs[i].size);w.get(i).sType$Default().dstSet(interpolationDescriptorSet).dstBinding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bi);}vkUpdateDescriptorSets(device,w,null);}
+    private long commandPool(MemoryStack s){VkCommandPoolCreateInfo i=VkCommandPoolCreateInfo.calloc(s).sType$Default().flags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT).queueFamilyIndex(queueFamily);LongBuffer h=s.longs(0);check(vkCreateCommandPool(device,i,null,h),"command pool");return h.get(0);}
+    private VkCommandBuffer commandBuffer(MemoryStack s){VkCommandBufferAllocateInfo i=VkCommandBufferAllocateInfo.calloc(s).sType$Default().commandPool(commandPool).level(VK_COMMAND_BUFFER_LEVEL_PRIMARY).commandBufferCount(1);PointerBuffer h=s.mallocPointer(1);check(vkAllocateCommandBuffers(device,i,h),"allocate command buffer");return new VkCommandBuffer(h.get(0),device);}
+    private long fence(MemoryStack s){VkFenceCreateInfo i=VkFenceCreateInfo.calloc(s).sType$Default();LongBuffer h=s.longs(0);check(vkCreateFence(device,i,null,h),"create fence");return h.get(0);}
+    private static void check(int r,String op){if(r!=VK_SUCCESS)throw new IllegalStateException(op+" failed: "+r);}
+    private record NativeBuffer(long buffer,long memory,long size){ByteBuffer map(VkDevice d,MemoryStack s){PointerBuffer p=s.mallocPointer(1);check(vkMapMemory(d,memory,0,size,0,p),"map");return MemoryUtil.memByteBuffer(p.get(0),(int)size);}void flush(VkDevice d,MemoryStack s){VkMappedMemoryRange r=VkMappedMemoryRange.calloc(s).sType$Default().memory(memory).offset(0).size(size);check(vkFlushMappedMemoryRanges(d,r),"flush");}void invalidate(VkDevice d,MemoryStack s){VkMappedMemoryRange r=VkMappedMemoryRange.calloc(s).sType$Default().memory(memory).offset(0).size(size);check(vkInvalidateMappedMemoryRanges(d,r),"invalidate");}void unmap(VkDevice d){vkUnmapMemory(d,memory);}void destroy(VkDevice d){vkDestroyBuffer(d,buffer,null);vkFreeMemory(d,memory,null);}}
+    @Override public void close(){vkDeviceWaitIdle(device);for(NativeBuffer buffer:persistentMappings.keySet())buffer.unmap(device);vkDestroyFence(device,fence,null);vkDestroyCommandPool(device,commandPool,null);vkDestroyDescriptorPool(device,descriptorPool,null);vkDestroyPipeline(device,pipeline,null);vkDestroyPipelineLayout(device,pipelineLayout,null);vkDestroyDescriptorSetLayout(device,descriptorLayout,null);vkDestroyShaderModule(device,shader,null);vkDestroyPipeline(device,graphPipeline,null);vkDestroyPipelineLayout(device,graphPipelineLayout,null);vkDestroyDescriptorSetLayout(device,graphDescriptorLayout,null);vkDestroyDescriptorPool(device,graphDescriptorPool,null);vkDestroyShaderModule(device,graphShader,null);vkDestroyPipeline(device,interpolationPipeline,null);vkDestroyPipelineLayout(device,interpolationPipelineLayout,null);vkDestroyDescriptorSetLayout(device,interpolationDescriptorLayout,null);vkDestroyDescriptorPool(device,interpolationDescriptorPool,null);vkDestroyShaderModule(device,interpolationShader,null);coordinates.destroy(device);graphCoordinates.destroy(device);graphNodes.destroy(device);graphSplinePoints.destroy(device);graphBlendedMetadata.destroy(device);graphBlendInputs.destroy(device);graphRoots.destroy(device);interpolationMetadata.destroy(device);interpolationOutput.destroy(device);results.destroy(device);permutations.destroy(device);octaves.destroy(device);samplerMetadata.destroy(device);if(ownsDevice){vkDestroyDevice(device,null);vkDestroyInstance(instance,null);}}
+}

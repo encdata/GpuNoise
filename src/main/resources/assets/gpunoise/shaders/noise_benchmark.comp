@@ -1,0 +1,34 @@
+#version 450
+
+// CPU equivalent: dev.gpunoise.NoiseMath.valueNoise
+layout(local_size_x = 64) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Coordinates {
+    ivec2 coordinates[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer Results {
+    float results[];
+};
+
+layout(push_constant) uniform Parameters {
+    uint seed;
+    uint count;
+};
+
+uint valueHash(int x, int z, uint seed) {
+    uint hash = seed ^ (uint(x) * 0x9E3779B9u) ^ (uint(z) * 0x85EBCA6Bu);
+    hash ^= hash >> 16u;
+    hash *= 0x7FEB352Du;
+    hash ^= hash >> 15u;
+    hash *= 0x846CA68Bu;
+    hash ^= hash >> 16u;
+    return hash;
+}
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= count) return;
+    uint hash = valueHash(coordinates[index].x, coordinates[index].y, seed);
+    results[index] = float(hash & 0x00FFFFFFu) * (1.0 / 16777216.0);
+}

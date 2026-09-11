@@ -1,0 +1,108 @@
+================================================================================
+GPU Noise - Static Code Review: Performance Optimizations
+Reviewed: all 37 Java sources, GLSL shaders, mixins (no build run)
+================================================================================
+
+BIGGEST WINS (hot path)
+--------------------------------------------------------------------------------
+
+1. The GPU is never pipelined - one fence, one command buffer, synchronous waits
+   PersistentVulkanNormalNoiseEngine: submit (submit at :78/:82/:117, private
+   submit :151-170) -> record, submit, vkWaitForFences(..., Long.MAX_VALUE),
+   readback, all inside synchronized methods. The global sampler queue, the
+   terrain graph provider, and parity code all serialize through this single
+   fence. CPU cannot pack next batch while GPU runs; GPU idles while CPU packs.
+   Fix: ping-pong 2 command buffers + 2 fences, and split pack/submit/wait
+   phases so packing overlaps the wait on the previous dispatch.
+
+2. The whole density graph is re-serialized and re-uploaded every dispatch
+   Every submitGraphRoots / submitGraph re-runs GpuDensityGraphBuffer.pack(graph)
+   (PersistentVulkanNormalNoiseEngine.java:84,119). For each sampler that re-does
+   MinecraftNormalNoiseData.read() reflection (rebuilding permutation arrays),
+   allocates fresh direct ByteBuffers, and memcpys ~hundreds of KB of identical
+   constant data into the persistent buffers. The graph is immutable for the
+   server lifetime - build the Packed once at installTerrainGraph, pass it in,
+   and only update per-dispatch buffers (coordinates, roots, blendInputs).
+   Same for the batch path: GpuGlobalNoiseBatch.pack() re-encodes sampler tables
+   per dispatch (GpuGlobalNoiseBatch.java:29). Cache per-MinecraftNormalNoiseData
+   payloads and upload only when the sampler set changes. This targets the
+   fillArray path, the default-on feature.
+
+3. Per-dispatch mapping/allocation churn in the engine
+   - Only `results` is persistently mapped (line 61); every put() maps -> puts ->
+     flushes -> unmaps each buffer (line 180) - ~10 driver calls per dispatch,
+     and each dispatch builds temp stack ByteBuffers then double-copies
+     (pack -> temp -> mapped persistent). Map all 11 buffers once at init and
+     write directly into mapped views (HOST_COHERENT needs no flush).
+   - blendInputs is a constant (0.0, 1.0) per sample but is re-filled every
+     dispatch (:93-96,:128-130). Prefill once up to CAPACITY and only update count.
+
+4. Result slicing copies merged arrays twice
+   GpuTerrainBatchScheduler.slice calls public accessors that .clone() the full
+   merged array for all 8 fields (TerrainNoiseApi.java:146,150-154), then
+   array-copies a slice. On a 100-chunk dispatch that is ~2x the whole result
+   set copied 8x. Same package - add package-private raw accessors and slice
+   from those. Also dispatch() reads Request.sampleX()/Y()/Z() which clone
+   (:113-115) and the merged Request constructor clones again
+   (TerrainNoiseApi.java:63-65). Give Request an internal no-copy path like
+   Result.owned.
+
+5. int[] -> float[] -> ByteBuffer double conversion
+   GpuTerrainGraphProvider.toFloat allocates float[] copies, the engine then
+   loops .putFloat per sample (PersistentVulkanNormalNoiseEngine.java:123-124).
+   Write ints straight into the mapped buffer (or a float view) and skip the
+   intermediate array. The per-sample GpuGlobalNoiseBatch.Sample record
+   allocation (up to 262k records/dispatch, GpuGlobalNoiseBatch.java:19-25) is
+   avoidable the same way.
+
+SHADER SIDE
+--------------------------------------------------------------------------------
+
+6. double values[1024] per invocation (density_graph.comp:155)
+   8KB x 64 invocations = 512KB/workgroup of dynamically-indexed private memory
+   -> spills and tanks occupancy. Size the stack to actual nodeCount via
+   specialization constant (terrain graph ~150-250 nodes -> ~2KB).
+
+7. FP64 used everywhere, but only BlendedNoise needs it
+   mapValue, splineValue, YClampedGradient, RangeChoice, WeirdScaledSampler run
+   in doubles (density_graph.comp:126-152). With the 5e-3 graph epsilon these
+   pass in FP32 and roughly halve ALU pressure on FP64-crippled GPUs. Worth an
+   A/B parity test.
+
+8. noise_interpolation.comp / terrain_classification.comp are dead
+   Interpolation is done per-block in Java (GpuChunkDensityCache.density:65-91,
+   Mth.lerp3 per block during fill). If the writer path matters, run
+   interpolation on GPU per chunk, or at least hoist the
+   result.toCompletableFuture().getNow() lookup and precompute per-block indices
+   once.
+
+SMALLER / ROBUSTNESS
+--------------------------------------------------------------------------------
+
+9. tryFill reallocates x/y/z float[] per fillArray call
+   (GpuTerrainRuntime.java:175-183) and blocks the worldgen thread with .join()
+   - by design, but paired with items 1/3 it is additive latency per fill.
+
+10. 1ms coalesce in GpuTerrainBatchScheduler (:65) adds per-write latency;
+    use a timed poll drain instead of unconditionally parking.
+
+11. NoiseChunkGpuDensityMixin.java:38 fallback GpuChunkDensityCache.create
+    double-submits a GPU request when the prefetch has not landed; and PREFETCHED
+    is never pruned if a chunk's NoiseChunk is never built. Use the prefetch entry
+    or a shared not-ready sentinel.
+
+12. VulkanNoiseBenchmark.run (GpuNoise.java:80) runs 3x65k-sample dispatches +
+    full graph parity on every server start - gate behind a flag/test mode.
+
+DEAD / DEV WEIGHT (not perf-critical)
+--------------------------------------------------------------------------------
+
+13. GpuNoiseBatch, GpuNoiseSamplerRegistry, GpuNormalNoiseProvider, NoiseMath,
+    CpuNoiseBenchmark, and both unused shaders appear superseded by the global
+    batch/graph path.
+
+PRIORITY ORDER
+--------------------------------------------------------------------------------
+
+1 -> 2 -> 3 -> 4 give the most immediate per-dispatch CPU/GPU win for both the
+fillArray path and the experimental writer; 6-7 are pure shader recompile wins.

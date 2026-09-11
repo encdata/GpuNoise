@@ -1,0 +1,21 @@
+#version 450
+layout(local_size_x = 64) in;
+layout(std430, set = 0, binding = 0) readonly buffer Coordinates { ivec2 coordinates[]; };
+layout(std430, set = 0, binding = 1) writeonly buffer Results { float results[]; };
+layout(push_constant) uniform Parameters { uint seed; uint count; };
+
+const vec3 G[16] = vec3[16](vec3(1,1,0),vec3(-1,1,0),vec3(1,-1,0),vec3(-1,-1,0),vec3(1,0,1),vec3(-1,0,1),vec3(1,0,-1),vec3(-1,0,-1),vec3(0,1,1),vec3(0,-1,1),vec3(0,1,-1),vec3(0,-1,-1),vec3(1,1,0),vec3(0,-1,1),vec3(-1,1,0),vec3(0,-1,-1));
+uint p(int value) { return uint(value & 255); }
+float q(float v) { return v*v*v*(v*(v*6.0-15.0)+10.0); }
+float grad(int x, int z, vec3 d) { return dot(G[(p(x + z)) & 15u], d); }
+float sampleNoise(ivec2 coordinate) {
+    vec3 position = vec3(float(coordinate.x) * 0.03125 + 17.25, 0.0, float(coordinate.y) * 0.027 + 7.75);
+    ivec3 grid = ivec3(floor(position)); vec3 d = position - vec3(grid);
+    float sx=q(d.x), sz=q(d.z);
+    float n00=grad(grid.x,grid.z,vec3(d.x,0,d.z));
+    float n10=grad(grid.x+1,grid.z,vec3(d.x-1,0,d.z));
+    float n01=grad(grid.x,grid.z+1,vec3(d.x,0,d.z-1));
+    float n11=grad(grid.x+1,grid.z+1,vec3(d.x-1,0,d.z-1));
+    return mix(mix(n00,n10,sx),mix(n01,n11,sx),sz);
+}
+void main() { uint i=gl_GlobalInvocationID.x; if(i>=count)return; results[i]=sampleNoise(coordinates[i]); }

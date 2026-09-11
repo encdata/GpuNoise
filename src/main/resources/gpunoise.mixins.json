@@ -1,0 +1,19 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.gpunoise.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "NormalNoiseAccessor",
+    "PerlinNoiseAccessor",
+    "BlendedNoiseAccessor",
+    "ImprovedNoiseAccessor",
+    "NoiseDensityMixin",
+    "NoiseChunkGpuDensityMixin",
+    "AquiferGpuInputsMixin",
+    "NoiseChunkGeneratorWriteMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

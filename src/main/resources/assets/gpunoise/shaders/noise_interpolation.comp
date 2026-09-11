@@ -1,0 +1,51 @@
+#version 450
+layout(local_size_x = 64) in;
+
+// Eight density corners per cell, ordered like vanilla's trilinear interpolation:
+// x changes fastest, then z, then y.
+layout(std430,set=0,binding=0) readonly buffer Corners { float corners[]; };
+layout(std430,set=0,binding=1) writeonly buffer Blocks { float blocks[]; };
+// Per chunk: corner offset, block offset, cellsX, cellsY, cellsZ,
+// blocksPerCell, reserved, reserved.
+layout(std430,set=0,binding=2) readonly buffer Chunks { uint metadata[]; };
+layout(push_constant) uniform Parameters {
+    uint chunkCount;
+    uint blocksPerChunk;
+    uint rootStride;
+    uint outputStride;
+};
+
+float lerp3(float c000,float c100,float c010,float c110,float c001,float c101,float c011,float c111,vec3 t){
+    float x00=mix(c000,c100,t.x), x10=mix(c010,c110,t.x);
+    float x01=mix(c001,c101,t.x), x11=mix(c011,c111,t.x);
+    return mix(mix(x00,x10,t.z),mix(x01,x11,t.z),t.y);
+}
+
+void main(){
+    uint globalIndex=gl_GlobalInvocationID.x;
+    if(globalIndex>=chunkCount*blocksPerChunk)return;
+    uint chunk=globalIndex/blocksPerChunk;
+    uint index=globalIndex%blocksPerChunk;
+    uint base=chunk*8u;
+    uint cornerOffset=metadata[base+0u];
+    uint blockOffset=metadata[base+1u];
+    uint cellsX=metadata[base+2u], cellsY=metadata[base+3u], cellsZ=metadata[base+4u];
+    uint blocksPerCell=metadata[base+5u];
+    uint blocksX=cellsX*blocksPerCell;
+    uint blocksZ=cellsZ*blocksPerCell;
+    uint perLayer=blocksX*blocksZ;
+    uint y=index/perLayer;
+    uint rem=index%perLayer;
+    uint z=rem/blocksX;
+    uint x=rem%blocksX;
+    uint cellX=x/blocksPerCell, cellY=y/blocksPerCell, cellZ=z/blocksPerCell;
+    vec3 t=vec3(x%blocksPerCell,y%blocksPerCell,z%blocksPerCell)/float(blocksPerCell);
+    uint cell=cornerOffset+((cellY*cellsZ+cellZ)*cellsX+cellX)*8u;
+    for(uint root=0u;root<outputStride;root++) {
+        float value=lerp3(corners[cell*rootStride+root],corners[(cell+1u)*rootStride+root],
+            corners[(cell+2u)*rootStride+root],corners[(cell+3u)*rootStride+root],
+            corners[(cell+4u)*rootStride+root],corners[(cell+5u)*rootStride+root],
+            corners[(cell+6u)*rootStride+root],corners[(cell+7u)*rootStride+root],t);
+        blocks[blockOffset+index*outputStride+root]=value;
+    }
+}

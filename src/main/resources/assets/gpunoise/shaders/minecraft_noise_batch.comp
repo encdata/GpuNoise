@@ -1,0 +1,17 @@
+#version 450
+layout(local_size_x = 64) in;
+struct Sample { vec4 position; uint samplerId; };
+struct SamplerInfo { uint octaveBase; uint octaveCount; float valueFactor; uint permutationBase; };
+layout(std430,set=0,binding=0) readonly buffer Samples { Sample samples[]; };
+layout(std430,set=0,binding=1) writeonly buffer Results { float results[]; };
+layout(std430,set=0,binding=2) readonly buffer Permutations { uint permutation[]; };
+layout(std430,set=0,binding=3) readonly buffer Octaves { vec4 octaveData[]; };
+layout(std430,set=0,binding=4) readonly buffer Samplers { SamplerInfo samplers[]; };
+layout(push_constant) uniform Parameters { uint count; uint samplerCount; };
+const vec3 G[16]=vec3[16](vec3(1,1,0),vec3(-1,1,0),vec3(1,-1,0),vec3(-1,-1,0),vec3(1,0,1),vec3(-1,0,1),vec3(1,0,-1),vec3(-1,0,-1),vec3(0,1,1),vec3(0,-1,1),vec3(0,1,-1),vec3(0,-1,-1),vec3(1,1,0),vec3(0,-1,1),vec3(-1,1,0),vec3(0,-1,-1));
+uint p(uint base,int i){return permutation[base+uint(i&255)];}
+float q(float v){return v*v*v*(v*(v*6-15)+10);}
+float grad(uint base,int i,vec3 d){return dot(G[p(base,i)&15u],d);}
+float improved(vec3 pos,vec4 params,uint permBase){vec3 v=pos+params.xyz;ivec3 g=ivec3(floor(v));vec3 d=v-vec3(g);uint a=p(permBase,g.x),b=p(permBase,g.x+1);uint a0=p(permBase,int(a)+g.y),a1=p(permBase,int(a)+g.y+1),b0=p(permBase,int(b)+g.y),b1=p(permBase,int(b)+g.y+1);float x=q(d.x),y=q(d.y),z=q(d.z);float n0=grad(permBase,int(a0)+g.z,d),n1=grad(permBase,int(b0)+g.z,d-vec3(1,0,0));float n2=grad(permBase,int(a1)+g.z,d-vec3(0,1,0)),n3=grad(permBase,int(b1)+g.z,d-vec3(1,1,0));float n4=grad(permBase,int(a0)+g.z+1,d-vec3(0,0,1)),n5=grad(permBase,int(b0)+g.z+1,d-vec3(1,0,1));float n6=grad(permBase,int(a1)+g.z+1,d-vec3(0,1,1)),n7=grad(permBase,int(b1)+g.z+1,d-vec3(1,1,1));return mix(mix(mix(n0,n1,x),mix(n2,n3,x),y),mix(mix(n4,n5,x),mix(n6,n7,x),y),z);}
+float perlin(vec3 pos,SamplerInfo s,uint base){float r=0,inScale=1,valScale=1;for(uint i=0;i<s.octaveCount;i++){vec4 o=octaveData[(s.octaveBase+i)*2];r+=o.w*improved(pos*inScale,o,base)*valScale;inScale*=2;valScale*=.5;}return r;}
+void main(){uint i=gl_GlobalInvocationID.x;if(i>=count)return;Sample w=samples[i];SamplerInfo s=samplers[w.samplerId];float a=perlin(w.position.xyz,s,s.permutationBase);float b=perlin(w.position.xyz*1.0181269,s,s.permutationBase+(s.octaveCount*256));results[i]=(a+b)*s.valueFactor;}

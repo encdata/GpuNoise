@@ -1,0 +1,92 @@
+#version 450
+
+// One NormalNoise sample per invocation. This is the GPU primitive used by the
+// future NoiseRouter compiler; it is intentionally separate from the benchmark.
+layout(local_size_x = 64) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Coordinates { vec4 coordinates[]; };
+layout(std430, set = 0, binding = 1) writeonly buffer Results { float results[]; };
+layout(std430, set = 0, binding = 2) readonly buffer Permutations { uint permutation[]; };
+
+struct Octave {
+    vec4 offsetAmplitude; // xo, yo, zo, amplitude
+    float frequency;
+    float valueScale;
+    uint permutationOffset;
+    uint enabled;
+};
+layout(std430, set = 0, binding = 3) readonly buffer Octaves { Octave octaves[]; };
+
+layout(push_constant) uniform Parameters {
+    uint count;
+    uint firstOctave;
+    uint octaveCount;
+    float normalValueFactor;
+};
+
+const vec3 GRADIENTS[16] = vec3[16](
+    vec3(1,1,0), vec3(-1,1,0), vec3(1,-1,0), vec3(-1,-1,0),
+    vec3(1,0,1), vec3(-1,0,1), vec3(1,0,-1), vec3(-1,0,-1),
+    vec3(0,1,1), vec3(0,-1,1), vec3(0,1,-1), vec3(0,-1,-1),
+    vec3(1,1,0), vec3(0,-1,1), vec3(-1,1,0), vec3(0,-1,-1)
+);
+
+uint perm(uint base, int index) {
+    return permutation[base + uint(index & 255)];
+}
+
+float quintic(float value) { return value * value * value * (value * (value * 6.0 - 15.0) + 10.0); }
+float grad(uint hash, vec3 delta) { return dot(GRADIENTS[hash & 15u], delta); }
+
+float improvedNoise(vec3 position, vec3 offset, uint permutationOffset) {
+    vec3 value = position + offset;
+    ivec3 grid = ivec3(floor(value));
+    vec3 delta = value - vec3(grid);
+    uint px = perm(permutationOffset, grid.x);
+    uint p1 = perm(permutationOffset, int(px) + grid.y);
+    uint p2 = perm(permutationOffset, int(px) + grid.y + 1);
+    uint qx = perm(permutationOffset, grid.x + 1);
+    uint q1 = perm(permutationOffset, int(qx) + grid.y);
+    uint q2 = perm(permutationOffset, int(qx) + grid.y + 1);
+    float x = quintic(delta.x);
+    float y = quintic(delta.y);
+    float z = quintic(delta.z);
+    float n000 = grad(perm(permutationOffset, int(p1) + grid.z), delta);
+    float n100 = grad(perm(permutationOffset, int(q1) + grid.z), delta - vec3(1,0,0));
+    float n010 = grad(perm(permutationOffset, int(p2) + grid.z), delta - vec3(0,1,0));
+    float n110 = grad(perm(permutationOffset, int(q2) + grid.z), delta - vec3(1,1,0));
+    float n001 = grad(perm(permutationOffset, int(p1) + grid.z + 1), delta - vec3(0,0,1));
+    float n101 = grad(perm(permutationOffset, int(q1) + grid.z + 1), delta - vec3(1,0,1));
+    float n011 = grad(perm(permutationOffset, int(p2) + grid.z + 1), delta - vec3(0,1,1));
+    float n111 = grad(perm(permutationOffset, int(q2) + grid.z + 1), delta - vec3(1,1,1));
+    float nx00 = mix(n000, n100, x);
+    float nx10 = mix(n010, n110, x);
+    float nx01 = mix(n001, n101, x);
+    float nx11 = mix(n011, n111, x);
+    return mix(mix(nx00, nx10, y), mix(nx01, nx11, y), z);
+}
+
+float perlin(vec3 position, uint start, uint count) {
+    float result = 0.0;
+    float inputScale = 1.0;
+    float valueScale = 1.0;
+    for (uint i = 0; i < count; ++i) {
+        Octave octave = octaves[start + i];
+        if (octave.enabled != 0u) {
+            result += octave.offsetAmplitude.w * improvedNoise(position * inputScale,
+                octave.offsetAmplitude.xyz, octave.permutationOffset) * valueScale;
+        }
+        inputScale *= 2.0;
+        valueScale *= 0.5;
+    }
+    return result;
+}
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= count) return;
+    vec3 position = coordinates[index].xyz;
+    float first = perlin(position, firstOctave, octaveCount);
+    float second = perlin(position * 1.0181268882, firstOctave + octaveCount, octaveCount);
+    results[index] = (first + second) * normalValueFactor;
+}

@@ -68,6 +68,10 @@ runs {
 
     server {
         systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        // Enable manually for a fresh-coordinate Chunky benchmark; keep normal
+        // server starts focused on gameplay and terrain integration.
+        systemProperty 'gpunoise.chunkyBenchmark', 'true'
+        systemProperty 'gpunoise.disableChunkWriter', System.getProperty('gpunoise.disableChunkWriter', 'false')
         argument '--nogui'
     }
 
@@ -103,6 +107,28 @@ dependencies {
     // And its provides the option to then use net.minecraft as the group, and one of; client, server or joined as the module name, plus the game version as version.
     // For all intends and purposes: You can treat this dependency as if it is a normal library you would use.
     implementation "net.neoforged:neoforge:${neo_version}"
+    // Vulkan Java bindings for the server-side compute backend. For Minecraft
+    // 1.21.1, ordinary libraries must be present on the run classpath and
+    // embedded in the released mod as Jar-in-Jar.
+    jarJar(implementation("org.lwjgl:lwjgl-vulkan:${lwjgl_version}")) {
+        version {
+            strictly "[${lwjgl_version},3.3.4)"
+            prefer lwjgl_version
+        }
+    }
+    // lwjgl-vulkan depends on the LWJGL core classes (including
+    // org.lwjgl.system.Configuration). Include the core artifact in the
+    // distributable Jar-in-Jar as well; otherwise standalone Linux servers
+    // crash during GPU probing before the fallback path can run.
+    jarJar(implementation("org.lwjgl:lwjgl:${lwjgl_version}")) {
+        version {
+            strictly "[${lwjgl_version},3.3.4)"
+            prefer lwjgl_version
+        }
+    }
+    // NeoGradle 7 uses this configuration for ordinary libraries in dev runs.
+    localRunRuntime "org.lwjgl:lwjgl-vulkan:${lwjgl_version}"
+    localRunRuntime "org.lwjgl:lwjgl:${lwjgl_version}"
 
     // Example optional mod dependency with JEI
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime
@@ -132,6 +158,7 @@ dependencies {
 // When "copyIdeResources" is enabled, this will also run before the game launches in IDE environments.
 // See https://docs.gradle.org/current/dsl/org.gradle.language.jvm.tasks.ProcessResources.html
 tasks.withType(ProcessResources).configureEach {
+    dependsOn(tasks.named('compileGpuShaders'))
     var replaceProperties = [
             minecraft_version      : minecraft_version,
             minecraft_version_range: minecraft_version_range,
@@ -146,6 +173,30 @@ tasks.withType(ProcessResources).configureEach {
 
     filesMatching(['META-INF/neoforge.mods.toml']) {
         expand replaceProperties
+    }
+}
+
+// Keep runtime SPIR-V synchronized with the GLSL sources. The server loads
+// SPIR-V directly, so editing a .comp file without this task would silently
+// leave the old shader in use.
+tasks.register('compileGpuShaders') {
+    notCompatibleWithConfigurationCache('Invokes the external Vulkan shader compiler.')
+    def shaderDir = file('src/main/resources/assets/gpunoise/shaders')
+    def compiler = file('C:/VulkanSDK/1.4.350.0/Bin/glslc.exe')
+    def shaderSources = fileTree(shaderDir).matching { include '**/*.comp' }.files
+    def shaderOutputs = shaderSources.collect { file(it.path + '.spv') }
+    inputs.files(shaderSources)
+    outputs.files(shaderOutputs)
+    doLast {
+        shaderSources.eachWithIndex { source, index ->
+            def output = shaderOutputs[index]
+            ant.exec(executable: compiler.absolutePath, failonerror: true) {
+                arg(value: '-O')
+                arg(value: '-o')
+                arg(value: output.absolutePath)
+                arg(value: source.absolutePath)
+            }
+        }
     }
 }
 
