@@ -1,6 +1,0 @@
-GPU Noise dedicated-server bundle
-
-Copy every file from the mods directory in this archive into the server's mods directory.
-
-The normal gpunoise jar is safe for integrated clients. Do not use the old -all jar
-with a client, because it contains LWJGL modules that Minecraft already provides.
