@@ -10,6 +10,8 @@ import net.neoforged.fml.config.ModConfig;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 
 /** Entry point for GPU Noise. The first milestone is a safe, CPU-backed noise boundary. */
@@ -95,14 +97,36 @@ public final class GpuNoise {
     }
 
     private static boolean vulkanBindingsPresent() {
+        // Integrated and dedicated servers can expose LWJGL through different
+        // NeoForge/module class loaders, so do not inspect only the mod loader.
+        Set<ClassLoader> loaders = new LinkedHashSet<>();
+        addLoaderChain(loaders, GpuNoise.class.getClassLoader());
+        addLoaderChain(loaders, Thread.currentThread().getContextClassLoader());
+        addLoaderChain(loaders, ClassLoader.getSystemClassLoader());
         try {
-            ClassLoader loader = GpuNoise.class.getClassLoader();
-            Class.forName("org.lwjgl.system.Configuration", false, loader);
-            Class.forName("org.lwjgl.vulkan.VK", false, loader);
-            Class.forName("org.lwjgl.vulkan.VK10", false, loader);
-            return true;
-        } catch (ClassNotFoundException | LinkageError missing) {
-            return false;
+            addLoaderChain(loaders, ModuleLayer.boot().findLoader("org.lwjgl"));
+        } catch (IllegalArgumentException ignored) {
+            // NeoForge normally puts LWJGL in its own module layer.
+        }
+
+        for (ClassLoader loader : loaders) {
+            try {
+                Class.forName("org.lwjgl.system.Configuration", false, loader);
+                Class.forName("org.lwjgl.vulkan.VK", false, loader);
+                Class.forName("org.lwjgl.vulkan.VK10", false, loader);
+                LOGGER.info("Vulkan bindings found through {}.", loader);
+                return true;
+            } catch (ClassNotFoundException | LinkageError ignored) {
+                // Try the next class loader.
+            }
+        }
+        return false;
+    }
+
+    private static void addLoaderChain(Set<ClassLoader> loaders, ClassLoader loader) {
+        while (loader != null) {
+            loaders.add(loader);
+            loader = loader.getParent();
         }
     }
 }

@@ -97,6 +97,10 @@ runs {
 // "optional", meaning it will not be pulled by dependents of this mod.
 configurations {
     runtimeClasspath.extendsFrom localRuntime
+    // Libraries packaged only in the dedicated-server distribution. Keeping
+    // them outside the normal mod jar prevents an integrated client from
+    // loading a second org.lwjgl module.
+    serverLibraries
 }
 
 dependencies {
@@ -107,25 +111,18 @@ dependencies {
     // And its provides the option to then use net.minecraft as the group, and one of; client, server or joined as the module name, plus the game version as version.
     // For all intends and purposes: You can treat this dependency as if it is a normal library you would use.
     implementation "net.neoforged:neoforge:${neo_version}"
-    // Vulkan Java bindings for the server-side compute backend. For Minecraft
-    // 1.21.1, ordinary libraries must be present on the run classpath and
-    // embedded in the released mod as Jar-in-Jar.
-    jarJar(implementation("org.lwjgl:lwjgl-vulkan:${lwjgl_version}")) {
-        version {
-            strictly "[${lwjgl_version},3.3.4)"
-            prefer lwjgl_version
-        }
-    }
-    // lwjgl-vulkan depends on the LWJGL core classes (including
-    // org.lwjgl.system.Configuration). Include the core artifact in the
-    // distributable Jar-in-Jar as well; otherwise standalone Linux servers
-    // crash during GPU probing before the fallback path can run.
-    jarJar(implementation("org.lwjgl:lwjgl:${lwjgl_version}")) {
-        version {
-            strictly "[${lwjgl_version},3.3.4)"
-            prefer lwjgl_version
-        }
-    }
+    // Compile/runtime dependencies for development. They are deliberately not
+    // Jar-in-Jar dependencies: bundling LWJGL in the ordinary mod jar makes
+    // integrated clients load a duplicate org.lwjgl Java module and fail before
+    // the mod can detect that Minecraft already provides Vulkan/OpenGL.
+    implementation "org.lwjgl:lwjgl-vulkan:${lwjgl_version}"
+    implementation "org.lwjgl:lwjgl:${lwjgl_version}"
+
+    // The dedicated-server bundle places these as separate libraries in its
+    // mods directory. A dedicated server has no Minecraft client LWJGL module,
+    // so it can load them normally.
+    serverLibraries "org.lwjgl:lwjgl-vulkan:${lwjgl_version}"
+    serverLibraries "org.lwjgl:lwjgl:${lwjgl_version}"
     // NeoGradle 7 uses this configuration for ordinary libraries in dev runs.
     localRunRuntime "org.lwjgl:lwjgl-vulkan:${lwjgl_version}"
     localRunRuntime "org.lwjgl:lwjgl:${lwjgl_version}"
@@ -173,6 +170,24 @@ tasks.withType(ProcessResources).configureEach {
 
     filesMatching(['META-INF/neoforge.mods.toml']) {
         expand replaceProperties
+    }
+}
+
+// Produces the installable dedicated-server bundle:
+//   mods/gpunoise-<version>.jar
+//   mods/lwjgl-<version>.jar
+//   mods/lwjgl-vulkan-<version>.jar
+//
+// The regular `jar` remains the integrated/client-safe artifact.
+tasks.register('serverBundle', Zip) {
+    dependsOn tasks.named('jar')
+    archiveClassifier = 'server'
+    into('mods') {
+        from(tasks.named('jar'))
+        from(configurations.serverLibraries)
+    }
+    into('README') {
+        from(layout.projectDirectory.file('SERVER-INSTALL.txt'))
     }
 }
 
