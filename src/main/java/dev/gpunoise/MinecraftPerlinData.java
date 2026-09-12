@@ -1,7 +1,7 @@
 package dev.gpunoise;
 
-import dev.gpunoise.mixin.ImprovedNoiseAccessor;
-import dev.gpunoise.mixin.PerlinNoiseAccessor;
+import dev.gpunoise.ImprovedNoiseAccess;
+import dev.gpunoise.PerlinNoiseAccess;
 import net.minecraft.world.level.levelgen.synth.ImprovedNoise;
 import net.minecraft.world.level.levelgen.synth.PerlinNoise;
 
@@ -9,7 +9,7 @@ import net.minecraft.world.level.levelgen.synth.PerlinNoise;
 record MinecraftPerlinData(MinecraftNoiseParameters.Improved[] noises, double[] amplitudes,
                            double lowestFreqInputFactor, double lowestFreqValueFactor) {
     static MinecraftPerlinData read(PerlinNoise perlin) {
-        PerlinNoiseAccessor accessor = (PerlinNoiseAccessor) (Object) perlin;
+        PerlinNoiseAccess accessor = (PerlinNoiseAccess) (Object) perlin;
         ImprovedNoise[] levels = accessor.gpunoise$noiseLevels();
         double[] amplitudes = new double[accessor.gpunoise$amplitudes().size()];
         MinecraftNoiseParameters.Improved[] noises = new MinecraftNoiseParameters.Improved[levels.length];
@@ -17,7 +17,7 @@ record MinecraftPerlinData(MinecraftNoiseParameters.Improved[] noises, double[] 
         for (int i = 0; i < levels.length; i++) {
             ImprovedNoise level = levels[i];
             if (level == null) continue;
-            byte[] permutation = ((ImprovedNoiseAccessor) (Object) level).gpunoise$permutation();
+            byte[] permutation = ((ImprovedNoiseAccess) (Object) level).gpunoise$permutation();
             int[] values = new int[permutation.length];
             for (int j = 0; j < permutation.length; j++) values[j] = permutation[j] & 255;
             noises[i] = new MinecraftNoiseParameters.Improved((float) level.xo, (float) level.yo, (float) level.zo, values);

@@ -1,5 +1,5 @@
 {
-  "required": true,
+  "required": false,
   "minVersion": "0.8",
   "package": "dev.gpunoise.mixin",
   "compatibilityLevel": "JAVA_21",
@@ -12,8 +12,9 @@
     "NoiseDensityMixin",
     "NoiseChunkGpuDensityMixin",
     "AquiferGpuInputsMixin",
-    "NoiseChunkGeneratorWriteMixin"
-    ,"C2mePriorityBatchMixin"
+    "NoiseChunkGeneratorWriteMixin",
+    "C2mePriorityBatchMixin",
+    "C2meCompiledDensityFunctionMixin"
   ],
   "injectors": {
     "defaultRequire": 1

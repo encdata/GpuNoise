@@ -9,6 +9,7 @@ import java.util.Set;
 
 public final class GpuNoiseMixinPlugin implements IMixinConfigPlugin {
     private static final String C2ME_BATCH_MIXIN = "dev.gpunoise.mixin.C2mePriorityBatchMixin";
+    private static final String C2ME_COMPILED_MIXIN = "dev.gpunoise.mixin.C2meCompiledDensityFunctionMixin";
 
     @Override
     public void onLoad(String mixinPackage) {
@@ -21,23 +22,10 @@ public final class GpuNoiseMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
-        if (!C2ME_BATCH_MIXIN.equals(mixinClassName) && !mixinClassName.endsWith("C2mePriorityBatchMixin")) return true;
-        String target = "com.ishland.c2me.base.common.scheduler.SchedulingManager";
-        ClassLoader[] loaders = {
-                Thread.currentThread().getContextClassLoader(),
-                GpuNoiseMixinPlugin.class.getClassLoader(),
-                ClassLoader.getSystemClassLoader()
-        };
-        for (ClassLoader loader : loaders) {
-            if (loader == null) continue;
-            try {
-                Class.forName(target, false, loader);
-                return true;
-            } catch (ClassNotFoundException | LinkageError ignored) {
-                // Try the next NeoForge/module classloader.
-            }
-        }
-        return false;
+        // Apply the normal Minecraft accessors as well as the optional C2ME
+        // integrations. The config is optional, so missing C2ME targets are
+        // allowed on installations that do not have C2ME installed.
+        return true;
     }
 
     @Override

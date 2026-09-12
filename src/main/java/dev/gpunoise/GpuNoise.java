@@ -35,13 +35,18 @@ public final class GpuNoise {
             int centerX = Math.floorDiv(random.nextInt(-1_800_000, 1_800_001), 16) * 16;
             int centerZ = Math.floorDiv(random.nextInt(-1_800_000, 1_800_001), 16) * 16;
             var source = server.createCommandSourceStack().withPermission(4);
+            // Always replace a previous benchmark task. Chunky keeps task
+            // state in the world, so start alone may only report that an old
+            // task is already active and never begin this benchmark.
+            server.getCommands().performPrefixedCommand(source, "chunky cancel");
             server.getCommands().performPrefixedCommand(source, "chunky world minecraft:overworld");
             server.getCommands().performPrefixedCommand(source, "chunky center " + centerX + " " + centerZ);
             // 800 blocks gives a 101x101 chunk square: approximately 10,000
             // chunks while keeping the benchmark finite and reproducible.
             server.getCommands().performPrefixedCommand(source, "chunky radius 800");
             server.getCommands().performPrefixedCommand(source, "chunky start");
-            LOGGER.info("Started development Chunky benchmark: approximately 10,201 chunks centered at {},{}.", centerX, centerZ);
+            server.getCommands().performPrefixedCommand(source, "chunky confirm");
+            LOGGER.info("Started fresh development Chunky benchmark: approximately 10,201 chunks centered at {},{}.", centerX, centerZ);
         });
     }
 

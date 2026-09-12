@@ -12,7 +12,7 @@ import net.minecraft.core.Holder;
 import net.minecraft.world.level.levelgen.DensityFunction.NoiseHolder;
 import net.minecraft.world.level.levelgen.synth.NormalNoise;
 import net.minecraft.world.level.levelgen.synth.BlendedNoise;
-import dev.gpunoise.mixin.BlendedNoiseAccessor;
+import dev.gpunoise.C2meCompiledDensityAccess;
 import net.minecraft.util.CubicSpline;
 import net.minecraft.world.level.levelgen.DensityFunctions;
 
@@ -64,12 +64,26 @@ final class GpuDensityGraphCompiler {
         nodes.add(null);
         sourceFunctions.add(function);
 
+        // C2ME DFC replaces the vanilla record graph with a bytecode wrapper,
+        // but intentionally retains the original graph for blending and
+        // fallback semantics. Compile that graph instead of rejecting the
+        // wrapper as a non-record density function.
+        if (function instanceof C2meCompiledDensityAccess compiled) {
+            DensityFunction vanilla = compiled.gpunoise$vanillaFallback();
+            if (vanilla == null) throw unsupported(function, "C2ME wrapper has no vanilla fallback");
+            sourceFunctions.set(index, vanilla);
+            int child = node(vanilla);
+            nodes.set(index, new GpuDensityGraph.Node("Marker", new int[]{child}, new double[0],
+                    "C2MECompiledDensityFunction"));
+            return index;
+        }
+
         // Some NeoForge/Minecraft transformations expose Constant as a normal
         // class even though the source declares it as a record. Its value is
         // exactly its min/max value, so it can be lowered without reflection.
         String simpleName = function.getClass().getSimpleName();
         if (function instanceof BlendedNoise blendedNoise) {
-            BlendedNoiseAccessor accessor = (BlendedNoiseAccessor) (Object) blendedNoise;
+            BlendedNoiseAccess accessor = (BlendedNoiseAccess) (Object) blendedNoise;
             int blendedId = blended.size();
             blended.add(new GpuDensityGraph.Blended(
                     MinecraftPerlinData.read(accessor.gpunoise$minLimitNoise()),
