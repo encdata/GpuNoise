@@ -28,7 +28,8 @@ abstract class NoiseChunkGeneratorBiomeMixin {
     private CompletableFuture<ChunkAccess> gpunoise$prepareBiomeCache(
             RandomState randomState, Blender blender, StructureManager structures, ChunkAccess chunk,
             Operation<CompletableFuture<ChunkAccess>> original) {
-        if (!GpuTerrainRuntime.gpuOnlyWorldgenAvailable()) {
+        if (!GpuTerrainRuntime.c2meDfcAvailable()
+                || !GpuTerrainRuntime.gpuOnlyWorldgenAvailable()) {
             return original.call(randomState, blender, structures, chunk);
         }
         NoiseSettings settings = generatorSettings().value().noiseSettings()

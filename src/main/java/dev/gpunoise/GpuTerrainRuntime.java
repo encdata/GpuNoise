@@ -64,6 +64,17 @@ public final class GpuTerrainRuntime {
     }
     public static boolean active() { return device != null; }
 
+    /** The biome-stage cache wrapper is only safe with C2ME's staged flow. */
+    public static boolean c2meDfcAvailable() {
+        try {
+            Class.forName("com.ishland.c2me.opts.dfc.common.gen.jvm.AbstractCompiledDensityFunction",
+                    false, GpuTerrainRuntime.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException ignored) {
+            return false;
+        }
+    }
+
     /** Enables cell-grid input substitution only after graph parity passes. */
     public static boolean terrainInputsAvailable() {
         return device != null && terrainGraph != null && graphParity;
