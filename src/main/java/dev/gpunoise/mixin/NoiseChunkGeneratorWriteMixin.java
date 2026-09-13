@@ -13,12 +13,13 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.level.levelgen.NoiseSettings;
 import net.minecraft.SharedConstants;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 
 import dev.gpunoise.GpuChunkDensityCache;
 import dev.gpunoise.GpuFillState;
@@ -44,27 +45,40 @@ abstract class NoiseChunkGeneratorWriteMixin {
     @org.spongepowered.asm.mixin.Unique
     private static final ThreadLocal<GpuFillState> gpunoise$fillState = new ThreadLocal<>();
 
-    @Inject(method = "fillFromNoise", at = @At("HEAD"), cancellable = true)
-    private void gpunoise$asyncBatchFill(Blender blender, RandomState randomState, StructureManager structures,
-                                         ChunkAccess chunk,
-                                         CallbackInfoReturnable<CompletableFuture<ChunkAccess>> callback) {
+    @WrapMethod(method = "fillFromNoise")
+    private CompletableFuture<ChunkAccess> gpunoise$asyncBatchFill(
+            Blender blender, RandomState randomState, StructureManager structures, ChunkAccess chunk,
+            Operation<CompletableFuture<ChunkAccess>> original) {
         if (!GpuTerrainRuntime.gpuOnlyWorldgenAvailable()
-                || !GpuTerrainRuntime.matchesTerrainRouter(randomState)) return;
+                || !GpuTerrainRuntime.matchesTerrainRouter(randomState)) {
+            return original.call(blender, randomState, structures, chunk);
+        }
         NoiseSettings settings = generatorSettings().value().noiseSettings()
                 .clampToHeightAccessor(chunk.getHeightAccessorForGeneration());
         int minCellY = Mth.floorDiv(settings.minY(), settings.getCellHeight());
         int cellCountY = Mth.floorDiv(settings.height(), settings.getCellHeight());
         if (cellCountY <= 0) {
-            callback.setReturnValue(CompletableFuture.completedFuture(chunk));
-            return;
+            return original.call(blender, randomState, structures, chunk);
         }
         // prepareChunk returns immediately.  doFill is chained only after the
         // lattice result is installed, so no worldgen thread calls join/get.
-        callback.setReturnValue(GpuTerrainRuntime.submitChunkPipeline(() ->
-                GpuTerrainRuntime.prepareChunk(blender, randomState, structures, chunk,
-                        minCellY, cellCountY, settings)
-                .thenApplyAsync(cache -> gpunoise$fillWithGpuReady(blender, randomState, structures, chunk,
-                        minCellY, cellCountY, cache), net.minecraft.Util.backgroundExecutor())));
+        CompletableFuture<ChunkAccess> gpuFill = GpuTerrainRuntime.submitChunkPipeline(() -> {
+            CompletionStage<GpuChunkDensityCache> prepared = GpuTerrainRuntime.prepareChunk(
+                    blender, randomState, structures, chunk, minCellY, cellCountY, settings);
+            // Only preparation failures are safe to retry with vanilla. Once
+            // doFill starts it may have written sections, so retrying after a
+            // fill exception could mix two terrain writers into one chunk.
+            return prepared.handle((cache, failure) -> {
+                if (failure != null) {
+                    GpuTerrainRuntime.markCpuFallbackChunk();
+                    return original.call(blender, randomState, structures, chunk);
+                }
+                return CompletableFuture.supplyAsync(
+                        () -> gpunoise$fillWithGpuReady(blender, randomState, structures, chunk,
+                                minCellY, cellCountY, cache), net.minecraft.Util.backgroundExecutor());
+            }).thenCompose(stage -> stage);
+        });
+        return gpuFill;
     }
 
     private ChunkAccess gpunoise$fillWithGpuReady(Blender blender, RandomState randomState, StructureManager structures,

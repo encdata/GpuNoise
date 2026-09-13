@@ -180,6 +180,8 @@ public final class GpuTerrainRuntime {
             if (preparedCache.markCompleted()) gpuChunksCompleted.incrementAndGet();
             logChunkStatistics(false);
             return preparedCache;
+        }).whenComplete((ignored, failure) -> {
+            if (failure != null) releaseGpuCache(preparedCache);
         }).toCompletableFuture();
     }
 
