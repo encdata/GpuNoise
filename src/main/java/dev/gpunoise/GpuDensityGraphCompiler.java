@@ -89,6 +89,16 @@ final class GpuDensityGraphCompiler {
             return index;
         }
 
+        // The remaining lowering rules describe Minecraft's concrete
+        // DensityFunctions implementations.  A mod may implement
+        // SimpleFunction (or even a record) with the same shape/name, but
+        // reflection cannot prove that its compute() semantics match the
+        // shader opcode.  Keep those functions on the vanilla path rather
+        // than producing a plausible-looking but incorrect GPU graph.
+        if (!function.getClass().getName().startsWith("net.minecraft.")) {
+            throw unsupported(function, "custom density function is not GPU-lowerable");
+        }
+
         // Some NeoForge/Minecraft transformations expose Constant as a normal
         // class even though the source declares it as a record. Its value is
         // exactly its min/max value, so it can be lowered without reflection.
