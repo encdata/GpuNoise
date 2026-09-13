@@ -72,15 +72,25 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 int samplesPerChunk = seed.grid.sampleCount();
                 List<Pending> batch = new ArrayList<>(MAX_CHUNKS);
                 int input = 0;
-                while (!region.isEmpty() && batch.size() < MAX_CHUNKS) {
-                    Pending item = region.peekFirst();
-                    if (item.grid.sampleCount() != samplesPerChunk
-                            || (long) input + item.grid.sampleCount() > MAX_INPUT) break;
-                    region.removeFirst();
-                    batch.add(item);
-                    input += item.grid.sampleCount();
+                // Prefer the selected aligned 5x5 bucket, then borrow from
+                // adjacent buckets when it is underfilled.  Chunk grids are
+                // self-describing, so this keeps one dispatch useful even
+                // when C2ME's traversal crosses a 5x5 boundary between two
+                // scheduler wakeups.
+                for (long candidateRegion : nearbyRegions(batchRegion)) {
+                    ArrayDeque<Pending> candidate = pendingByRegion.get(candidateRegion);
+                    if (candidate == null) continue;
+                    while (!candidate.isEmpty() && batch.size() < MAX_CHUNKS) {
+                        Pending item = candidate.peekFirst();
+                        if (item.grid.sampleCount() != samplesPerChunk
+                                || (long) input + item.grid.sampleCount() > MAX_INPUT) break;
+                        candidate.removeFirst();
+                        batch.add(item);
+                        input += item.grid.sampleCount();
+                    }
+                    if (candidate.isEmpty()) pendingByRegion.remove(candidateRegion);
+                    if (batch.size() == MAX_CHUNKS) break;
                 }
-                if (region.isEmpty()) pendingByRegion.remove(batchRegion);
                 dispatchCount.incrementAndGet();
                 totalChunksDispatched.addAndGet(batch.size());
                 totalSamplesDispatched.addAndGet(input);
@@ -122,6 +132,27 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
             }
         }
         return bestRegion;
+    }
+
+    private List<Long> nearbyRegions(long center) {
+        int centerX = (int) (center >> 32);
+        int centerZ = (int) center;
+        List<Long> regions = new ArrayList<>(pendingByRegion.size());
+        for (long region : pendingByRegion.keySet()) {
+            int x = (int) (region >> 32);
+            int z = (int) region;
+            if (Math.abs(x - centerX) <= 1 && Math.abs(z - centerZ) <= 1) {
+                regions.add(region);
+            }
+        }
+        regions.sort((a, b) -> {
+            int aDistance = Math.abs((int) (a >> 32) - centerX)
+                    + Math.abs((int) a.longValue() - centerZ);
+            int bDistance = Math.abs((int) (b >> 32) - centerX)
+                    + Math.abs((int) b.longValue() - centerZ);
+            return Integer.compare(aDistance, bDistance);
+        });
+        return regions;
     }
 
     private void dispatch(List<Pending> batch, int samplesPerChunk, int inputCount) {
