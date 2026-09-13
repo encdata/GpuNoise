@@ -26,6 +26,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(NoiseChunk.class)
 abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     @Shadow @Final private NoiseSettings noiseSettings;
+    @Shadow @Final private DensityFunctions.BeardifierOrMarker beardifier;
     @Shadow @Final int firstNoiseX;
     @Shadow @Final int firstNoiseZ;
     @Unique private GpuChunkDensityCache gpunoise$cache;
@@ -81,10 +82,45 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
         return cache;
     }
 
-    @Redirect(method = "<init>", at = @At(value = "INVOKE",
-            target = "Lnet/minecraft/world/level/levelgen/DensityFunctions;add(Lnet/minecraft/world/level/levelgen/DensityFunction;Lnet/minecraft/world/level/levelgen/DensityFunction;)Lnet/minecraft/world/level/levelgen/DensityFunction;"))
-    private DensityFunction gpunoise$wrapFinalDensity(DensityFunction finalDensity, DensityFunction beardifier) {
+    @org.spongepowered.asm.mixin.injection.ModifyArg(method = "<init>", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/level/levelgen/DensityFunctions;cacheAllInCell(Lnet/minecraft/world/level/levelgen/DensityFunction;)Lnet/minecraft/world/level/levelgen/DensityFunction;"), index = 0)
+    private DensityFunction gpunoise$wrapFinalDensity(DensityFunction finalDensity) {
+        GpuTerrainProfiler.recordFinalDensityWrapperCreated();
         return new GpuFinalDensity(finalDensity, beardifier, (NoiseChunk) (Object) this);
+    }
+
+    /**
+     * C2ME's compiled router path reaches the block-state lambda directly,
+     * bypassing the DensityFunction wrapper above.  This redirect is the
+     * authoritative final-density handoff for that path.
+     */
+    @Redirect(method = "lambda$new$0", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/level/levelgen/DensityFunction;compute(Lnet/minecraft/world/level/levelgen/DensityFunction$FunctionContext;)D"))
+    private double gpunoise$useGpuFinalDensity(DensityFunction vanillaFunction,
+                                                DensityFunction.FunctionContext context) {
+        GpuNoiseChunkAccess access = (GpuNoiseChunkAccess) (Object) this;
+        GpuChunkDensityCache cache = access.gpunoise$gpuCache();
+        int minX = context.blockX() & ~15;
+        int minZ = context.blockZ() & ~15;
+        GpuChunkDensityCache active = GpuTerrainRuntime.activeFillCache();
+        if (active != null && access.gpunoise$matchesGpuCache(active)
+                && active.matchesChunk(minX, minZ)) {
+            access.gpunoise$setGpuCache(active);
+            cache = active;
+        }
+        if (cache != null && cache.matchesChunk(minX, minZ)) {
+            double gpu = cache.density(context);
+            if (!Double.isNaN(gpu)) {
+                GpuTerrainProfiler.recordGpuFinalDensity();
+                GpuTerrainRuntime.markGpuCacheUsed(cache);
+                return gpu + beardifier.compute(context);
+            }
+            if (cache.contains(context.blockX(), context.blockY(), context.blockZ())) {
+                throw new IllegalStateException("Authoritative GPU density cache returned NaN at "
+                        + context.blockX() + "," + context.blockY() + "," + context.blockZ());
+            }
+        }
+        return vanillaFunction.compute(context);
     }
 
     @Redirect(method = "computePreliminarySurfaceLevel", at = @At(value = "INVOKE",
@@ -116,30 +152,27 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
 
         @Override
         public double compute(DensityFunction.FunctionContext context) {
-            if (context == owner) {
-                GpuNoiseChunkAccess access = (GpuNoiseChunkAccess) (Object) owner;
-                GpuChunkDensityCache cache = access.gpunoise$gpuCache();
-                if (cache == null) {
-                    GpuChunkDensityCache active = GpuTerrainRuntime.activeFillCache();
-                    int minX = context.blockX() & ~15;
-                    int minZ = context.blockZ() & ~15;
-                    if (active != null && access.gpunoise$matchesGpuCache(active)
-                            && active.matchesChunk(minX, minZ)) {
-                        access.gpunoise$setGpuCache(active);
-                        cache = active;
-                    }
+            GpuTerrainProfiler.recordFinalDensityWrapper();
+            GpuNoiseChunkAccess access = (GpuNoiseChunkAccess) (Object) owner;
+            GpuChunkDensityCache cache = access.gpunoise$gpuCache();
+            int minX = context.blockX() & ~15;
+            int minZ = context.blockZ() & ~15;
+            GpuChunkDensityCache active = GpuTerrainRuntime.activeFillCache();
+            if (active != null && access.gpunoise$matchesGpuCache(active)
+                    && active.matchesChunk(minX, minZ)) {
+                access.gpunoise$setGpuCache(active);
+                cache = active;
+            }
+            if (cache != null && cache.matchesChunk(minX, minZ)) {
+                double gpu = cache.density(context);
+                if (!Double.isNaN(gpu)) {
+                    GpuTerrainProfiler.recordGpuFinalDensity();
+                    GpuTerrainRuntime.markGpuCacheUsed(cache);
+                    return gpu + beardifier.compute(context);
                 }
-                if (cache != null) {
-                    double gpu = cache.density(context);
-                    if (!Double.isNaN(gpu)) {
-                        GpuTerrainProfiler.recordGpuFinalDensity();
-                        GpuTerrainRuntime.markGpuCacheUsed(cache);
-                        return gpu + beardifier.compute(context);
-                    }
-                    if (cache.contains(context.blockX(), context.blockY(), context.blockZ())) {
-                        throw new IllegalStateException("Authoritative GPU density cache returned NaN at "
-                                + context.blockX() + "," + context.blockY() + "," + context.blockZ());
-                    }
+                if (cache.contains(context.blockX(), context.blockY(), context.blockZ())) {
+                    throw new IllegalStateException("Authoritative GPU density cache returned NaN at "
+                            + context.blockX() + "," + context.blockY() + "," + context.blockZ());
                 }
             }
             return finalDensity.compute(context) + beardifier.compute(context);
