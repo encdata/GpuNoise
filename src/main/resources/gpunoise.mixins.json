@@ -11,6 +11,7 @@
     "ImprovedNoiseAccessor",
     "NoiseDensityMixin",
     "NoiseChunkGpuDensityMixin",
+    "NoiseChunkCellCacheGpuMixin",
     "NoiseChunkGeneratorBiomeMixin",
     "PalettedContainerGpuWriteMixin",
     "LevelChunkSectionGpuWriteMixin",
