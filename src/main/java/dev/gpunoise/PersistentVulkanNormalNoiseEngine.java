@@ -18,9 +18,7 @@ import static org.lwjgl.vulkan.VK10.*;
 /** Reusable Vulkan resources for repeated NormalNoise submissions. */
 final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     static final int CAPACITY = 262_144;
-    // interpolationOutput is allocated as CAPACITY * 40 bytes, i.e. ten
-    // float values per capacity unit. Keep the scheduler's limit in the same
-    // units as the shader output rather than pretending it is one float/unit.
+    // interpolationOutput stores the compact per-block final-density output.
     static final int INTERPOLATION_OUTPUT_FLOATS = CAPACITY * 16;
     private final VkInstance instance;
     private final VkPhysicalDevice physical;

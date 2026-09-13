@@ -200,7 +200,7 @@ public final class GpuChunkDensityCache {
     private double sampleBlockRoot(int rx, int ry, int rz, int root) {
         GpuTerrainBlockResult blocks = readyBlocks;
         // The compact block buffer currently materializes final density only.
-        // Climate/initial roots must continue through the corner/interpolation path.
+        // Climate/initial roots continue through the corner/interpolation path.
         if (root != GpuTerrainRoots.FINAL_DENSITY
                 || blocks == null || !blocks.contains(rx, ry, rz)) return Double.NaN;
         return blocks.valueAt(rx, ry, rz, root);

@@ -292,7 +292,7 @@ public final class GpuTerrainRuntime {
         return 12;
     }
 
-    /** The compact grid output currently materializes the hot final-density root. */
+    /** The compact grid output materializes the hot final-density root. */
     static int terrainBlockOutputRootCount() {
         return 1;
     }
