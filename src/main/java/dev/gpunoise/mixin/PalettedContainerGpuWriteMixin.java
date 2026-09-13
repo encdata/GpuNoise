@@ -11,4 +11,11 @@ abstract class PalettedContainerGpuWriteMixin<T> implements GpuPalettedContainer
     @Override
     @Invoker("set")
     public abstract void gpunoise$setUnchecked(int index, T value);
+
+    @Override
+    public void gpunoise$setGpuCached(int index, T value) {
+        // Keep the vanilla palette-resize path until the Data accessor is
+        // proven stable across the NeoForge runtime transformer.
+        this.gpunoise$setUnchecked(index, value);
+    }
 }

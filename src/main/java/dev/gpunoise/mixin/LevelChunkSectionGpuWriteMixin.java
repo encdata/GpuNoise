@@ -2,9 +2,12 @@ package dev.gpunoise.mixin;
 
 import dev.gpunoise.GpuLevelChunkSectionAccess;
 import dev.gpunoise.GpuPalettedContainerAccess;
+import dev.gpunoise.GpuBlockStateFluidAccess;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.PalettedContainer;
+import net.minecraft.world.level.material.FluidState;
+import net.minecraft.world.level.material.Fluids;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -18,11 +21,14 @@ abstract class LevelChunkSectionGpuWriteMixin implements GpuLevelChunkSectionAcc
 
     @Override
     @SuppressWarnings("unchecked")
-    public void gpunoise$writeGpuBlock(int index, BlockState state) {
+    public boolean gpunoise$writeGpuBlock(int index, BlockState state) {
         this.nonEmptyBlockCount++;
         if (state.isRandomlyTicking()) this.tickingBlockCount++;
-        if (!state.getFluidState().isEmpty()) this.tickingFluidCount++;
+        FluidState fluidState = ((GpuBlockStateFluidAccess) (Object) state).gpunoise$fluidState();
+        boolean hasFluid = fluidState.getType() != Fluids.EMPTY;
+        if (hasFluid) this.tickingFluidCount++;
         ((GpuPalettedContainerAccess<BlockState>) (Object) this.states)
-                .gpunoise$setUnchecked(index, state);
+                .gpunoise$setGpuCached(index, state);
+        return hasFluid;
     }
 }

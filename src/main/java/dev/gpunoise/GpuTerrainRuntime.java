@@ -179,9 +179,9 @@ public final class GpuTerrainRuntime {
 
     public static void markGpuCacheUsed(GpuChunkDensityCache cache) {
         // GPU values are read for almost every generated block, but the
-        // statistic is per cache. Avoid an atomic CAS on every hot-path read;
-        // only the first observer needs to race for the transition.
-        if (cache != null && !cache.isConsumed() && cache.markConsumed()) {
+        // statistic is per cache. The cache keeps a plain fast flag and only
+        // performs the atomic transition on the first observer.
+        if (cache != null && cache.markConsumed()) {
             gpuChunksConsumed.incrementAndGet();
             logChunkStatistics(false);
         }
@@ -246,6 +246,26 @@ public final class GpuTerrainRuntime {
         if (scheduler != null) return scheduler.submit(grid);
         return java.util.concurrent.CompletableFuture.failedStage(
                 new IllegalStateException("GPU terrain roots scheduler is not installed"));
+    }
+
+    /** Prime the exact terrain-grid dispatch path before the first worldgen chunk. */
+    static void warmTerrainGpu(NoiseSettings settings) {
+        GpuTerrainRootsBatchScheduler scheduler = terrainRootsScheduler;
+        if (scheduler == null) return;
+        int cellWidth = settings.getCellWidth();
+        int cellHeight = settings.getCellHeight();
+        GpuTerrainGrid grid = new GpuTerrainGrid(
+                0, settings.minY(), 0,
+                16 / cellWidth + 1,
+                settings.height() / cellHeight + 1,
+                16 / cellWidth + 1,
+                cellWidth, cellHeight);
+        try {
+            scheduler.submit(grid).toCompletableFuture().join();
+            GpuNoise.LOGGER.info("GPU terrain grid path warmed before worldgen.");
+        } catch (RuntimeException failure) {
+            GpuNoise.LOGGER.warn("GPU terrain grid warmup failed; continuing with normal runtime dispatches.", failure);
+        }
     }
 
     static java.util.concurrent.CompletionStage<GpuTerrainRootsResult> submitTerrainGridDirect(
@@ -474,6 +494,60 @@ public final class GpuTerrainRuntime {
         } catch (Throwable failure) {
             graphParity = false;
             GpuNoise.LOGGER.warn("GPU compact terrain graph parity dispatch failed", failure);
+        }
+    }
+
+    /** Verifies the metadata/indexing path used by real chunk cell grids. */
+    static void verifyTerrainGrid(GpuDensityGraph graph, NoiseRouter router, NoiseSettings settings) {
+        GpuTerrainRootsBatchScheduler scheduler = terrainRootsScheduler;
+        if (scheduler == null) {
+            graphParity = false;
+            return;
+        }
+        int cellWidth = settings.getCellWidth();
+        int cellHeight = settings.getCellHeight();
+        GpuTerrainGrid grid = new GpuTerrainGrid(0, settings.minY(), 0,
+                16 / cellWidth + 1, settings.height() / cellHeight + 1,
+                16 / cellWidth + 1, cellWidth, cellHeight);
+        try {
+            GpuTerrainBatchResult batch = scheduler.submit(grid).toCompletableFuture().join();
+            GpuTerrainRootsResult values = batch.corners();
+            DensityFunction[] cpu = {
+                    router.finalDensity(), router.initialDensityWithoutJaggedness(),
+                    router.barrierNoise(), router.fluidLevelFloodednessNoise(),
+                    router.fluidLevelSpreadNoise(), router.lavaNoise(), router.erosion(),
+                    router.depth(), router.temperature(), router.vegetation(),
+                    router.continents(), router.ridges()
+            };
+            float worst = 0.0f;
+            int worstRoot = -1, worstX = 0, worstY = 0, worstZ = 0;
+            for (int gy = 0; gy < grid.gridY(); gy++) {
+                for (int gx = 0; gx < grid.gridX(); gx++) {
+                    for (int gz = 0; gz < grid.gridZ(); gz++) {
+                        int sample = (gy * grid.gridX() + gx) * grid.gridZ() + gz;
+                        int x = grid.minX() + gx * cellWidth;
+                        int y = grid.minY() + gy * cellHeight;
+                        int z = grid.minZ() + gz * cellWidth;
+                        for (int root = 0; root < cpu.length; root++) {
+                            float error = Math.abs(values.valueAt(sample, root)
+                                    - (float) cpu[root].compute(new DensityFunction.SinglePointContext(x, y, z)));
+                            if (error > worst) {
+                                worst = error;
+                                worstRoot = root;
+                                worstX = x;
+                                worstY = y;
+                                worstZ = z;
+                            }
+                        }
+                    }
+                }
+            }
+            graphParity = graphParity && worst < GRAPH_PARITY_EPSILON;
+            GpuNoise.LOGGER.info("GPU terrain grid parity: {} samples, worstMaxError={}, root={}, at ({},{},{}), parity={}",
+                    grid.sampleCount(), worst, worstRoot, worstX, worstY, worstZ, graphParity);
+        } catch (Throwable failure) {
+            graphParity = false;
+            GpuNoise.LOGGER.warn("GPU terrain grid parity dispatch failed; terrain remains CPU-owned.", failure);
         }
     }
 

@@ -8,8 +8,12 @@ import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
 import net.neoforged.neoforge.common.NeoForge;
-import net.neoforged.neoforge.event.server.ServerStartingEvent;
+import net.neoforged.neoforge.event.server.ServerAboutToStartEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
+import net.neoforged.neoforge.event.server.ServerStartingEvent;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator;
+import net.minecraft.world.level.levelgen.NoiseSettings;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
@@ -19,9 +23,18 @@ import java.util.concurrent.ThreadLocalRandom;
 public final class GpuNoise {
     public static final String MOD_ID = "gpunoise";
     public static final Logger LOGGER = LogUtils.getLogger();
+    private GpuDevice warmedDevice;
 
     public GpuNoise(IEventBus modEventBus, ModContainer modContainer) {
         // Deliberately server-side only: no client/rendering hooks are registered.
+        // Probe and allocate the Vulkan runtime while mods are still being
+        // registered.  Waiting for ServerStarting is too late: NeoForge may
+        // already have begun preparing the spawn region by then.
+        // Config values are not loaded until after mod construction. Use the
+        // safe automatic preference for this early probe; the configured
+        // preference is applied by the pre-worldgen retry if needed.
+        warmGpuBeforeWorldgen(GpuNoiseConfig.GpuVendorPreference.AUTO);
+        NeoForge.EVENT_BUS.addListener(this::onServerAboutToStart);
         NeoForge.EVENT_BUS.addListener(this::onServerStarting);
         NeoForge.EVENT_BUS.addListener(this::onServerStarted);
         modContainer.registerConfig(ModConfig.Type.COMMON, GpuNoiseConfig.SPEC);
@@ -50,7 +63,24 @@ public final class GpuNoise {
         });
     }
 
+    private void onServerAboutToStart(ServerAboutToStartEvent event) {
+        if (warmedDevice == null) {
+            warmGpuBeforeWorldgen(GpuNoiseConfig.GPU_VENDOR.get());
+        }
+        if (warmedDevice != null && event.getServer().overworld() != null) {
+            installWorldGraph(event.getServer());
+        }
+    }
+
     private void onServerStarting(ServerStartingEvent event) {
+        if (warmedDevice == null) warmGpuBeforeWorldgen(GpuNoiseConfig.GPU_VENDOR.get());
+        if (warmedDevice == null || event.getServer().overworld() == null
+                || GpuTerrainRuntime.terrainInputsAvailable()) return;
+        installWorldGraph(event.getServer());
+    }
+
+    private void warmGpuBeforeWorldgen(GpuNoiseConfig.GpuVendorPreference preference) {
+        if (warmedDevice != null) return;
         if (!GpuTerrainRuntime.c2meDfcAvailable()) {
             LOGGER.info("GPU Noise inactive: C2ME DFC is not installed; using vanilla world generation.");
             return;
@@ -63,7 +93,7 @@ public final class GpuNoise {
             LOGGER.info("GPU Noise inactive: Vulkan/LWJGL bindings are not available; vanilla terrain remains unchanged.");
             return;
         }
-        GpuDevice device = GpuProbe.findPreferredDevice(GpuNoiseConfig.GPU_VENDOR.get());
+        GpuDevice device = GpuProbe.findPreferredDevice(preference);
         if (device == null) {
             LOGGER.info("GPU Noise inactive: no supported server GPU detected; vanilla terrain remains unchanged.");
             return;
@@ -75,8 +105,15 @@ public final class GpuNoise {
         }
 
         GpuTerrainRuntime.start(device);
+        warmedDevice = device;
+        LOGGER.info("GPU Noise Vulkan runtime warmed during mod registration; selected {} ({}).",
+                device.name(), device.vendorName());
+    }
+
+    private void installWorldGraph(MinecraftServer server) {
+        GpuDevice device = warmedDevice;
         try {
-            var router = event.getServer().overworld().getChunkSource().randomState().router();
+            var router = server.overworld().getChunkSource().randomState().router();
             GpuDensityGraph installedGraph = null;
             try {
                 // Verify the entire router once at startup, but only execute
@@ -104,6 +141,16 @@ public final class GpuNoise {
                 });
                 GpuTerrainRuntime.installTerrainGraph(terrainGraph);
                 installedGraph = terrainGraph;
+                if (server.overworld().getChunkSource().getGenerator()
+                        instanceof NoiseBasedChunkGenerator noiseGenerator) {
+                    NoiseSettings settings = noiseGenerator.generatorSettings().value().noiseSettings()
+                            .clampToHeightAccessor(server.overworld());
+                    VulkanBootstrapThread.callUnchecked(() -> {
+                        GpuTerrainRuntime.verifyTerrainGrid(terrainGraph, router, settings);
+                        return null;
+                    });
+                    GpuTerrainRuntime.warmTerrainGpu(settings);
+                }
             } catch (RuntimeException fullGraphFailure) {
                 LOGGER.warn("Full router graph unavailable; strict GPU terrain is disabled for this server.", fullGraphFailure);
             }

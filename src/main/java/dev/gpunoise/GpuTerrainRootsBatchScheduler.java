@@ -20,7 +20,10 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     private static final int BATCH_SIZE_CHUNKS = 5;
     private static final int MAX_CHUNKS = BATCH_SIZE_CHUNKS * BATCH_SIZE_CHUNKS;
     private static final int MAX_INPUT = PersistentVulkanNormalNoiseEngine.CAPACITY;
-    private static final long BATCH_WINDOW_NANOS = 10_000_000L;
+    // Give C2ME enough time to enqueue the rest of the local 5x5 area. The
+    // deadline is still bounded, so an isolated request is dispatched
+    // promptly instead of waiting for neighbors that may never arrive.
+    private static final long BATCH_WINDOW_NANOS = 20_000_000L;
     private final BlockingQueue<Pending> queue = new ArrayBlockingQueue<>(256);
     private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "GPU terrain roots batcher");
@@ -58,7 +61,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                     addPending(queue.take());
                 }
                 long deadline = System.nanoTime() + BATCH_WINDOW_NANOS;
-                while (System.nanoTime() < deadline && pendingByRegion.size() < MAX_CHUNKS * 4) {
+                while (System.nanoTime() < deadline && pendingCount() < MAX_CHUNKS) {
                     long remaining = deadline - System.nanoTime();
                     Pending next = remaining > 0
                             ? queue.poll(remaining, TimeUnit.NANOSECONDS)
@@ -120,6 +123,14 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
 
     private void addPending(Pending item) {
         pendingByRegion.computeIfAbsent(regionKey(item.grid), ignored -> new ArrayDeque<>()).addLast(item);
+    }
+
+    private int pendingCount() {
+        int count = 0;
+        for (ArrayDeque<Pending> region : pendingByRegion.values()) {
+            count += region.size();
+        }
+        return count;
     }
 
     private long largestRegion() {

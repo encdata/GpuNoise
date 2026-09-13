@@ -11,6 +11,7 @@ import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.core.Holder;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.levelgen.NoiseSettings;
+import net.minecraft.SharedConstants;
 import java.util.concurrent.CompletableFuture;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -33,6 +34,18 @@ import dev.gpunoise.GpuTerrainProfiler;
 @Mixin(NoiseBasedChunkGenerator.class)
 abstract class NoiseChunkGeneratorWriteMixin {
     @Shadow public abstract Holder<NoiseGeneratorSettings> generatorSettings();
+
+    @org.spongepowered.asm.mixin.Unique
+    private boolean gpunoise$debugVoidTerrain;
+
+    @org.spongepowered.asm.mixin.Unique
+    private boolean gpunoise$debugVoidTerrainCached;
+
+    @org.spongepowered.asm.mixin.Unique
+    private boolean gpunoise$lastWrittenBlockHasFluid;
+
+    @org.spongepowered.asm.mixin.Unique
+    private boolean gpunoise$lastWrittenBlockFluidCached;
 
     @Inject(method = "fillFromNoise", at = @At("HEAD"), cancellable = true)
     private void gpunoise$asyncBatchFill(Blender blender, RandomState randomState, StructureManager structures,
@@ -63,26 +76,29 @@ abstract class NoiseChunkGeneratorWriteMixin {
         int cellHeight = generatorSettings().value().noiseSettings().getCellHeight();
         int top = chunk.getSectionIndex(cellCountY * cellHeight - 1 + minY);
         int bottom = chunk.getSectionIndex(minY);
-        LevelChunkSection[] sections = new LevelChunkSection[top - bottom + 1];
-        int sectionCount = 0;
+        // ChunkAccess already owns this array. Reusing it avoids allocating a
+        // temporary section array and avoids a getSection() call for every
+        // section on every chunk fill.
+        LevelChunkSection[] sections = chunk.getSections();
         for (int sectionIndex = top; sectionIndex >= bottom; sectionIndex--) {
-            LevelChunkSection section = chunk.getSection(sectionIndex);
-            section.acquire();
-            sections[sectionCount++] = section;
+            sections[sectionIndex].acquire();
         }
         try {
             GpuTerrainRuntime.bindFillCache(cache);
+            gpunoise$debugVoidTerrain = SharedConstants.debugVoidTerrain(chunk.getPos());
+            gpunoise$debugVoidTerrainCached = true;
             long fillStart = GpuTerrainProfiler.beginFill();
             try {
                 return gpunoise$doFill(blender, structures, randomState, chunk, minCellY, cellCountY);
             } finally {
                 GpuTerrainProfiler.endFill(fillStart);
+                gpunoise$debugVoidTerrainCached = false;
                 GpuTerrainRuntime.clearFillCache();
             }
         } finally {
             GpuTerrainRuntime.releaseGpuCache(cache);
-            for (int i = 0; i < sectionCount; i++) {
-                sections[i].release();
+            for (int sectionIndex = top; sectionIndex >= bottom; sectionIndex--) {
+                sections[sectionIndex].release();
             }
         }
     }
@@ -100,8 +116,9 @@ abstract class NoiseChunkGeneratorWriteMixin {
     )
     private BlockState gpunoise$writeWithoutSectionLock(
             LevelChunkSection section, int x, int y, int z, BlockState state, boolean ignored) {
-        ((GpuLevelChunkSectionAccess) (Object) section)
+        gpunoise$lastWrittenBlockHasFluid = ((GpuLevelChunkSectionAccess) (Object) section)
                 .gpunoise$writeGpuBlock((y << 4 | z) << 4 | x, state);
+        gpunoise$lastWrittenBlockFluidCached = true;
         GpuTerrainProfiler.recordBlockWrite();
         return state;
     }
@@ -121,5 +138,57 @@ abstract class NoiseChunkGeneratorWriteMixin {
             return true;
         }
         return heightmap.update(x, y, z, state);
+    }
+
+    @Redirect(
+            method = "doFill",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/world/level/material/FluidState;isEmpty()Z"
+            )
+    )
+    private boolean gpunoise$reuseWrittenFluidState(net.minecraft.world.level.material.FluidState fluidState) {
+        if (gpunoise$lastWrittenBlockFluidCached) {
+            gpunoise$lastWrittenBlockFluidCached = false;
+            return !gpunoise$lastWrittenBlockHasFluid;
+        }
+        return fluidState.isEmpty();
+    }
+
+    /**
+     * This is a per-fill constant in the normal terrain path. Vanilla asks
+     * for it once per generated block, including a repeated ChunkPos lookup.
+     * Keep the original call for any non-GPU invocation of doFill.
+     */
+    @Redirect(
+            method = "doFill",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/SharedConstants;debugVoidTerrain(Lnet/minecraft/world/level/ChunkPos;)Z"
+            )
+    )
+    private boolean gpunoise$cachedDebugVoidTerrain(net.minecraft.world.level.ChunkPos pos) {
+        if (gpunoise$debugVoidTerrainCached) {
+            return gpunoise$debugVoidTerrain;
+        }
+        return SharedConstants.debugVoidTerrain(pos);
+    }
+
+    /**
+     * 1.21.1's preliminary-surface hook is intentionally a no-op. Returning
+     * the state directly avoids a virtual/private helper call for every block.
+     */
+    @Redirect(
+            method = "doFill",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/world/level/levelgen/NoiseBasedChunkGenerator;debugPreliminarySurfaceLevel(Lnet/minecraft/world/level/levelgen/NoiseChunk;IIILnet/minecraft/world/level/block/state/BlockState;)Lnet/minecraft/world/level/block/state/BlockState;"
+            )
+    )
+    private BlockState gpunoise$skipNoOpPreliminarySurfaceLevel(
+            NoiseBasedChunkGenerator ignored,
+            net.minecraft.world.level.levelgen.NoiseChunk noiseChunk,
+            int x, int y, int z, BlockState state) {
+        return state;
     }
 }

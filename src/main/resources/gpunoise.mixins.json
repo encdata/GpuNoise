@@ -11,13 +11,16 @@
     "ImprovedNoiseAccessor",
     "NoiseDensityMixin",
     "NoiseChunkGpuDensityMixin",
+    "NoiseInterpolatorGpuAccessMixin",
     "NoiseChunkGeneratorBiomeMixin",
-    "PalettedContainerGpuWriteMixin",
+      "PalettedContainerGpuWriteMixin",
+      "BlockStateFluidAccessMixin",
     "LevelChunkSectionGpuWriteMixin",
     "HeightmapGpuWriteMixin",
     "AquiferGpuInputsMixin",
     "NoiseChunkGeneratorWriteMixin",
-    "C2meCompiledDensityFunctionMixin"
+    "C2meCompiledDensityFunctionMixin",
+    "C2mePriorityBatchMixin"
   ],
   "injectors": {
     "defaultRequire": 1

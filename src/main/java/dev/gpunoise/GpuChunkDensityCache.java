@@ -26,6 +26,9 @@ public final class GpuChunkDensityCache {
     private GpuTerrainRootsResult readyRoots;
     private GpuTerrainBlockResult readyBlocks;
     private final AtomicBoolean consumed = new AtomicBoolean();
+    // A cache is consumed by one NoiseChunk fill task. After the first
+    // observation, keep the hot path entirely non-atomic.
+    private boolean consumptionObserved;
     private final AtomicBoolean submitted = new AtomicBoolean();
     private final AtomicBoolean completed = new AtomicBoolean();
     private static final AtomicLong cornerReads = new AtomicLong();
@@ -138,11 +141,13 @@ public final class GpuChunkDensityCache {
     }
 
     public boolean markConsumed() {
-        return consumed.compareAndSet(false, true);
-    }
-
-    public boolean isConsumed() {
-        return consumed.get();
+        if (consumptionObserved) return false;
+        if (!consumed.compareAndSet(false, true)) {
+            consumptionObserved = true;
+            return false;
+        }
+        consumptionObserved = true;
+        return true;
     }
 
     boolean markSubmitted() { return submitted.compareAndSet(false, true); }
@@ -172,6 +177,37 @@ public final class GpuChunkDensityCache {
                 ? ((rx & (cellWidth - 1)) | (ry & (cellHeight - 1)) | (rz & (cellWidth - 1))) == 0
                 : rx % cellWidth == 0 && ry % cellHeight == 0 && rz % cellWidth == 0;
         if (rx <= 16 && rz <= 16 && ry <= maxRelativeY && aligned) {
+            int gx = rx / cellWidth;
+            int gy = ry / cellHeight;
+            int gz = rz / cellWidth;
+            if (gx < gridX && gy <= cellsY && gz < gridZ) {
+                if (READ_STATS_ENABLED) {
+                    long corners = cornerReads.incrementAndGet();
+                    if ((corners & 0x3ffffL) == 0L) logReadStatistics();
+                }
+                return ready.valueAt((gy * gridX + gx) * gridZ + gz, GpuTerrainRoots.FINAL_DENSITY);
+            }
+        }
+        if (READ_STATS_ENABLED) {
+            long interpolated = interpolatedReads.incrementAndGet();
+            if ((interpolated & 0x3ffffL) == 0L) logReadStatistics();
+        }
+        return sampleRoot(rx, ry, rz, GpuTerrainRoots.FINAL_DENSITY);
+    }
+
+    /** Hot path used by NoiseChunk's final-density graph redirect. */
+    public double finalDensity(int x, int y, int z) {
+        int rx = x - minX;
+        int ry = y - minY;
+        int rz = z - minZ;
+        if ((rx | ry | rz) < 0 || rx > 16 || rz > 16 || ry > maxRelativeY) return Double.NaN;
+        if (exact != null) return sampleExactRoot(rx, ry, rz, GpuTerrainRoots.FINAL_DENSITY);
+        GpuTerrainRootsResult ready = readyRoots;
+        if (ready == null) return Double.NaN;
+        boolean aligned = powerOfTwoCells
+                ? ((rx & (cellWidth - 1)) | (ry & (cellHeight - 1)) | (rz & (cellWidth - 1))) == 0
+                : rx % cellWidth == 0 && ry % cellHeight == 0 && rz % cellWidth == 0;
+        if (aligned) {
             int gx = rx / cellWidth;
             int gy = ry / cellHeight;
             int gz = rz / cellWidth;
@@ -332,12 +368,17 @@ public final class GpuChunkDensityCache {
     private static double lerp3(float c000, float c100, float c010, float c110,
                                 float c001, float c101, float c011, float c111,
                                 float tx, float ty, float tz) {
-        float x00 = c000 + (c100 - c000) * tx;
-        float x10 = c010 + (c110 - c010) * tx;
-        float x01 = c001 + (c101 - c001) * tx;
-        float x11 = c011 + (c111 - c011) * tx;
-        return (x00 + (x10 - x00) * tz) + ((x01 + (x11 - x01) * tz)
-                - (x00 + (x10 - x00) * tz)) * ty;
+        // Match Mth.lerp3(x, y, z, ...): interpolate Y first, then X,
+        // then Z.  The previous implementation interpolated Z and Y in
+        // the opposite order, which transposed the vertical/depth axes and
+        // produced the characteristic striped terrain.
+        float y00 = c000 + (c010 - c000) * ty;
+        float y10 = c100 + (c110 - c100) * ty;
+        float y01 = c001 + (c011 - c001) * ty;
+        float y11 = c101 + (c111 - c101) * ty;
+        float x0 = y00 + (y10 - y00) * tx;
+        float x1 = y01 + (y11 - y01) * tx;
+        return x0 + (x1 - x0) * tz;
     }
 
     private static long chunkKey(int x, int z) { return ((long)x << 32) ^ (z & 0xffffffffL); }

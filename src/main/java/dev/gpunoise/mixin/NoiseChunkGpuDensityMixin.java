@@ -2,6 +2,7 @@ package dev.gpunoise.mixin;
 
 import dev.gpunoise.GpuChunkDensityCache;
 import dev.gpunoise.GpuNoiseChunkAccess;
+import dev.gpunoise.GpuNoiseInterpolatorAccess;
 import dev.gpunoise.GpuNoiseConfig;
 import dev.gpunoise.GpuTerrainRuntime;
 import dev.gpunoise.GpuTerrainRoots;
@@ -21,16 +22,26 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.Overwrite;
 
 /** Replaces only the final terrain-density evaluation with the GPU slab. */
 @Mixin(NoiseChunk.class)
 abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     @Shadow @Final private NoiseSettings noiseSettings;
     @Shadow @Final private DensityFunctions.BeardifierOrMarker beardifier;
+    @Shadow @Final private List<NoiseChunk.NoiseInterpolator> interpolators;
+    @Shadow private int cellStartBlockX;
+    @Shadow int cellStartBlockY;
+    @Shadow private int cellStartBlockZ;
+    @Shadow int inCellX;
+    @Shadow int inCellY;
+    @Shadow int inCellZ;
+    @Shadow long interpolationCounter;
     @Shadow @Final int firstNoiseX;
     @Shadow @Final int firstNoiseZ;
     @Unique private GpuChunkDensityCache gpunoise$cache;
     @Unique private boolean gpunoise$zeroBeardifier;
+    @Unique private boolean gpunoise$gpuUseMarked;
 
     @Inject(method = "<init>", at = @At("TAIL"))
     private void gpunoise$installGpuCache(CallbackInfo callback) {
@@ -88,6 +99,45 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
         return cache;
     }
 
+    @Unique
+    private void gpunoise$markGpuUse(GpuChunkDensityCache cache) {
+        if (!gpunoise$gpuUseMarked) {
+            gpunoise$gpuUseMarked = true;
+            GpuTerrainRuntime.markGpuCacheUsed(cache);
+        }
+    }
+
+    /**
+     * NoiseChunk's vanilla implementation uses List.forEach with a lambda for
+     * every block-coordinate update. The list is immutable after construction,
+     * so indexed traversal avoids allocating/dispatching an iterator on the
+     * hottest part of the interpolation loop.
+     */
+    @Overwrite
+    public void updateForY(int cellEndBlockY, double y) {
+        this.inCellY = cellEndBlockY - this.cellStartBlockY;
+        for (int i = 0, size = this.interpolators.size(); i < size; i++) {
+            ((GpuNoiseInterpolatorAccess) (Object) this.interpolators.get(i)).gpunoise$updateForY(y);
+        }
+    }
+
+    @Overwrite
+    public void updateForX(int cellEndBlockX, double x) {
+        this.inCellX = cellEndBlockX - this.cellStartBlockX;
+        for (int i = 0, size = this.interpolators.size(); i < size; i++) {
+            ((GpuNoiseInterpolatorAccess) (Object) this.interpolators.get(i)).gpunoise$updateForX(x);
+        }
+    }
+
+    @Overwrite
+    public void updateForZ(int cellEndBlockZ, double z) {
+        this.inCellZ = cellEndBlockZ - this.cellStartBlockZ;
+        this.interpolationCounter++;
+        for (int i = 0, size = this.interpolators.size(); i < size; i++) {
+            ((GpuNoiseInterpolatorAccess) (Object) this.interpolators.get(i)).gpunoise$updateForZ(z);
+        }
+    }
+
     /**
      * C2ME's compiled router path reaches the block-state lambda directly,
      * bypassing the DensityFunction wrapper above.  This redirect is the
@@ -106,10 +156,10 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
         // and boundary queries, so revalidating the chunk on every hot-path
         // final-density call is unnecessary.
         if (cache != null) {
-            double gpu = cache.density(context);
+            double gpu = cache.finalDensity(context.blockX(), context.blockY(), context.blockZ());
             if (!Double.isNaN(gpu)) {
                 GpuTerrainProfiler.recordGpuFinalDensity();
-                GpuTerrainRuntime.markGpuCacheUsed(cache);
+                gpunoise$markGpuUse(cache);
                 return gpunoise$zeroBeardifier ? gpu : gpu + beardifier.compute(context);
             }
             if (cache.contains(context.blockX(), context.blockY(), context.blockZ())) {
@@ -128,7 +178,7 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
             double gpu = cache.initialDensity(context.blockX(), context.blockY(), context.blockZ());
             if (!Double.isNaN(gpu)) {
                 GpuTerrainProfiler.recordGpuInitialDensity();
-                GpuTerrainRuntime.markGpuCacheUsed(cache);
+                gpunoise$markGpuUse(cache);
                 return gpu;
             }
         }
