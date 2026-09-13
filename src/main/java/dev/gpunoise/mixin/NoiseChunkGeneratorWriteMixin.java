@@ -82,9 +82,16 @@ abstract class NoiseChunkGeneratorWriteMixin {
             sections[sectionIndex].acquire();
         }
         try {
-            gpunoise$fillState.set(new GpuFillState());
+            GpuFillState state = new GpuFillState();
+            state.directWritesSafe = true;
+            for (int sectionIndex = top; sectionIndex >= bottom; sectionIndex--) {
+                if (!sections[sectionIndex].hasOnlyAir()) {
+                    state.directWritesSafe = false;
+                    break;
+                }
+            }
+            gpunoise$fillState.set(state);
             GpuTerrainRuntime.bindFillCache(cache);
-            GpuFillState state = gpunoise$fillState.get();
             state.debugVoidTerrain = SharedConstants.debugVoidTerrain(chunk.getPos());
             state.debugVoidTerrainCached = true;
             long fillStart = GpuTerrainProfiler.beginFill();
@@ -118,7 +125,8 @@ abstract class NoiseChunkGeneratorWriteMixin {
     private BlockState gpunoise$writeWithoutSectionLock(
                                                   LevelChunkSection section, int x, int y, int z, BlockState state, boolean ignored) {
         GpuFillState fillState = gpunoise$fillState.get();
-        if (fillState == null || GpuTerrainRuntime.activeFillCache() == null) {
+        if (fillState == null || !fillState.directWritesSafe
+                || GpuTerrainRuntime.activeFillCache() == null) {
             return section.setBlockState(x, y, z, state, ignored);
         }
         fillState.lastWrittenBlockHasFluid = ((GpuLevelChunkSectionAccess) (Object) section)
@@ -138,7 +146,9 @@ abstract class NoiseChunkGeneratorWriteMixin {
     private boolean gpunoise$updateHeightmapDescending(
             net.minecraft.world.level.levelgen.Heightmap heightmap,
             int x, int y, int z, BlockState state) {
-        if (gpunoise$fillState.get() == null || GpuTerrainRuntime.activeFillCache() == null) {
+        GpuFillState fillState = gpunoise$fillState.get();
+        if (fillState == null || !fillState.directWritesSafe
+                || GpuTerrainRuntime.activeFillCache() == null) {
             return heightmap.update(x, y, z, state);
         }
         if (heightmap instanceof GpuHeightmapAccess fast
@@ -157,7 +167,8 @@ abstract class NoiseChunkGeneratorWriteMixin {
     )
     private boolean gpunoise$reuseWrittenFluidState(net.minecraft.world.level.material.FluidState fluidState) {
         GpuFillState fillState = gpunoise$fillState.get();
-        if (fillState == null || GpuTerrainRuntime.activeFillCache() == null) {
+        if (fillState == null || !fillState.directWritesSafe
+                || GpuTerrainRuntime.activeFillCache() == null) {
             return fluidState.isEmpty();
         }
         if (fillState.lastWrittenBlockFluidCached) {
