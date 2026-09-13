@@ -11,6 +11,8 @@ final class GpuTerrainBatchResult {
     }
 
     GpuTerrainBatchResult slice(int cornerOffset, int cornerCount, int blockOffset, int blockCount) {
+        if (blocks.isEmpty()) return new GpuTerrainBatchResult(
+                corners.slice(cornerOffset, cornerCount), blocks);
         return new GpuTerrainBatchResult(corners.slice(cornerOffset, cornerCount),
                 blocks.slice(blockOffset, blockCount));
     }

@@ -158,8 +158,10 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     private void dispatch(List<Pending> batch, int samplesPerChunk, int inputCount) {
         java.nio.ByteBuffer metadata = java.nio.ByteBuffer.allocateDirect(batch.size() * 32)
                 .order(java.nio.ByteOrder.nativeOrder());
-        int blocksPerChunk = blocksPerChunk(batch.get(0).grid);
-        java.nio.ByteBuffer outputMetadata = java.nio.ByteBuffer.allocateDirect(batch.size() * 32)
+        int blocksPerChunk = GpuTerrainRuntime.terrainBlockOutputEnabled()
+                ? blocksPerChunk(batch.get(0).grid) : 0;
+        java.nio.ByteBuffer outputMetadata = java.nio.ByteBuffer.allocateDirect(
+                GpuTerrainRuntime.terrainBlockOutputEnabled() ? batch.size() * 32 : 0)
                 .order(java.nio.ByteOrder.nativeOrder());
         int cornerOffset = 0;
         int blockOffset = 0;
@@ -169,6 +171,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
             metadata.putInt(g.minX()).putInt(g.minY()).putInt(g.minZ())
                     .putInt(g.gridX()).putInt(g.gridY()).putInt(g.gridZ())
                     .putInt(g.cellWidth()).putInt(g.cellHeight());
+            if (!GpuTerrainRuntime.terrainBlockOutputEnabled()) continue;
             int cellsX = g.gridX() - 1;
             int cellsY = g.gridY() - 1;
             int cellsZ = g.gridZ() - 1;

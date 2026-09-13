@@ -29,6 +29,8 @@ public final class GpuTerrainRuntime {
     private static volatile GpuTerrainGraphProvider terrainProvider;
     private static volatile VulkanSubmissionRing terrainRing;
     private static volatile GpuDensityGraph terrainGraph;
+    /** Full per-block readback is retained only as an explicit diagnostic fallback. */
+    private static final boolean FULL_BLOCK_OUTPUT = Boolean.getBoolean("gpunoise.fullBlockOutput");
     private static final GpuChunkPipelineGate chunkPipelineGate = new GpuChunkPipelineGate(
             Math.max(16, Runtime.getRuntime().availableProcessors() * 2));
     private static volatile boolean graphParity;
@@ -259,8 +261,19 @@ public final class GpuTerrainRuntime {
         VulkanSubmissionRing ring = terrainRing;
         if (ring == null || terrainGraph == null) return java.util.concurrent.CompletableFuture.failedStage(
                 new IllegalStateException("GPU terrain graph provider is not installed"));
+        if (!FULL_BLOCK_OUTPUT) {
+            return ring.submitGraphRootsGrid(gridMetadata, chunkCount, samplesPerChunk)
+                    .thenApply(values -> new GpuTerrainBatchResult(
+                            new GpuTerrainRootsResult(values, 0, values.length,
+                                    terrainGraph.routerRoots().length),
+                            new GpuTerrainBlockResult(new float[0], 0, 0, 1, 16, 0, 16)));
+        }
         return ring.submitGraphGridInterpolated(gridMetadata, chunkCount, samplesPerChunk,
                 outputMetadata, blocksPerChunk);
+    }
+
+    static boolean terrainBlockOutputEnabled() {
+        return FULL_BLOCK_OUTPUT;
     }
 
     static GpuDensityGraph currentTerrainGraph() {

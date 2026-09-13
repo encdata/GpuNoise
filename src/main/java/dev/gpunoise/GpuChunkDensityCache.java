@@ -134,10 +134,11 @@ public final class GpuChunkDensityCache {
         GpuTerrainRootsResult ready = readyRoots;
         if (ready == null) return Double.NaN;
         GpuTerrainBlockResult blocks = readyBlocks;
-        if (blocks != null && rx < 16 && ry < cellsY * cellHeight && rz < 16) {
+        if (blocks != null && !blocks.isEmpty()
+                && rx < 16 && ry < cellsY * cellHeight && rz < 16) {
             long direct = blockReads.incrementAndGet();
             if ((direct & 0x3ffffL) == 0L) logReadStatistics();
-            return blocks.valueAt(rx, ry, rz, GpuTerrainRoots.FINAL_DENSITY);
+            return blocks.finalValueAtUnchecked(rx, ry, rz);
         }
         if (rx <= 16 && rz <= 16 && ry <= cellsY * cellHeight
                 && rx % cellWidth == 0 && ry % cellHeight == 0 && rz % cellWidth == 0) {
@@ -158,7 +159,7 @@ public final class GpuChunkDensityCache {
     private static void logReadStatistics() {
         long total = blockReads.get() + cornerReads.get() + interpolatedReads.get();
         long bucket = total >>> 24;
-        if (!lastReadLogBucket.compareAndSet(bucket, bucket)) return;
+        if (lastReadLogBucket.getAndSet(bucket) == bucket) return;
         GpuNoise.LOGGER.info("GPU terrain density reads: blockReads={}, cornerReads={}, interpolatedReads={}",
                 blockReads.get(), cornerReads.get(), interpolatedReads.get());
     }

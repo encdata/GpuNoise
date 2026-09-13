@@ -21,7 +21,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import dev.gpunoise.GpuChunkDensityCache;
 import dev.gpunoise.GpuLevelChunkSectionAccess;
-import dev.gpunoise.GpuPalettedContainerAccess;
 import dev.gpunoise.GpuTerrainRuntime;
 import dev.gpunoise.GpuTerrainProfiler;
 
@@ -100,12 +99,9 @@ abstract class NoiseChunkGeneratorWriteMixin {
     )
     private BlockState gpunoise$writeWithoutSectionLock(
             LevelChunkSection section, int x, int y, int z, BlockState state, boolean ignored) {
-        @SuppressWarnings("unchecked")
-        GpuPalettedContainerAccess<BlockState> states =
-                (GpuPalettedContainerAccess<BlockState>) (Object) section.getStates();
-        ((GpuLevelChunkSectionAccess) (Object) section).gpunoise$recordGpuBlockWrite(state);
+        ((GpuLevelChunkSectionAccess) (Object) section)
+                .gpunoise$writeGpuBlock((y << 4 | z) << 4 | x, state);
         GpuTerrainProfiler.recordBlockWrite();
-        states.gpunoise$setUnchecked((y << 4 | z) << 4 | x, state);
         return state;
     }
 }
