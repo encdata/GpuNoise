@@ -123,7 +123,12 @@ public final class GpuTerrainRuntime {
      * corrupts generation or fails chunk futures.
      */
     public static boolean gpuOnlyWorldgenAvailable() {
-        return terrainInputsAvailable() && terrainRootsScheduler != null;
+        // The GPU fill continuation is designed around C2ME's concurrent
+        // chunk-generation pipeline.  Vanilla's scheduler has lower
+        // parallelism and the serialized Vulkan submission path can be slower
+        // than vanilla CPU generation, so preserve the vanilla path when
+        // C2ME is not installed.
+        return c2meDfcAvailable() && terrainInputsAvailable() && terrainRootsScheduler != null;
     }
 
     /**

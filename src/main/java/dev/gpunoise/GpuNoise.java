@@ -51,6 +51,10 @@ public final class GpuNoise {
     }
 
     private void onServerStarting(ServerStartingEvent event) {
+        if (!GpuTerrainRuntime.c2meDfcAvailable()) {
+            LOGGER.info("GPU Noise inactive: C2ME DFC is not installed; using vanilla world generation.");
+            return;
+        }
         // Integrated servers already receive LWJGL from Minecraft. The slim
         // artifact uses those classes; standalone servers should use the
         // -all artifact. Do this before touching GpuProbe so missing Vulkan

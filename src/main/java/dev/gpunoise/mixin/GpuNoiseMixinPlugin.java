@@ -1,5 +1,6 @@
 package dev.gpunoise.mixin;
 
+import dev.gpunoise.GpuTerrainRuntime;
 import org.objectweb.asm.tree.ClassNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
 import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
@@ -22,6 +23,9 @@ public final class GpuNoiseMixinPlugin implements IMixinConfigPlugin {
         // Apply the normal Minecraft accessors as well as the optional C2ME
         // integrations. The config is optional, so missing C2ME targets are
         // allowed on installations that do not have C2ME installed.
+        if (mixinClassName.endsWith("C2meCompiledDensityFunctionMixin")) {
+            return GpuTerrainRuntime.c2meDfcAvailable();
+        }
         return true;
     }
 
