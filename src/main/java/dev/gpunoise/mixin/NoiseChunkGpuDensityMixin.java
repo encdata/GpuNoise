@@ -91,14 +91,15 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
             target = "Lnet/minecraft/world/level/levelgen/DensityFunction;compute(Lnet/minecraft/world/level/levelgen/DensityFunction$FunctionContext;)D"))
     private double gpunoise$useGpuFinalDensity(DensityFunction vanillaFunction,
                                                 DensityFunction.FunctionContext context) {
-        GpuNoiseChunkAccess access = (GpuNoiseChunkAccess) (Object) this;
-        GpuChunkDensityCache cache = access.gpunoise$gpuCache();
-        int minX = context.blockX() & ~15;
-        int minZ = context.blockZ() & ~15;
+        GpuChunkDensityCache cache = this.gpunoise$cache;
         if (cache == null) {
             cache = gpunoise$getActiveCache();
         }
-        if (cache != null && cache.matchesChunk(minX, minZ)) {
+        // The cache is attached only after validating this NoiseChunk's
+        // coordinates. density() still checks its own bounds for preliminary
+        // and boundary queries, so revalidating the chunk on every hot-path
+        // final-density call is unnecessary.
+        if (cache != null) {
             double gpu = cache.density(context);
             if (!Double.isNaN(gpu)) {
                 GpuTerrainProfiler.recordGpuFinalDensity();

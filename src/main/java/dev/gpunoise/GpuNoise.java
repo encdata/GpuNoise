@@ -85,13 +85,23 @@ public final class GpuNoise {
                 GpuDensityGraphBuffer.Packed packedGraph = GpuDensityGraphBuffer.pack(fullGraph);
                 LOGGER.info("GPU density graph discovered: {} nodes, {} router roots, {} noise samplers; packed {} bytes for GPU lowering.",
                         fullGraph.nodes().size(), fullGraph.routerRoots().length, fullGraph.noises().size(), packedGraph.nodes().capacity());
-                if (VulkanComputeProbe.supportsFloat64(device)) GpuTerrainRuntime.verifyGraph(fullGraph, router);
-                else LOGGER.info("GPU density graph verification skipped: selected GPU lacks shaderFloat64.");
-                GpuTerrainRuntime.verifyTerrainGraph(fullGraph, router);
+                if (VulkanComputeProbe.supportsFloat64(device)) {
+                    VulkanBootstrapThread.callUnchecked(() -> {
+                        GpuTerrainRuntime.verifyGraph(fullGraph, router);
+                        return null;
+                    });
+                } else LOGGER.info("GPU density graph verification skipped: selected GPU lacks shaderFloat64.");
+                VulkanBootstrapThread.callUnchecked(() -> {
+                    GpuTerrainRuntime.verifyTerrainGraph(fullGraph, router);
+                    return null;
+                });
                 GpuDensityGraph terrainGraph = GpuDensityGraphLowerer.lower(GpuDensityGraphCompiler.compileTerrain(router));
                 LOGGER.info("GPU terrain runtime graph: {} nodes, {} required terrain/aquifer roots.",
                         terrainGraph.nodes().size(), terrainGraph.routerRoots().length);
-                GpuTerrainRuntime.verifyCompactTerrainGraph(terrainGraph, router);
+                VulkanBootstrapThread.callUnchecked(() -> {
+                    GpuTerrainRuntime.verifyCompactTerrainGraph(terrainGraph, router);
+                    return null;
+                });
                 GpuTerrainRuntime.installTerrainGraph(terrainGraph);
                 installedGraph = terrainGraph;
             } catch (RuntimeException fullGraphFailure) {
@@ -103,7 +113,10 @@ public final class GpuNoise {
         } catch (RuntimeException unsupported) {
             LOGGER.warn("GPU density graph batch is not enabled yet", unsupported);
         }
-        VulkanNoiseBenchmark.run(device);
+        VulkanBootstrapThread.callUnchecked(() -> {
+            VulkanNoiseBenchmark.run(device);
+            return null;
+        });
 
         LOGGER.info("GPU Noise selected {} ({}) using {} preference. Terrain uses global GPU graph batches; leaf noise hook is disabled.",
                 device.name(), device.vendorName(), GpuNoiseConfig.GPU_VENDOR.get());
