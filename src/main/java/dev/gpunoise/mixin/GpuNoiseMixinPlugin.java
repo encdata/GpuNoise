@@ -6,8 +6,6 @@ import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
 
 import java.util.List;
 import java.util.Set;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.LinkedHashSet;
 
 public final class GpuNoiseMixinPlugin implements IMixinConfigPlugin {
@@ -31,13 +29,6 @@ public final class GpuNoiseMixinPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith("C2meCompiledDensityFunctionMixin")) {
             return findClass(targetClassName) != null;
         }
-        if (mixinClassName.endsWith("C2mePriorityBatchMixin")) {
-            Class<?> target = findClass(targetClassName);
-            return target != null
-                    && hasMethod(target, "updatePriorityFromLevelOnMain", long.class, int.class)
-                    && hasMethod(target, "setConsolidatingLevelUpdates", boolean.class)
-                    && hasField(target, "consolidatingLevelUpdates");
-        }
         return true;
     }
 
@@ -59,24 +50,6 @@ public final class GpuNoiseMixinPlugin implements IMixinConfigPlugin {
 
     private static void addLoader(Set<ClassLoader> loaders, ClassLoader loader) {
         while (loader != null && loaders.add(loader)) loader = loader.getParent();
-    }
-
-    private static boolean hasMethod(Class<?> type, String name, Class<?>... parameters) {
-        try {
-            Method method = type.getDeclaredMethod(name, parameters);
-            return method != null;
-        } catch (NoSuchMethodException ignored) {
-            return false;
-        }
-    }
-
-    private static boolean hasField(Class<?> type, String name) {
-        try {
-            Field field = type.getDeclaredField(name);
-            return field != null;
-        } catch (NoSuchFieldException ignored) {
-            return false;
-        }
     }
 
     @Override

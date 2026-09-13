@@ -18,8 +18,7 @@
     "HeightmapGpuWriteMixin",
     "AquiferGpuInputsMixin",
     "NoiseChunkGeneratorWriteMixin",
-    "C2meCompiledDensityFunctionMixin",
-    "C2mePriorityBatchMixin"
+    "C2meCompiledDensityFunctionMixin"
   ],
   "injectors": {
     "defaultRequire": 1
