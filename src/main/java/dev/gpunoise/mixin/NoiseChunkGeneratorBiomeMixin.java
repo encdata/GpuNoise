@@ -36,14 +36,12 @@ abstract class NoiseChunkGeneratorBiomeMixin {
         NoiseSettings settings = generatorSettings().value().noiseSettings()
                 .clampToHeightAccessor(chunk.getHeightAccessorForGeneration());
         return GpuTerrainRuntime.prepareChunkForBiomes(randomState, chunk, settings).thenComposeAsync(cache -> {
-            GpuTerrainRuntime.bindFillCache(cache);
-            try {
-                return original.call(randomState, blender, structures, chunk)
-                        .whenComplete((ignored, failure) -> GpuTerrainRuntime.clearFillCache());
-            } catch (Throwable failure) {
-                GpuTerrainRuntime.clearFillCache();
-                throw failure;
-            }
+            // createBiomes() schedules its real work in its own supplyAsync
+            // task. A ThreadLocal bound around original.call() would not be
+            // visible there and could remain attached to this worker. The
+            // authoritative fillFromNoise path binds around doFill itself;
+            // biome sampling safely uses vanilla when no cache is attached.
+            return original.call(randomState, blender, structures, chunk);
         }, net.minecraft.Util.backgroundExecutor());
     }
 }
