@@ -95,6 +95,10 @@ final class VulkanComputeProbe {
     }
 
     private static boolean supportsFloat64OnThread(GpuDevice expected) {
+        // Device-extension/capability enumeration can allocate substantially
+        // more than LWJGL's default per-thread stack on hybrid Windows
+        // loaders. Keep this probe consistent with the device probe above.
+        Configuration.STACK_SIZE.set(64 * 1_048_576);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkApplicationInfo appInfo = VkApplicationInfo.calloc(stack).sType$Default()
                     .pApplicationName(stack.UTF8("GPU Noise FP64 Probe")).applicationVersion(1)
