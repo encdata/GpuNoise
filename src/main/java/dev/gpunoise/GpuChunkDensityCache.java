@@ -150,14 +150,9 @@ public final class GpuChunkDensityCache {
 
     /** CPU trilinear interpolation over the same cell grid used by NoiseChunk. */
     public double density(DensityFunction.FunctionContext context) {
-        return density(context.blockX(), context.blockY(), context.blockZ());
-    }
-
-    /** Allocation-free final-density lookup for NoiseChunk cell filling. */
-    public double density(int x, int y, int z) {
-        int rx = x - minX;
-        int ry = y - minY;
-        int rz = z - minZ;
+        int rx = context.blockX() - minX;
+        int ry = context.blockY() - minY;
+        int rz = context.blockZ() - minZ;
         if ((rx | ry | rz) < 0 || rx > 16 || rz > 16 || ry > maxRelativeY) return Double.NaN;
         if (exact != null) return sampleExactRoot(rx, ry, rz, GpuTerrainRoots.FINAL_DENSITY);
         GpuTerrainRootsResult ready = readyRoots;

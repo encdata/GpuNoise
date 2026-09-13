@@ -29,14 +29,6 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     @Shadow @Final private DensityFunctions.BeardifierOrMarker beardifier;
     @Shadow @Final int firstNoiseX;
     @Shadow @Final int firstNoiseZ;
-    @Shadow @Final int cellWidth;
-    @Shadow @Final int cellHeight;
-    @Shadow private int cellStartBlockX;
-    @Shadow int cellStartBlockY;
-    @Shadow private int cellStartBlockZ;
-    @Shadow int inCellX;
-    @Shadow int inCellY;
-    @Shadow int inCellZ;
     @Unique private GpuChunkDensityCache gpunoise$cache;
     @Unique private boolean gpunoise$zeroBeardifier;
 
@@ -80,39 +72,6 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     @Override
     public boolean gpunoise$matchesGpuCache(GpuChunkDensityCache cache) {
         return cache != null && cache.matchesChunk(firstNoiseX << 2, firstNoiseZ << 2);
-    }
-
-    @Override
-    public boolean gpunoise$fillGpuFinalDensityCell(double[] values) {
-        if (values.length != cellWidth * cellWidth * cellHeight) {
-            return false;
-        }
-        GpuChunkDensityCache cache = gpunoise$getActiveCache();
-        if (cache == null) return false;
-        int index = 0;
-        for (int y = cellHeight - 1; y >= 0; y--) {
-            for (int x = 0; x < cellWidth; x++) {
-                for (int z = 0; z < cellWidth; z++) {
-                    int blockX = cellStartBlockX + x;
-                    int blockY = cellStartBlockY + y;
-                    int blockZ = cellStartBlockZ + z;
-                    double value = cache.density(blockX, blockY, blockZ);
-                    if (Double.isNaN(value)) return false;
-                    if (!gpunoise$zeroBeardifier) {
-                        // Keep the same NoiseChunk FunctionContext used by
-                        // the vanilla add(finalDensity, beardifier) rule.
-                        inCellX = x;
-                        inCellY = y;
-                        inCellZ = z;
-                        value += beardifier.compute((NoiseChunk) (Object) this);
-                    }
-                    values[index++] = value;
-                    GpuTerrainProfiler.recordGpuFinalDensity();
-                }
-            }
-        }
-        GpuTerrainRuntime.markGpuCacheUsed(cache);
-        return true;
     }
 
     @Unique
