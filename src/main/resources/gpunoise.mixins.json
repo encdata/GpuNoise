@@ -12,6 +12,7 @@
     "NoiseDensityMixin",
     "NoiseChunkGpuDensityMixin",
     "NoiseChunkGeneratorBiomeMixin",
+    "PalettedContainerGpuWriteMixin",
     "AquiferGpuInputsMixin",
     "NoiseChunkGeneratorWriteMixin",
     "C2meCompiledDensityFunctionMixin"
