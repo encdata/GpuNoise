@@ -178,7 +178,10 @@ public final class GpuTerrainRuntime {
     }
 
     public static void markGpuCacheUsed(GpuChunkDensityCache cache) {
-        if (cache != null && cache.markConsumed()) {
+        // GPU values are read for almost every generated block, but the
+        // statistic is per cache. Avoid an atomic CAS on every hot-path read;
+        // only the first observer needs to race for the transition.
+        if (cache != null && !cache.isConsumed() && cache.markConsumed()) {
             gpuChunksConsumed.incrementAndGet();
             logChunkStatistics(false);
         }

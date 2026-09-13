@@ -141,6 +141,10 @@ public final class GpuChunkDensityCache {
         return consumed.compareAndSet(false, true);
     }
 
+    public boolean isConsumed() {
+        return consumed.get();
+    }
+
     boolean markSubmitted() { return submitted.compareAndSet(false, true); }
     boolean markCompleted() { return completed.compareAndSet(false, true); }
 
