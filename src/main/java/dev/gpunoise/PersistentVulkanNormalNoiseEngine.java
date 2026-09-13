@@ -52,7 +52,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private int inFlightRoots;
 
     PersistentVulkanNormalNoiseEngine(GpuDevice expected) throws Exception {
-        Configuration.STACK_SIZE.set(8 * 1_048_576);
+        Configuration.STACK_SIZE.set(64 * 1_048_576);
         MemoryStack stack = MemoryStack.stackPush();
         try {
             instance = createInstance(stack);
@@ -106,7 +106,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         queue = parent.queue;
         ownsDevice = false;
         queueSubmitLock = parent.queueSubmitLock;
-        Configuration.STACK_SIZE.set(8 * 1_048_576);
+        Configuration.STACK_SIZE.set(64 * 1_048_576);
         MemoryStack stack = MemoryStack.stackPush();
         try {
             coordinates = buffer(CAPACITY * 32L, stack);

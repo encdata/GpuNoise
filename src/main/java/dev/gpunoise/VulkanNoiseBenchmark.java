@@ -26,7 +26,7 @@ final class VulkanNoiseBenchmark {
     private VulkanNoiseBenchmark() {}
 
     static void run(GpuDevice expected) {
-        Configuration.STACK_SIZE.set(8 * 1_048_576);
+        Configuration.STACK_SIZE.set(64 * 1_048_576);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             CpuNoiseBenchmark.Result cpu = CpuNoiseBenchmark.run(SAMPLE_COUNT, ITERATIONS);
             GpuNoise.LOGGER.info("CPU noise: {} samples x {} in {} ms; checksum/pass={}", SAMPLE_COUNT, ITERATIONS,
@@ -94,7 +94,7 @@ final class VulkanNoiseBenchmark {
     static float[] evaluateNormalNoise(GpuDevice expected, MinecraftNormalNoiseData data,
                                         float[] sampleX, float[] sampleY, float[] sampleZ) throws Exception {
         if (sampleX.length != sampleY.length || sampleX.length != sampleZ.length) throw new IllegalArgumentException("sample arrays differ");
-        Configuration.STACK_SIZE.set(8 * 1_048_576);
+        Configuration.STACK_SIZE.set(64 * 1_048_576);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             return dispatchMinecraft(expected, stack, data.first(), data.second(), data.amplitudes(), sampleX, sampleY, sampleZ);
         }

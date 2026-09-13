@@ -27,7 +27,10 @@ final class GpuProbe {
             // stack and can fail with "Out of stack space" on worker threads.
             // VkInstance construction queries every loader/layer extension.
             // Hybrid laptops can expose enough layer metadata to exceed 1 MiB.
-            Configuration.STACK_SIZE.set(8 * 1_048_576);
+            // Some Windows hybrid-driver loaders expose a very large
+            // extension table.  VkInstance builds its dispatch capabilities
+            // on this stack, so leave ample room for the probe itself.
+            Configuration.STACK_SIZE.set(64 * 1_048_576);
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 int version = VK.getInstanceVersionSupported();
                 if (version == 0) return null;
