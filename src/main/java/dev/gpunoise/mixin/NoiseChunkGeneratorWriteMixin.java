@@ -21,6 +21,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import dev.gpunoise.GpuChunkDensityCache;
 import dev.gpunoise.GpuLevelChunkSectionAccess;
+import dev.gpunoise.GpuHeightmapAccess;
 import dev.gpunoise.GpuTerrainRuntime;
 import dev.gpunoise.GpuTerrainProfiler;
 
@@ -103,5 +104,22 @@ abstract class NoiseChunkGeneratorWriteMixin {
                 .gpunoise$writeGpuBlock((y << 4 | z) << 4 | x, state);
         GpuTerrainProfiler.recordBlockWrite();
         return state;
+    }
+
+    @Redirect(
+            method = "doFill",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/world/level/levelgen/Heightmap;update(IIILnet/minecraft/world/level/block/state/BlockState;)Z"
+            )
+    )
+    private boolean gpunoise$updateHeightmapDescending(
+            net.minecraft.world.level.levelgen.Heightmap heightmap,
+            int x, int y, int z, BlockState state) {
+        if (heightmap instanceof GpuHeightmapAccess fast
+                && fast.gpunoise$tryDescendingWrite(x, y, z, state)) {
+            return true;
+        }
+        return heightmap.update(x, y, z, state);
     }
 }
