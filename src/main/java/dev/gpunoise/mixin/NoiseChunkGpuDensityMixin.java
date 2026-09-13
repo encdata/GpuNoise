@@ -95,11 +95,8 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
         GpuChunkDensityCache cache = access.gpunoise$gpuCache();
         int minX = context.blockX() & ~15;
         int minZ = context.blockZ() & ~15;
-        GpuChunkDensityCache active = GpuTerrainRuntime.activeFillCache();
-        if (active != null && access.gpunoise$matchesGpuCache(active)
-                && active.matchesChunk(minX, minZ)) {
-            access.gpunoise$setGpuCache(active);
-            cache = active;
+        if (cache == null) {
+            cache = gpunoise$getActiveCache();
         }
         if (cache != null && cache.matchesChunk(minX, minZ)) {
             double gpu = cache.density(context);
