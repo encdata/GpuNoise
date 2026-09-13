@@ -30,9 +30,15 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     @Shadow @Final int firstNoiseX;
     @Shadow @Final int firstNoiseZ;
     @Unique private GpuChunkDensityCache gpunoise$cache;
+    @Unique private boolean gpunoise$zeroBeardifier;
 
     @Inject(method = "<init>", at = @At("TAIL"))
     private void gpunoise$installGpuCache(CallbackInfo callback) {
+        // The vanilla marker is an enum whose compute() is unconditionally
+        // zero. Avoid invoking it for every block while preserving real
+        // structure beardifier calculations.
+        gpunoise$zeroBeardifier = beardifier.getClass().isEnum()
+                && beardifier.getClass().getName().endsWith("DensityFunctions$BeardifierMarker");
         GpuChunkDensityCache cache = GpuTerrainRuntime.activeFillCache();
         if (cache != null && cache.matchesChunk(firstNoiseX << 2, firstNoiseZ << 2)) {
             gpunoise$cache = cache;
@@ -104,7 +110,7 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
             if (!Double.isNaN(gpu)) {
                 GpuTerrainProfiler.recordGpuFinalDensity();
                 GpuTerrainRuntime.markGpuCacheUsed(cache);
-                return gpu + beardifier.compute(context);
+                return gpunoise$zeroBeardifier ? gpu : gpu + beardifier.compute(context);
             }
             if (cache.contains(context.blockX(), context.blockY(), context.blockZ())) {
                 throw new IllegalStateException("Authoritative GPU density cache returned NaN at "
