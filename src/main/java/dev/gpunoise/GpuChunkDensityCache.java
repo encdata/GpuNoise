@@ -23,6 +23,7 @@ public final class GpuChunkDensityCache {
     private final AtomicBoolean completed = new AtomicBoolean();
     private static final AtomicLong cornerReads = new AtomicLong();
     private static final AtomicLong interpolatedReads = new AtomicLong();
+    private static final AtomicLong blockReads = new AtomicLong();
     // Terrain graph roots: final, initial, barrier, floodedness, spread, lava,
     // erosion, and depth.
     // All three are interpolated in one dispatch and kept in the same result
@@ -133,6 +134,8 @@ public final class GpuChunkDensityCache {
         if (ready == null) return Double.NaN;
         GpuTerrainBlockResult blocks = readyBlocks;
         if (blocks != null && rx < 16 && ry < cellsY * cellHeight && rz < 16) {
+            long direct = blockReads.incrementAndGet();
+            if ((direct & 0x3ffffL) == 0L) logReadStatistics();
             return blocks.valueAt(rx, ry, rz, GpuTerrainRoots.FINAL_DENSITY);
         }
         if (rx <= 16 && rz <= 16 && ry <= cellsY * cellHeight
@@ -152,8 +155,8 @@ public final class GpuChunkDensityCache {
     }
 
     private static void logReadStatistics() {
-        GpuNoise.LOGGER.info("GPU terrain density reads: cornerReads={}, interpolatedReads={}",
-                cornerReads.get(), interpolatedReads.get());
+        GpuNoise.LOGGER.info("GPU terrain density reads: blockReads={}, cornerReads={}, interpolatedReads={}",
+                blockReads.get(), cornerReads.get(), interpolatedReads.get());
     }
 
     public double initialDensity(int x, int y, int z) {
