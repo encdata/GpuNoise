@@ -22,6 +22,15 @@ final class GpuProbe {
 
     static GpuDevice findPreferredDevice(GpuNoiseConfig.GpuVendorPreference preference) {
         try {
+            return VulkanBootstrapThread.call(() -> findPreferredDeviceOnThread(preference));
+        } catch (Throwable failure) {
+            GpuNoise.LOGGER.warn("Vulkan probe failed; leaving vanilla terrain enabled.", failure);
+            return null;
+        }
+    }
+
+    private static GpuDevice findPreferredDeviceOnThread(GpuNoiseConfig.GpuVendorPreference preference) {
+        try {
             // Set this before creating the first MemoryStack. Setting it after
             // stackPush() leaves Vulkan's extension query on the tiny default
             // stack and can fail with "Out of stack space" on worker threads.

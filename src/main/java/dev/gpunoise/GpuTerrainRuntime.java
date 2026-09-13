@@ -50,7 +50,7 @@ public final class GpuTerrainRuntime {
 
     public static synchronized void start(GpuDevice selected) {
         try {
-            submissionRing = new VulkanSubmissionRing(selected);
+            submissionRing = VulkanBootstrapThread.call(() -> new VulkanSubmissionRing(selected));
             // The ring owns the one terrain VkInstance/VkDevice/VkQueue.
             // Startup parity uses its primary slot instead of allocating a
             // second complete engine and a second set of persistent buffers.

@@ -22,6 +22,15 @@ final class VulkanComputeProbe {
     private VulkanComputeProbe() {}
 
     static boolean verify(GpuDevice expected) {
+        try {
+            return VulkanBootstrapThread.call(() -> verifyOnThread(expected));
+        } catch (Throwable failure) {
+            GpuNoise.LOGGER.warn("Vulkan compute probe failed; leaving vanilla terrain enabled.", failure);
+            return false;
+        }
+    }
+
+    private static boolean verifyOnThread(GpuDevice expected) {
         Configuration.STACK_SIZE.set(64 * 1_048_576);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkApplicationInfo appInfo = VkApplicationInfo.calloc(stack).sType$Default()
@@ -77,6 +86,15 @@ final class VulkanComputeProbe {
     }
 
     static boolean supportsFloat64(GpuDevice expected) {
+        try {
+            return VulkanBootstrapThread.call(() -> supportsFloat64OnThread(expected));
+        } catch (Throwable failure) {
+            GpuNoise.LOGGER.warn("Vulkan FP64 capability probe failed.", failure);
+            return false;
+        }
+    }
+
+    private static boolean supportsFloat64OnThread(GpuDevice expected) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkApplicationInfo appInfo = VkApplicationInfo.calloc(stack).sType$Default()
                     .pApplicationName(stack.UTF8("GPU Noise FP64 Probe")).applicationVersion(1)
