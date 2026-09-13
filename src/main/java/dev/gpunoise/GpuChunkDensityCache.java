@@ -24,6 +24,7 @@ public final class GpuChunkDensityCache {
     private static final AtomicLong cornerReads = new AtomicLong();
     private static final AtomicLong interpolatedReads = new AtomicLong();
     private static final AtomicLong blockReads = new AtomicLong();
+    private static final AtomicLong lastReadLogBucket = new AtomicLong(-1L);
     // Terrain graph roots: final, initial, barrier, floodedness, spread, lava,
     // erosion, and depth.
     // All three are interpolated in one dispatch and kept in the same result
@@ -155,6 +156,9 @@ public final class GpuChunkDensityCache {
     }
 
     private static void logReadStatistics() {
+        long total = blockReads.get() + cornerReads.get() + interpolatedReads.get();
+        long bucket = total >>> 24;
+        if (!lastReadLogBucket.compareAndSet(bucket, bucket)) return;
         GpuNoise.LOGGER.info("GPU terrain density reads: blockReads={}, cornerReads={}, interpolatedReads={}",
                 blockReads.get(), cornerReads.get(), interpolatedReads.get());
     }

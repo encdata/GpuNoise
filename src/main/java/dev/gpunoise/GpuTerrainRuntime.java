@@ -43,6 +43,7 @@ public final class GpuTerrainRuntime {
     private static final AtomicLong gpuChunksCompleted = new AtomicLong();
     private static final AtomicLong gpuChunksConsumed = new AtomicLong();
     private static final AtomicLong cpuFallbackChunks = new AtomicLong();
+    private static final AtomicLong lastChunkStatisticsBucket = new AtomicLong(-1L);
     private GpuTerrainRuntime() {}
 
     public static synchronized void start(GpuDevice selected) {
@@ -52,7 +53,6 @@ public final class GpuTerrainRuntime {
             // Startup parity uses its primary slot instead of allocating a
             // second complete engine and a second set of persistent buffers.
             engine = submissionRing.primary();
-            globalQueue = new GpuGlobalSamplerQueue(submissionRing);
             device = selected;
         } catch (Exception failure) {
             GpuNoise.LOGGER.error("Persistent Vulkan terrain engine failed to initialize", failure);
@@ -174,7 +174,9 @@ public final class GpuTerrainRuntime {
 
     private static void logChunkStatistics(boolean force) {
         long completed = gpuChunksCompleted.get();
-        if (force || completed == 0 || (completed & 63L) == 0L) {
+        long bucket = completed >>> 6;
+        boolean milestone = (completed & 63L) == 0L;
+        if ((force || milestone) && (force || lastChunkStatisticsBucket.compareAndSet(bucket, bucket))) {
             GpuNoise.LOGGER.info("GPU terrain: submitted={}, completed={}, consumed={}, fallback={}",
                     gpuChunksSubmitted.get(), completed, gpuChunksConsumed.get(), cpuFallbackChunks.get());
         }
@@ -323,6 +325,19 @@ public final class GpuTerrainRuntime {
         float[] result = new float[values.length];
         for (int i = 0; i < values.length; i++) result[i] = values[i];
         return result;
+    }
+
+    private static GpuGlobalSamplerQueue globalSamplerQueue() {
+        GpuGlobalSamplerQueue current = globalQueue;
+        if (current != null) return current;
+        synchronized (GpuTerrainRuntime.class) {
+            current = globalQueue;
+            if (current == null && submissionRing != null) {
+                current = new GpuGlobalSamplerQueue(submissionRing);
+                globalQueue = current;
+            }
+            return current;
+        }
     }
 
     public static java.util.concurrent.CompletionStage<net.minecraft.world.level.chunk.ChunkAccess> submitChunkFill(
@@ -529,7 +544,7 @@ public final class GpuTerrainRuntime {
                            DensityFunction.ContextProvider contexts, double[] output) {
         GpuDevice selected = device;
         PersistentVulkanNormalNoiseEngine currentEngine = engine;
-        GpuGlobalSamplerQueue currentQueue = globalQueue;
+        GpuGlobalSamplerQueue currentQueue = globalSamplerQueue();
         if (selected == null || currentEngine == null || currentQueue == null || noise == null) return false;
         if (output.length < GpuNoiseConfig.MIN_GPU_SAMPLES.get()) return false;
         float[] x = new float[output.length];
