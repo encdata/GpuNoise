@@ -43,12 +43,12 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
         GpuChunkDensityCache cache = gpunoise$getActiveCache();
         if (cache == null) return;
         callback.setReturnValue(new Climate.Sampler(
-                new GpuClimateFunction(cache, GpuTerrainRoots.TEMPERATURE, router.temperature()),
-                new GpuClimateFunction(cache, GpuTerrainRoots.VEGETATION, router.vegetation()),
-                new GpuClimateFunction(cache, GpuTerrainRoots.CONTINENTS, router.continents()),
-                new GpuClimateFunction(cache, GpuTerrainRoots.EROSION, router.erosion()),
-                new GpuClimateFunction(cache, GpuTerrainRoots.DEPTH, router.depth()),
-                new GpuClimateFunction(cache, GpuTerrainRoots.RIDGES, router.ridges()), points));
+                new GpuClimateFunction((NoiseChunk) (Object) this, cache, GpuTerrainRoots.TEMPERATURE, router.temperature()),
+                new GpuClimateFunction((NoiseChunk) (Object) this, cache, GpuTerrainRoots.VEGETATION, router.vegetation()),
+                new GpuClimateFunction((NoiseChunk) (Object) this, cache, GpuTerrainRoots.CONTINENTS, router.continents()),
+                new GpuClimateFunction((NoiseChunk) (Object) this, cache, GpuTerrainRoots.EROSION, router.erosion()),
+                new GpuClimateFunction((NoiseChunk) (Object) this, cache, GpuTerrainRoots.DEPTH, router.depth()),
+                new GpuClimateFunction((NoiseChunk) (Object) this, cache, GpuTerrainRoots.RIDGES, router.ridges()), points));
     }
 
     @Override
@@ -156,11 +156,13 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
 
     @Unique
     private static final class GpuClimateFunction implements DensityFunction.SimpleFunction {
+        private final NoiseChunk owner;
         private final GpuChunkDensityCache cache;
         private final int root;
         private final DensityFunction fallback;
 
-        private GpuClimateFunction(GpuChunkDensityCache cache, int root, DensityFunction fallback) {
+        private GpuClimateFunction(NoiseChunk owner, GpuChunkDensityCache cache, int root, DensityFunction fallback) {
+            this.owner = owner;
             this.cache = cache;
             this.root = root;
             this.fallback = fallback;
@@ -168,17 +170,34 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
 
         @Override
         public double compute(DensityFunction.FunctionContext context) {
-            double value = cache.climate(context.blockX(), context.blockY(), context.blockZ(), root);
-            if (!Double.isNaN(value)) {
-                GpuTerrainRuntime.markGpuCacheUsed(cache);
-                return value;
+            GpuChunkDensityCache activeCache = cache;
+            if (activeCache == null) {
+                GpuNoiseChunkAccess access = (GpuNoiseChunkAccess) (Object) owner;
+                activeCache = access.gpunoise$gpuCache();
+                if (activeCache == null) {
+                    GpuChunkDensityCache candidate = GpuTerrainRuntime.activeFillCache();
+                    int minX = context.blockX() & ~15;
+                    int minZ = context.blockZ() & ~15;
+                    if (candidate != null && access.gpunoise$matchesGpuCache(candidate)
+                            && candidate.matchesChunk(minX, minZ)) {
+                        access.gpunoise$setGpuCache(candidate);
+                        activeCache = candidate;
+                    }
+                }
+            }
+            if (activeCache != null) {
+                double value = activeCache.climate(context.blockX(), context.blockY(), context.blockZ(), root);
+                if (!Double.isNaN(value)) {
+                    GpuTerrainRuntime.markGpuCacheUsed(activeCache);
+                    return value;
+                }
             }
             return fallback.compute(context);
         }
 
         @Override
         public DensityFunction mapAll(DensityFunction.Visitor visitor) {
-            return visitor.apply(new GpuClimateFunction(cache, root, fallback.mapAll(visitor)));
+            return visitor.apply(new GpuClimateFunction(owner, cache, root, fallback.mapAll(visitor)));
         }
 
         @Override public double minValue() { return fallback.minValue(); }
