@@ -6,6 +6,7 @@ import dev.gpunoise.GpuTerrainRuntime;
 import dev.gpunoise.GpuTerrainRoots;
 import dev.gpunoise.GpuAquiferCoordinatePlanner;
 import dev.gpunoise.GpuWorldgenDependency;
+import dev.gpunoise.GpuTerrainProfiler;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 import net.minecraft.world.level.levelgen.Aquifer;
@@ -88,6 +89,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner {
                     default -> Double.NaN;
                 };
                 if (!Double.isNaN(gpu)) {
+                    GpuTerrainProfiler.recordAquifer();
                     GpuTerrainRuntime.markGpuCacheUsed(cache);
                     return gpu;
                 }

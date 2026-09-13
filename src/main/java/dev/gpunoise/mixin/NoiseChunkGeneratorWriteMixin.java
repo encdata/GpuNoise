@@ -22,6 +22,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import dev.gpunoise.GpuChunkDensityCache;
 import dev.gpunoise.GpuPalettedContainerAccess;
 import dev.gpunoise.GpuTerrainRuntime;
+import dev.gpunoise.GpuTerrainProfiler;
 
 /**
  * Noisium-style worldgen write optimization. Noise generation owns the section
@@ -70,9 +71,11 @@ abstract class NoiseChunkGeneratorWriteMixin {
         }
         try {
             GpuTerrainRuntime.bindFillCache(cache);
+            long fillStart = GpuTerrainProfiler.beginFill();
             try {
                 return gpunoise$doFill(blender, structures, randomState, chunk, minCellY, cellCountY);
             } finally {
+                GpuTerrainProfiler.endFill(fillStart);
                 GpuTerrainRuntime.clearFillCache();
             }
         } finally {
@@ -103,6 +106,7 @@ abstract class NoiseChunkGeneratorWriteMixin {
         @SuppressWarnings("unchecked")
         GpuPalettedContainerAccess<BlockState> states =
                 (GpuPalettedContainerAccess<BlockState>) (Object) section.getStates();
+        GpuTerrainProfiler.recordBlockWrite();
         states.gpunoise$setUnchecked((y << 4 | z) << 4 | x, state);
         return state;
     }

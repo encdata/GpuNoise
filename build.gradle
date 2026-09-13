@@ -71,6 +71,7 @@ runs {
         // Enable manually for a fresh-coordinate Chunky benchmark; keep normal
         // server starts focused on gameplay and terrain integration.
         systemProperty 'gpunoise.chunkyBenchmark', 'true'
+        systemProperty 'gpunoise.profileTerrain', System.getProperty('gpunoise.profileTerrain', 'false')
         systemProperty 'gpunoise.disableChunkWriter', System.getProperty('gpunoise.disableChunkWriter', 'false')
         argument '--nogui'
     }

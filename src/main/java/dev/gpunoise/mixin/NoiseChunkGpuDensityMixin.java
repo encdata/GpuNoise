@@ -5,6 +5,7 @@ import dev.gpunoise.GpuNoiseChunkAccess;
 import dev.gpunoise.GpuNoiseConfig;
 import dev.gpunoise.GpuTerrainRuntime;
 import dev.gpunoise.GpuTerrainRoots;
+import dev.gpunoise.GpuTerrainProfiler;
 import net.minecraft.world.level.levelgen.DensityFunction;
 import net.minecraft.world.level.levelgen.DensityFunctions;
 import net.minecraft.world.level.levelgen.NoiseChunk;
@@ -93,6 +94,7 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
         if (cache != null) {
             double gpu = cache.initialDensity(context.blockX(), context.blockY(), context.blockZ());
             if (!Double.isNaN(gpu)) {
+                GpuTerrainProfiler.recordGpuDensity();
                 GpuTerrainRuntime.markGpuCacheUsed(cache);
                 return gpu;
             }
@@ -130,6 +132,7 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
                 if (cache != null) {
                     double gpu = cache.density(context);
                     if (!Double.isNaN(gpu)) {
+                        GpuTerrainProfiler.recordGpuDensity();
                         GpuTerrainRuntime.markGpuCacheUsed(cache);
                         return gpu + beardifier.compute(context);
                     }
@@ -188,6 +191,7 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
             if (activeCache != null) {
                 double value = activeCache.climate(context.blockX(), context.blockY(), context.blockZ(), root);
                 if (!Double.isNaN(value)) {
+                    GpuTerrainProfiler.recordGpuDensity();
                     GpuTerrainRuntime.markGpuCacheUsed(activeCache);
                     return value;
                 }
