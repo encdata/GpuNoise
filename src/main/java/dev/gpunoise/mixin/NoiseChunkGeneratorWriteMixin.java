@@ -20,6 +20,7 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import dev.gpunoise.GpuChunkDensityCache;
+import dev.gpunoise.GpuLevelChunkSectionAccess;
 import dev.gpunoise.GpuPalettedContainerAccess;
 import dev.gpunoise.GpuTerrainRuntime;
 import dev.gpunoise.GpuTerrainProfiler;
@@ -81,10 +82,6 @@ abstract class NoiseChunkGeneratorWriteMixin {
         } finally {
             GpuTerrainRuntime.releaseGpuCache(cache);
             for (int i = 0; i < sectionCount; i++) {
-                // The GPU-owned fill uses unchecked palette writes below, so
-                // rebuild the three section counters once instead of doing
-                // fluid/random-tick bookkeeping for every generated block.
-                sections[i].recalcBlockCounts();
                 sections[i].release();
             }
         }
@@ -106,6 +103,7 @@ abstract class NoiseChunkGeneratorWriteMixin {
         @SuppressWarnings("unchecked")
         GpuPalettedContainerAccess<BlockState> states =
                 (GpuPalettedContainerAccess<BlockState>) (Object) section.getStates();
+        ((GpuLevelChunkSectionAccess) (Object) section).gpunoise$recordGpuBlockWrite(state);
         GpuTerrainProfiler.recordBlockWrite();
         states.gpunoise$setUnchecked((y << 4 | z) << 4 | x, state);
         return state;
