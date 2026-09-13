@@ -644,7 +644,12 @@ public final class GpuTerrainRuntime {
         int checked = 0;
         for (int node = 0; node < graph.nodes().size(); node++) {
             if (!graph.nodes().get(node).opcode().equals("BlendedNoise")) continue;
-            float[] gpu = current.submitGraph(graph, x, y, z, node);
+            // The lowered graph stores physical register numbers separately
+            // from its instruction indices. The shader's single-root test
+            // reads a register, so passing the instruction index compares the
+            // wrong value after register allocation.
+            int resultRegister = graph.nodes().get(node).register();
+            float[] gpu = current.submitGraph(graph, x, y, z, resultRegister);
             DensityFunction cpuFunction = graph.sourceFunctions().get(node);
             float maxError = 0.0f;
             int maxIndex = -1;
