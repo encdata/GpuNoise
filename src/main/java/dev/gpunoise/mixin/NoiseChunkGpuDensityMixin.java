@@ -94,7 +94,7 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
         if (cache != null) {
             double gpu = cache.initialDensity(context.blockX(), context.blockY(), context.blockZ());
             if (!Double.isNaN(gpu)) {
-                GpuTerrainProfiler.recordGpuDensity();
+                GpuTerrainProfiler.recordGpuInitialDensity();
                 GpuTerrainRuntime.markGpuCacheUsed(cache);
                 return gpu;
             }
@@ -132,7 +132,7 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
                 if (cache != null) {
                     double gpu = cache.density(context);
                     if (!Double.isNaN(gpu)) {
-                        GpuTerrainProfiler.recordGpuDensity();
+                        GpuTerrainProfiler.recordGpuFinalDensity();
                         GpuTerrainRuntime.markGpuCacheUsed(cache);
                         return gpu + beardifier.compute(context);
                     }
@@ -191,7 +191,7 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
             if (activeCache != null) {
                 double value = activeCache.climate(context.blockX(), context.blockY(), context.blockZ(), root);
                 if (!Double.isNaN(value)) {
-                    GpuTerrainProfiler.recordGpuDensity();
+                    GpuTerrainProfiler.recordGpuClimate();
                     GpuTerrainRuntime.markGpuCacheUsed(activeCache);
                     return value;
                 }

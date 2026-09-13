@@ -7,7 +7,9 @@ public final class GpuTerrainProfiler {
     private static final boolean ENABLED = Boolean.getBoolean("gpunoise.profileTerrain");
     private static final AtomicLong fills = new AtomicLong();
     private static final AtomicLong fillNanos = new AtomicLong();
-    private static final AtomicLong gpuDensityCalls = new AtomicLong();
+    private static final AtomicLong gpuFinalDensityCalls = new AtomicLong();
+    private static final AtomicLong gpuInitialDensityCalls = new AtomicLong();
+    private static final AtomicLong gpuClimateCalls = new AtomicLong();
     private static final AtomicLong aquiferCalls = new AtomicLong();
     private static final AtomicLong blockWrites = new AtomicLong();
 
@@ -24,14 +26,23 @@ public final class GpuTerrainProfiler {
         long count = fills.incrementAndGet();
         fillNanos.addAndGet(System.nanoTime() - start);
         if ((count & 127L) == 0L) {
-            GpuNoise.LOGGER.info("GPU terrain profile: fills={}, avgFillMs={}, gpuDensityCalls={}, aquiferCalls={}, blockWrites={}",
+            GpuNoise.LOGGER.info("GPU terrain profile: fills={}, avgFillMs={}, finalDensityCalls={}, initialDensityCalls={}, climateCalls={}, aquiferCalls={}, blockWrites={}",
                     count, fillNanos.get() / 1_000_000.0 / count,
-                    gpuDensityCalls.get(), aquiferCalls.get(), blockWrites.get());
+                    gpuFinalDensityCalls.get(), gpuInitialDensityCalls.get(), gpuClimateCalls.get(),
+                    aquiferCalls.get(), blockWrites.get());
         }
     }
 
-    public static void recordGpuDensity() {
-        if (ENABLED) gpuDensityCalls.incrementAndGet();
+    public static void recordGpuFinalDensity() {
+        if (ENABLED) gpuFinalDensityCalls.incrementAndGet();
+    }
+
+    public static void recordGpuInitialDensity() {
+        if (ENABLED) gpuInitialDensityCalls.incrementAndGet();
+    }
+
+    public static void recordGpuClimate() {
+        if (ENABLED) gpuClimateCalls.incrementAndGet();
     }
 
     public static void recordAquifer() {
