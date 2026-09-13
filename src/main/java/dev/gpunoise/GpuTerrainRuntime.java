@@ -192,7 +192,8 @@ public final class GpuTerrainRuntime {
         long completed = gpuChunksCompleted.get();
         long bucket = completed >>> 6;
         boolean milestone = (completed & 63L) == 0L;
-        if ((force || milestone) && (force || lastChunkStatisticsBucket.compareAndSet(bucket, bucket))) {
+        boolean newMilestone = milestone && lastChunkStatisticsBucket.getAndSet(bucket) != bucket;
+        if (force || newMilestone) {
             GpuNoise.LOGGER.info("GPU terrain: submitted={}, completed={}, consumed={}, fallback={}",
                     gpuChunksSubmitted.get(), completed, gpuChunksConsumed.get(), cpuFallbackChunks.get());
         }
