@@ -2,7 +2,9 @@ package dev.gpunoise;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 
 import net.minecraft.world.level.levelgen.DensityFunction;
 import net.minecraft.world.level.levelgen.NoiseSettings;
@@ -70,13 +72,27 @@ public final class GpuTerrainRuntime {
 
     /** The biome-stage cache wrapper is only safe with C2ME's staged flow. */
     public static boolean c2meDfcAvailable() {
-        try {
-            Class.forName("com.ishland.c2me.opts.dfc.common.gen.jvm.AbstractCompiledDensityFunction",
-                    false, GpuTerrainRuntime.class.getClassLoader());
-            return true;
-        } catch (ClassNotFoundException ignored) {
-            return false;
+        return classAvailable("com.ishland.c2me.opts.dfc.common.gen.jvm.AbstractCompiledDensityFunction");
+    }
+
+    private static boolean classAvailable(String name) {
+        Set<ClassLoader> loaders = new LinkedHashSet<>();
+        addLoaderChain(loaders, GpuTerrainRuntime.class.getClassLoader());
+        addLoaderChain(loaders, Thread.currentThread().getContextClassLoader());
+        addLoaderChain(loaders, ClassLoader.getSystemClassLoader());
+        for (ClassLoader loader : loaders) {
+            try {
+                Class.forName(name, false, loader);
+                return true;
+            } catch (ClassNotFoundException | LinkageError ignored) {
+                // NeoForge may expose optional mods through another loader.
+            }
         }
+        return false;
+    }
+
+    private static void addLoaderChain(Set<ClassLoader> loaders, ClassLoader loader) {
+        while (loader != null && loaders.add(loader)) loader = loader.getParent();
     }
 
     /** Enables cell-grid input substitution only after graph parity passes. */
