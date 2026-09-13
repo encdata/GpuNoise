@@ -8,8 +8,6 @@ import java.util.List;
 import java.util.Set;
 
 public final class GpuNoiseMixinPlugin implements IMixinConfigPlugin {
-    private static final String C2ME_COMPILED_MIXIN = "dev.gpunoise.mixin.C2meCompiledDensityFunctionMixin";
-
     @Override
     public void onLoad(String mixinPackage) {
     }
