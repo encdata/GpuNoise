@@ -1,10 +1,15 @@
 package dev.gpunoise;
 
-import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.Map;
 
 import net.minecraft.world.level.levelgen.DensityFunction;
+import net.minecraft.world.level.levelgen.NoiseSettings;
+import net.minecraft.world.level.levelgen.RandomState;
+import net.minecraft.world.level.levelgen.blending.Blender;
+import net.minecraft.world.level.StructureManager;
+import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.levelgen.synth.NormalNoise;
 import net.minecraft.world.level.levelgen.NoiseRouter;
 import net.minecraft.world.level.levelgen.DensityFunction;
@@ -24,17 +29,29 @@ public final class GpuTerrainRuntime {
     private static volatile GpuTerrainGraphProvider terrainProvider;
     private static volatile VulkanSubmissionRing terrainRing;
     private static volatile GpuDensityGraph terrainGraph;
+    private static final GpuChunkPipelineGate chunkPipelineGate = new GpuChunkPipelineGate(
+            Math.max(16, Runtime.getRuntime().availableProcessors() * 2));
     private static volatile boolean graphParity;
+    private static final ThreadLocal<Boolean> GPU_DENSITY_REQUIRED =
+            ThreadLocal.withInitial(() -> Boolean.FALSE);
+    private static final ThreadLocal<GpuChunkDensityCache> ACTIVE_FILL_CACHE =
+            new ThreadLocal<>();
     private static final AtomicLong gpuCalls = new AtomicLong();
     private static final AtomicLong gpuSamples = new AtomicLong();
     private static final AtomicLong gpuNanos = new AtomicLong();
-
+    private static final AtomicLong gpuChunksSubmitted = new AtomicLong();
+    private static final AtomicLong gpuChunksCompleted = new AtomicLong();
+    private static final AtomicLong gpuChunksConsumed = new AtomicLong();
+    private static final AtomicLong cpuFallbackChunks = new AtomicLong();
     private GpuTerrainRuntime() {}
 
     public static synchronized void start(GpuDevice selected) {
         try {
-            engine = new PersistentVulkanNormalNoiseEngine(selected);
             submissionRing = new VulkanSubmissionRing(selected);
+            // The ring owns the one terrain VkInstance/VkDevice/VkQueue.
+            // Startup parity uses its primary slot instead of allocating a
+            // second complete engine and a second set of persistent buffers.
+            engine = submissionRing.primary();
             globalQueue = new GpuGlobalSamplerQueue(submissionRing);
             device = selected;
         } catch (Exception failure) {
@@ -47,6 +64,132 @@ public final class GpuTerrainRuntime {
     }
     public static boolean active() { return device != null; }
 
+    /** Enables cell-grid input substitution only after graph parity passes. */
+    public static boolean terrainInputsAvailable() {
+        return device != null && terrainGraph != null && graphParity;
+    }
+
+    /**
+     * The old DensityFunctions.Noise hook submits one Vulkan job per leaf
+     * noise node, then immediately waits for it.  That is the opposite of the
+     * fused terrain design and made C2ME generation slower than CPU-only.
+     * Once a full terrain graph has been installed, reserve Vulkan for the
+     * graph batchers instead of intercepting individual vanilla leaf nodes.
+     */
+    public static boolean shouldUseLeafNoiseOffload() {
+        return terrainGraph == null;
+    }
+
+    public static boolean gpuDensityRequired() {
+        return GPU_DENSITY_REQUIRED.get();
+    }
+
+    public static void bindFillCache(GpuChunkDensityCache cache) {
+        if (ACTIVE_FILL_CACHE.get() != null) {
+            throw new IllegalStateException("Nested GPU fill cache binding");
+        }
+        ACTIVE_FILL_CACHE.set(cache);
+    }
+
+    public static GpuChunkDensityCache activeFillCache() {
+        return ACTIVE_FILL_CACHE.get();
+    }
+
+    public static void clearFillCache() {
+        ACTIVE_FILL_CACHE.remove();
+    }
+
+    public static <T> java.util.concurrent.CompletableFuture<T> submitChunkPipeline(
+            java.util.function.Supplier<? extends java.util.concurrent.CompletionStage<T>> operation) {
+        return chunkPipelineGate.submit(operation);
+    }
+
+    /**
+     * The strict writer is intentionally held behind the exact-coordinate
+     * dependency provider.  A NoiseChunk cache is not sufficient: aquifers
+     * read preliminary-surface columns outside the chunk and use two scaled
+     * coordinate domains.  Enabling it before those dependencies are ready
+     * corrupts generation or fails chunk futures.
+     */
+    public static boolean gpuOnlyWorldgenAvailable() {
+        return terrainInputsAvailable() && terrainRootsScheduler != null;
+    }
+
+    /**
+     * Starts exactly one cell-lattice request for a chunk.  This is the only
+     * submission point for authoritative fillFromNoise work: callers receive
+     * a future and never evaluate the CPU density graph while it is pending.
+     */
+    public static java.util.concurrent.CompletableFuture<GpuChunkDensityCache> prepareChunk(
+            Blender blender, RandomState randomState, StructureManager structures, ChunkAccess chunk,
+            int minCellY, int cellCountY, NoiseSettings settings) {
+        if (!gpuOnlyWorldgenAvailable() || cellCountY <= 0) {
+            cpuFallbackChunks.incrementAndGet();
+            return java.util.concurrent.CompletableFuture.failedFuture(
+                    new IllegalStateException("GPU terrain pipeline is unavailable"));
+        }
+        int minX = chunk.getPos().getMinBlockX();
+        int minZ = chunk.getPos().getMinBlockZ();
+        GpuChunkDensityCache cache = GpuTerrainAreaRegistry.claim(minX, minZ,
+                () -> GpuChunkDensityCache.create(minX, minZ, settings));
+        if (cache.markSubmitted()) gpuChunksSubmitted.incrementAndGet();
+        GpuChunkDensityCache preparedCache = cache;
+        return preparedCache.ready().thenApply(ignored -> {
+            if (preparedCache.markCompleted()) gpuChunksCompleted.incrementAndGet();
+            logChunkStatistics(false);
+            return preparedCache;
+        }).toCompletableFuture();
+    }
+
+    public static java.util.concurrent.CompletableFuture<GpuChunkDensityCache> prepareChunkForBiomes(
+            ChunkAccess chunk, NoiseSettings settings) {
+        if (!gpuOnlyWorldgenAvailable()) {
+            return java.util.concurrent.CompletableFuture.failedFuture(
+                    new IllegalStateException("GPU terrain pipeline is unavailable"));
+        }
+        int minX = chunk.getPos().getMinBlockX();
+        int minZ = chunk.getPos().getMinBlockZ();
+        GpuChunkDensityCache cache = GpuTerrainAreaRegistry.claim(minX, minZ,
+                () -> GpuChunkDensityCache.create(minX, minZ, settings));
+        if (cache.markSubmitted()) gpuChunksSubmitted.incrementAndGet();
+        return cache.ready().thenApply(ignored -> {
+            if (cache.markCompleted()) gpuChunksCompleted.incrementAndGet();
+            logChunkStatistics(false);
+            return cache;
+        }).toCompletableFuture();
+    }
+
+    public static void markGpuCacheUsed(GpuChunkDensityCache cache) {
+        if (cache != null && cache.markConsumed()) {
+            gpuChunksConsumed.incrementAndGet();
+            logChunkStatistics(false);
+        }
+    }
+
+    public static void releaseGpuCache(GpuChunkDensityCache cache) {
+        GpuTerrainAreaRegistry.release(cache);
+    }
+
+    public static void markCpuFallbackChunk() { cpuFallbackChunks.incrementAndGet(); }
+
+    private static void logChunkStatistics(boolean force) {
+        long completed = gpuChunksCompleted.get();
+        if (force || completed == 0 || (completed & 63L) == 0L) {
+            GpuNoise.LOGGER.info("GPU terrain: submitted={}, completed={}, consumed={}, fallback={}",
+                    gpuChunksSubmitted.get(), completed, gpuChunksConsumed.get(), cpuFallbackChunks.get());
+        }
+    }
+
+    private static long chunkKey(int x, int z) { return ((long) x << 32) ^ (z & 0xffffffffL); }
+
+    static void enterGpuDensityScope() {
+        GPU_DENSITY_REQUIRED.set(Boolean.TRUE);
+    }
+
+    static void leaveGpuDensityScope() {
+        GPU_DENSITY_REQUIRED.set(Boolean.FALSE);
+    }
+
     static synchronized void installTerrainGraph(GpuDensityGraph graph) {
         if (engine == null) throw new IllegalStateException("GPU engine is not started");
         if (terrainScheduler != null) terrainScheduler.close();
@@ -54,11 +197,11 @@ public final class GpuTerrainRuntime {
         if (terrainRootsScheduler != null) terrainRootsScheduler.close();
         terrainRing = submissionRing;
         terrainGraph = graph;
-        fusedChunkScheduler = new GpuFusedChunkBatchScheduler();
+        GpuNoise.LOGGER.info("GPU terrain graph registerCount={}", graph.registerCount());
         terrainRootsScheduler = new GpuTerrainRootsBatchScheduler();
-        terrainProvider = new GpuTerrainGraphProvider(terrainRing, graph);
-        terrainScheduler = new GpuTerrainBatchScheduler(terrainProvider);
-        chunkFillCoordinator = new GpuChunkFillCoordinator();
+        terrainProvider = null;
+        terrainScheduler = null;
+        chunkFillCoordinator = null;
         GpuNoise.LOGGER.info("GPU chunk terrain provider ready: async exact slabs, batches up to {} chunks, all {} router roots per dispatch.",
                 TerrainNoiseApi.MAX_CHUNKS_PER_BATCH, graph.routerRoots().length);
     }
@@ -70,18 +213,54 @@ public final class GpuTerrainRuntime {
         return scheduler.submit(request);
     }
 
-    static java.util.concurrent.CompletionStage<float[]> submitTerrainRoots(int[] x, int[] y, int[] z) {
-        GpuTerrainRootsBatchScheduler scheduler = terrainRootsScheduler;
-        if (scheduler != null) return scheduler.submit(x, y, z);
+    static java.util.concurrent.CompletionStage<GpuTerrainRootsResult> submitTerrainRoots(float[] x, float[] y, float[] z) {
         return submitTerrainRootsDirect(x, y, z);
     }
 
-    static java.util.concurrent.CompletionStage<float[]> submitTerrainRootsDirect(int[] x, int[] y, int[] z) {
+    static java.util.concurrent.CompletionStage<GpuTerrainBatchResult> submitTerrainGrid(GpuTerrainGrid grid) {
+        GpuTerrainRootsBatchScheduler scheduler = terrainRootsScheduler;
+        if (scheduler != null) return scheduler.submit(grid);
+        return java.util.concurrent.CompletableFuture.failedStage(
+                new IllegalStateException("GPU terrain roots scheduler is not installed"));
+    }
+
+    static java.util.concurrent.CompletionStage<GpuTerrainRootsResult> submitTerrainGridDirect(
+            java.nio.ByteBuffer metadata, int chunkCount, int samplesPerChunk) {
         VulkanSubmissionRing ring = terrainRing;
         GpuDensityGraph graph = terrainGraph;
         if (ring == null || graph == null) return java.util.concurrent.CompletableFuture.failedStage(
                 new IllegalStateException("GPU terrain graph provider is not installed"));
-        return ring.submitGraphRoots(graph, toFloat(x), toFloat(y), toFloat(z));
+        return ring.submitGraphRootsGrid(metadata, chunkCount, samplesPerChunk)
+                .thenApply(values -> new GpuTerrainRootsResult(values, 0, values.length, graph.routerRoots().length));
+    }
+
+    static java.util.concurrent.CompletionStage<GpuTerrainBatchResult> submitTerrainGridInterpolated(
+            java.nio.ByteBuffer gridMetadata, int chunkCount, int samplesPerChunk,
+            java.nio.ByteBuffer outputMetadata, int blocksPerChunk) {
+        VulkanSubmissionRing ring = terrainRing;
+        if (ring == null || terrainGraph == null) return java.util.concurrent.CompletableFuture.failedStage(
+                new IllegalStateException("GPU terrain graph provider is not installed"));
+        return ring.submitGraphGridInterpolated(gridMetadata, chunkCount, samplesPerChunk,
+                outputMetadata, blocksPerChunk);
+    }
+
+    static GpuDensityGraph currentTerrainGraph() {
+        return terrainGraph;
+    }
+
+    static java.util.concurrent.CompletionStage<GpuTerrainRootsResult> submitTerrainRootsDirect(float[] x, float[] y, float[] z) {
+        return submitTerrainRootsDirect(x, y, z, x.length);
+    }
+
+    static java.util.concurrent.CompletionStage<GpuTerrainRootsResult> submitTerrainRootsDirect(float[] x, float[] y, float[] z,
+                                                                                                  int sampleCount) {
+        VulkanSubmissionRing ring = terrainRing;
+        GpuDensityGraph graph = terrainGraph;
+        if (ring == null || graph == null) return java.util.concurrent.CompletableFuture.failedStage(
+                new IllegalStateException("GPU terrain graph provider is not installed"));
+        return ring.submitGraphRoots(graph, x, y, z, sampleCount)
+                .thenApply(values -> new GpuTerrainRootsResult(values, 0, values.length,
+                        graph.routerRoots().length));
     }
 
     static java.util.concurrent.CompletionStage<float[]> submitInterpolation(float[] corners, java.nio.ByteBuffer metadata,
@@ -108,8 +287,13 @@ public final class GpuTerrainRuntime {
 
     /** Number of roots currently materialized into the per-block terrain output. */
     static int terrainOutputRootCount() {
-        // The hot path is final density. Initial density and aquifer inputs
-        // remain vanilla-owned so the GPU readback stays within one root.
+        // final, initial, barrier, floodedness, spread, lava, erosion, depth,
+        // temperature, vegetation, continents, ridges
+        return 12;
+    }
+
+    /** The compact grid output currently materializes the hot final-density root. */
+    static int terrainBlockOutputRootCount() {
         return 1;
     }
 
@@ -122,6 +306,17 @@ public final class GpuTerrainRuntime {
                 new IllegalStateException("GPU fused terrain path is not installed"));
         return ring.submitGraphInterpolated(graph, toFloat(x), toFloat(y), toFloat(z), metadata,
                 chunkCount, blocksPerChunk);
+    }
+
+    static java.util.concurrent.CompletionStage<GpuFusedResult> submitFusedDirect(float[] x, float[] y, float[] z,
+                                                                                   int sampleCount,
+                                                                                   java.nio.ByteBuffer metadata,
+                                                                                   int chunkCount, int blocksPerChunk) {
+        VulkanSubmissionRing ring = submissionRing;
+        GpuDensityGraph graph = terrainGraph;
+        if (ring == null || graph == null) return java.util.concurrent.CompletableFuture.failedStage(
+                new IllegalStateException("GPU fused terrain path is not installed"));
+        return ring.submitGraphInterpolated(graph, x, y, z, sampleCount, metadata, chunkCount, blocksPerChunk);
     }
 
     private static float[] toFloat(int[] values) {
@@ -155,12 +350,15 @@ public final class GpuTerrainRuntime {
             y[i] = -64.0f + (i / 32 % 16) * 24.0f;
             z[i] = (i / 512) * 8.0f;
         }
-        DensityFunction[] cpu = {router.finalDensity(), router.initialDensityWithoutJaggedness(),
-                router.fluidLevelFloodednessNoise()};
+        DensityFunction[] cpu = {router.barrierNoise(), router.fluidLevelFloodednessNoise(),
+                router.fluidLevelSpreadNoise(), router.lavaNoise(), router.temperature(), router.vegetation(),
+                router.continents(), router.erosion(), router.depth(), router.ridges(),
+                router.initialDensityWithoutJaggedness(), router.finalDensity(), router.veinToggle(),
+                router.veinRidged(), router.veinGap()};
         try {
             float[] gpu = current.submitGraphRoots(graph, x, y, z);
             float worst = 0.0f;
-            for (int root = 0; root < 3; root++) {
+            for (int root = 0; root < cpu.length; root++) {
                 float rootWorst = 0.0f;
                 int worstIndex = -1;
                 float worstGpu = 0.0f;
@@ -168,11 +366,11 @@ public final class GpuTerrainRuntime {
                 for (int i = 0; i < count; i++) {
                     double expected = cpu[root].compute(new DensityFunction.SinglePointContext(
                             (int) x[i], (int) y[i], (int) z[i]));
-                    float error = Math.abs(gpu[i * 3 + root] - (float) expected);
+                    float error = Math.abs(gpu[i * cpu.length + root] - (float) expected);
                     if (error > rootWorst) {
                         rootWorst = error;
                         worstIndex = i;
-                        worstGpu = gpu[i * 3 + root];
+                        worstGpu = gpu[i * cpu.length + root];
                         worstCpu = expected;
                     }
                 }
@@ -187,6 +385,47 @@ public final class GpuTerrainRuntime {
         } catch (Throwable failure) {
             graphParity = false;
             GpuNoise.LOGGER.warn("GPU terrain graph parity dispatch failed", failure);
+        }
+    }
+
+    /** Verifies the smaller graph that is actually dispatched for chunks. */
+    static void verifyCompactTerrainGraph(GpuDensityGraph graph, NoiseRouter router) {
+        PersistentVulkanNormalNoiseEngine current = engine;
+        if (current == null) return;
+        DensityFunction[] cpu = {router.finalDensity(), router.initialDensityWithoutJaggedness(),
+                router.barrierNoise(), router.fluidLevelFloodednessNoise(), router.fluidLevelSpreadNoise(),
+                router.lavaNoise(), router.erosion(), router.depth(), router.temperature(),
+                router.vegetation(), router.continents(), router.ridges()};
+        if (graph.routerRoots().length != cpu.length) {
+            graphParity = false;
+            GpuNoise.LOGGER.warn("GPU compact terrain graph has {} roots; expected {}", graph.routerRoots().length, cpu.length);
+            return;
+        }
+        int count = 512;
+        float[] x = new float[count], y = new float[count], z = new float[count];
+        for (int i = 0; i < count; i++) {
+            x[i] = (i % 32) * 8.0f;
+            y[i] = -64.0f + (i / 32 % 16) * 24.0f;
+            z[i] = (i / 512) * 8.0f;
+        }
+        try {
+            float[] gpu = current.submitGraphRoots(graph, x, y, z);
+            float worst = 0.0f;
+            for (int root = 0; root < cpu.length; root++) {
+                float rootWorst = 0.0f;
+                for (int i = 0; i < count; i++) {
+                    double expected = cpu[root].compute(new DensityFunction.SinglePointContext((int) x[i], (int) y[i], (int) z[i]));
+                    rootWorst = Math.max(rootWorst, Math.abs(gpu[i * cpu.length + root] - (float) expected));
+                }
+                worst = Math.max(worst, rootWorst);
+                GpuNoise.LOGGER.info("GPU compact terrain root {} parity: maxError={}", root, rootWorst);
+            }
+            graphParity = worst < GRAPH_PARITY_EPSILON;
+            GpuNoise.LOGGER.info("GPU compact terrain graph parity: {} samples, worstMaxError={}, parity={}",
+                    count, worst, graphParity);
+        } catch (Throwable failure) {
+            graphParity = false;
+            GpuNoise.LOGGER.warn("GPU compact terrain graph parity dispatch failed", failure);
         }
     }
 
@@ -318,6 +557,7 @@ public final class GpuTerrainRuntime {
 
     public static void stop() {
         samplers.clear();
+        GpuTerrainAreaRegistry.clear();
         if (terrainScheduler != null) terrainScheduler.close();
         if (chunkFillCoordinator != null) chunkFillCoordinator.close();
         if (fusedChunkScheduler != null) fusedChunkScheduler.close();

@@ -11,13 +11,17 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.LockSupport;
 
 /** Coalesces per-chunk fused terrain requests before they reach Vulkan. */
 final class GpuFusedChunkBatchScheduler implements AutoCloseable {
     private static final int MAX_INPUT_SAMPLES = PersistentVulkanNormalNoiseEngine.CAPACITY;
-    private static final int MAX_OUTPUT_SAMPLES = PersistentVulkanNormalNoiseEngine.CAPACITY;
+    private static final int MAX_OUTPUT_SAMPLES = PersistentVulkanNormalNoiseEngine.INTERPOLATION_OUTPUT_FLOATS;
+    private static final int MAX_CHUNKS_PER_BATCH = 100;
     private final BlockingQueue<Pending> queue = new ArrayBlockingQueue<>(256);
+    // There is currently one safe Vulkan engine. Keep exactly one matching
+    // host-side slab: it prevents per-dispatch allocation without allowing
+    // submissions to overwrite buffers still owned by that engine.
+    private final BlockingQueue<BatchBuffers> buffers = new ArrayBlockingQueue<>(1);
     private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "GPU fused chunk batcher");
         t.setDaemon(true);
@@ -25,7 +29,10 @@ final class GpuFusedChunkBatchScheduler implements AutoCloseable {
     });
     private volatile boolean closed;
 
-    GpuFusedChunkBatchScheduler() { worker.execute(this::run); }
+    GpuFusedChunkBatchScheduler() {
+        buffers.add(new BatchBuffers());
+        worker.execute(this::run);
+    }
 
     CompletionStage<GpuFusedResult> submit(int[] x, int[] y, int[] z, ByteBuffer metadata,
                                     int blocksPerChunk) {
@@ -43,21 +50,18 @@ final class GpuFusedChunkBatchScheduler implements AutoCloseable {
                 Pending first = queue.take();
                 batch.add(first);
                 int input = first.x.length;
-                int output = first.blocksPerChunk * GpuTerrainRuntime.terrainOutputRootCount();
-                // A short coalescing window catches chunks submitted by the
-                // parallel generator without adding a full tick of latency.
-                LockSupport.parkNanos(1_000_000L);
-                while (batch.size() < 32) {
+                long output = (long) first.blocksPerChunk * GpuTerrainRuntime.terrainOutputRootCount();
+                while (batch.size() < MAX_CHUNKS_PER_BATCH) {
                     Pending next = queue.peek();
                     if (next == null || next.blocksPerChunk != first.blocksPerChunk
-                            || input + next.x.length > MAX_INPUT_SAMPLES
-                            || output + next.blocksPerChunk * GpuTerrainRuntime.terrainOutputRootCount() > MAX_OUTPUT_SAMPLES) break;
+                            || (long) input + next.x.length > MAX_INPUT_SAMPLES
+                            || output + (long) next.blocksPerChunk * GpuTerrainRuntime.terrainOutputRootCount() > MAX_OUTPUT_SAMPLES) break;
                     queue.poll();
                     batch.add(next);
                     input += next.x.length;
-                    output += next.blocksPerChunk * GpuTerrainRuntime.terrainOutputRootCount();
+                    output += (long) next.blocksPerChunk * GpuTerrainRuntime.terrainOutputRootCount();
                 }
-                dispatch(batch, input, output);
+                dispatch(batch, input);
             }
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
@@ -68,17 +72,20 @@ final class GpuFusedChunkBatchScheduler implements AutoCloseable {
         }
     }
 
-    private void dispatch(List<Pending> batch, int inputCount, int outputCount) {
+    private void dispatch(List<Pending> batch, int inputCount) {
+        BatchBuffers buffers = null;
         try {
-            int[] x = new int[inputCount], y = new int[inputCount], z = new int[inputCount];
-            ByteBuffer metadata = ByteBuffer.allocateDirect(batch.size() * GpuInterpolationBatch.METADATA_BYTES)
-                    .order(ByteOrder.nativeOrder());
+            buffers = this.buffers.take();
+            ByteBuffer metadata = buffers.metadata;
+            metadata.clear();
             int inputOffset = 0, outputOffset = 0;
             for (int i = 0; i < batch.size(); i++) {
                 Pending item = batch.get(i);
-                System.arraycopy(item.x, 0, x, inputOffset, item.x.length);
-                System.arraycopy(item.y, 0, y, inputOffset, item.y.length);
-                System.arraycopy(item.z, 0, z, inputOffset, item.z.length);
+                for (int sample = 0; sample < item.x.length; sample++) {
+                    buffers.x[inputOffset + sample] = item.x[sample];
+                    buffers.y[inputOffset + sample] = item.y[sample];
+                    buffers.z[inputOffset + sample] = item.z[sample];
+                }
                 ByteBuffer source = item.metadata.duplicate().order(ByteOrder.nativeOrder());
                 source.rewind();
                 // The source metadata describes one chunk. Rewrite only the
@@ -90,9 +97,11 @@ final class GpuFusedChunkBatchScheduler implements AutoCloseable {
                 outputOffset += item.blocksPerChunk;
             }
             metadata.flip();
-            GpuTerrainRuntime.submitFusedDirect(x, y, z, metadata, batch.size(), batch.get(0).blocksPerChunk)
+            BatchBuffers submitted = buffers;
+            GpuTerrainRuntime.submitFusedDirect(submitted.x, submitted.y, submitted.z, inputCount,
+                            metadata, batch.size(), batch.get(0).blocksPerChunk)
                     .whenComplete((values, failure) -> {
-                        int resultInputOffset = 0, blockOffset = 0;
+                        int blockOffset = 0;
                         for (Pending item : batch) {
                             int count = item.blocksPerChunk;
                             int roots = values == null ? 0 : values.roots();
@@ -100,16 +109,15 @@ final class GpuFusedChunkBatchScheduler implements AutoCloseable {
                             if (failure != null) item.result.completeExceptionally(failure);
                             else {
                                 item.result.complete(new GpuFusedResult(
-                                        java.util.Arrays.copyOfRange(values.blocks(), blockOffset, blockOffset + perItemOutput),
-                                        null,
-                                        roots));
+                                        values.batchOutput(), blockOffset, perItemOutput, roots));
                             }
-                            resultInputOffset += item.x.length;
                             blockOffset += perItemOutput;
                         }
+                        this.buffers.offer(submitted);
                     });
         } catch (Throwable failure) {
             for (Pending item : batch) item.result.completeExceptionally(failure);
+            if (buffers != null) this.buffers.offer(buffers);
         }
     }
 
@@ -122,4 +130,12 @@ final class GpuFusedChunkBatchScheduler implements AutoCloseable {
 
     private record Pending(int[] x, int[] y, int[] z, ByteBuffer metadata,
                            int blocksPerChunk, CompletableFuture<GpuFusedResult> result) {}
+
+    private static final class BatchBuffers {
+        final float[] x = new float[MAX_INPUT_SAMPLES];
+        final float[] y = new float[MAX_INPUT_SAMPLES];
+        final float[] z = new float[MAX_INPUT_SAMPLES];
+        final ByteBuffer metadata = ByteBuffer.allocateDirect(MAX_CHUNKS_PER_BATCH * GpuInterpolationBatch.METADATA_BYTES)
+                .order(ByteOrder.nativeOrder());
+    }
 }

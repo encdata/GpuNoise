@@ -14,6 +14,7 @@ import java.util.concurrent.locks.LockSupport;
 import net.minecraft.Util;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.levelgen.NoiseSettings;
+import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 
 public final class GpuChunkFillCoordinator implements AutoCloseable {
     // A cell-grid chunk uses roughly 2,425 terrain samples. The Vulkan engine
@@ -62,7 +63,9 @@ public final class GpuChunkFillCoordinator implements AutoCloseable {
             try {
                 int x = item.work.chunk().getPos().getMinBlockX();
                 int z = item.work.chunk().getPos().getMinBlockZ();
-                GpuChunkDensityCache.prefetch(x, z, item.work.settings());
+                if (GpuTerrainRuntime.gpuOnlyWorldgenAvailable())
+                    GpuChunkDensityCache.prefetchStrict(x, z, item.work.settings(), item.work.aquiferRandom());
+                else GpuChunkDensityCache.prefetch(x, z, item.work.settings());
                 item.cache = GpuChunkDensityCache.takePrefetched(x, z);
             } catch (Throwable error) {
                 item.result.completeExceptionally(error);
@@ -78,7 +81,14 @@ public final class GpuChunkFillCoordinator implements AutoCloseable {
                     item.result.completeExceptionally(failure);
                     return;
                 }
-                CompletableFuture.supplyAsync(() -> item.work.fill(item.cache), fillExecutor)
+                CompletableFuture.supplyAsync(() -> {
+                            GpuTerrainRuntime.enterGpuDensityScope();
+                            try {
+                                return item.work.fill(item.cache);
+                            } finally {
+                                GpuTerrainRuntime.leaveGpuDensityScope();
+                            }
+                        }, fillExecutor)
                         .whenComplete((chunk, error) -> {
                             if (error != null) item.result.completeExceptionally(error);
                             else item.result.complete(chunk);
@@ -90,6 +100,7 @@ public final class GpuChunkFillCoordinator implements AutoCloseable {
     public interface Work {
         ChunkAccess chunk();
         NoiseSettings settings();
+        PositionalRandomFactory aquiferRandom();
         ChunkAccess fill(GpuChunkDensityCache cache);
     }
 

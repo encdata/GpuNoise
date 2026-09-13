@@ -47,9 +47,20 @@ final class GpuDensityGraphCompiler {
 
     static GpuDensityGraph compileTerrain(NoiseRouter router) {
         GpuDensityGraphCompiler compiler = new GpuDensityGraphCompiler();
+        // Keep every density input used by NoiseChunk and NoiseBasedAquifer
+        // in the same GPU dispatch. The order is part of GpuChunkDensityCache.
         int[] roots = {compiler.node(router.finalDensity()),
                 compiler.node(router.initialDensityWithoutJaggedness()),
-                compiler.node(router.fluidLevelFloodednessNoise())};
+                compiler.node(router.barrierNoise()),
+                compiler.node(router.fluidLevelFloodednessNoise()),
+                compiler.node(router.fluidLevelSpreadNoise()),
+                compiler.node(router.lavaNoise()),
+                compiler.node(router.erosion()),
+                compiler.node(router.depth()),
+                compiler.node(router.temperature()),
+                compiler.node(router.vegetation()),
+                compiler.node(router.continents()),
+                compiler.node(router.ridges())};
         return new GpuDensityGraph(compiler.nodes, roots, compiler.noises, compiler.splines,
                 compiler.blended, compiler.sourceFunctions);
     }

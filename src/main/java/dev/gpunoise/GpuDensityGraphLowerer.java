@@ -2,6 +2,8 @@ package dev.gpunoise;
 
 import java.util.Set;
 import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.List;
 
 /** Validates the graph IR before a Vulkan evaluator is allowed to consume it. */
@@ -52,7 +54,52 @@ final class GpuDensityGraphLowerer {
             for (int i = 0; i < values.length; i++) values[i] = remap[values[i]];
             splines.add(new GpuDensityGraph.Spline(remap[spline.coordinateNode()], spline.locations(), spline.derivatives(), values));
         }
-        return new GpuDensityGraph(nodes, roots, graph.noises(), splines, graph.blended(), sourceFunctions);
+        // The generic compute evaluator used a values[1024] array indexed by
+        // graph-node number. On consumer GPUs that array spills into local
+        // memory. Reassign node values to physical slots based on their last
+        // use, retaining only values which are live at the same time.
+        int[] slots = allocateRegisters(nodes, roots);
+        int registerCount = Arrays.stream(slots).max().orElse(0) + 1;
+        List<GpuDensityGraph.Node> registerNodes = new ArrayList<>(nodes.size());
+        for (int index = 0; index < nodes.size(); index++) {
+            GpuDensityGraph.Node node = nodes.get(index);
+            int[] children = node.children();
+            for (int child = 0; child < children.length; child++) children[child] = slots[children[child]];
+            registerNodes.add(new GpuDensityGraph.Node(node.opcode(), children, node.constants(), node.payload(), slots[index]));
+        }
+        for (int root = 0; root < roots.length; root++) roots[root] = slots[roots[root]];
+        List<GpuDensityGraph.Spline> registerSplines = new ArrayList<>(splines.size());
+        for (GpuDensityGraph.Spline spline : splines) {
+            int[] values = spline.valueNodes();
+            for (int value = 0; value < values.length; value++) values[value] = slots[values[value]];
+            registerSplines.add(new GpuDensityGraph.Spline(slots[spline.coordinateNode()], spline.locations(), spline.derivatives(), values));
+        }
+        return new GpuDensityGraph(registerNodes, roots, graph.noises(), registerSplines, graph.blended(), sourceFunctions, registerCount);
+    }
+
+    private static int[] allocateRegisters(List<GpuDensityGraph.Node> nodes, int[] roots) {
+        int count = nodes.size();
+        int[] lastUse = new int[count];
+        Arrays.fill(lastUse, -1);
+        for (int index = 0; index < count; index++) {
+            for (int child : nodes.get(index).children()) lastUse[child] = Math.max(lastUse[child], index);
+        }
+        // Router roots are copied after the final instruction, so their slots
+        // must survive the rest of the program.
+        for (int root : roots) lastUse[root] = count;
+        List<List<Integer>> releases = new ArrayList<>(count + 1);
+        for (int index = 0; index <= count; index++) releases.add(new ArrayList<>());
+        for (int index = 0; index < count; index++) releases.get(lastUse[index]).add(index);
+        int[] slots = new int[count];
+        ArrayDeque<Integer> free = new ArrayDeque<>();
+        int next = 0;
+        for (int index = 0; index < count; index++) {
+            // Inputs whose final use is this instruction can safely be reused:
+            // GLSL evaluates the right hand side before assigning the output.
+            for (int released : releases.get(index)) free.addLast(slots[released]);
+            slots[index] = free.isEmpty() ? next++ : free.removeFirst();
+        }
+        return slots;
     }
 
     private static void visit(int index, List<GpuDensityGraph.Node> nodes, boolean[] visited, int[] order, int[] count) {

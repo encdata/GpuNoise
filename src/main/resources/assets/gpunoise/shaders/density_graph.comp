@@ -1,10 +1,18 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : enable
+#ifndef REGISTER_COUNT
+#define REGISTER_COUNT 256
+#endif
 layout(local_size_x = 64) in;
 
 struct Node { uvec4 ids; vec4 params; uvec4 meta; };
 struct SamplerInfo { uint octaveBase; uint octaveCount; float valueFactor; uint permutationBase; float firstInput; float firstValue; float secondInput; float secondValue; };
+#ifdef GRID_INPUT
+struct TerrainGrid { int minX; int minY; int minZ; int gridX; int gridY; int gridZ; int cellWidth; int cellHeight; };
+layout(std430,set=0,binding=0) readonly buffer Coordinates { TerrainGrid grids[]; };
+#else
 layout(std430,set=0,binding=0) readonly buffer Coordinates { vec4 coordinates[]; };
+#endif
 layout(std430,set=0,binding=1) writeonly buffer Results { float results[]; };
 layout(std430,set=0,binding=2) readonly buffer Nodes { Node nodes[]; };
 layout(std430,set=0,binding=3) readonly buffer Permutations { uint permutation[]; };
@@ -128,7 +136,7 @@ double mapValue(double x,uint op){
     if(op==8u)return x>0?x:x*.5; if(op==9u)return x>0?x:x*.25;
     if(op==10u){double v=clamp(x,-1.0,1.0);return v*.5-v*v*v/24.;} return x;
 }
-double splineValue(double coordinate, uint base, uint count, double values[1024]) {
+double splineValue(double coordinate, uint base, uint count, double values[REGISTER_COUNT]) {
     if (count == 0u) return 0.0;
     SplinePoint first = splinePoints[base];
     SplinePoint last = splinePoints[base + count - 1u];
@@ -152,7 +160,21 @@ double splineValue(double coordinate, uint base, uint count, double values[1024]
 }
 void main(){
     uint sampleIndex=gl_GlobalInvocationID.x; if(sampleIndex>=count)return;
-    double values[1024]; vec3 p=coordinates[sampleIndex].xyz;
+    double values[REGISTER_COUNT];
+#ifdef GRID_INPUT
+    uint chunkIndex = sampleIndex / reserved;
+    uint localIndex = sampleIndex % reserved;
+    TerrainGrid g = grids[chunkIndex];
+    uint gz = localIndex % uint(g.gridZ);
+    uint q = localIndex / uint(g.gridZ);
+    uint gx = q % uint(g.gridX);
+    uint gy = q / uint(g.gridX);
+    vec3 p = vec3(g.minX + int(gx) * g.cellWidth,
+                  g.minY + int(gy) * g.cellHeight,
+                  g.minZ + int(gz) * g.cellWidth);
+#else
+    vec3 p=coordinates[sampleIndex].xyz;
+#endif
     for(uint i=0;i<nodeCount;i++){
         Node n=nodes[i]; uint op=n.ids.x; double v=0.0;
         if(op==1u)v=double(n.params.x);
@@ -169,10 +191,20 @@ void main(){
         else if(op==12u){v=splineValue(values[n.ids.y],uint(n.params.x)*64u,uint(n.params.y),values);}
         else if(op==13u){v=blendedNoise64(p,uint(n.params.x));}
         else if(op==14u){double t=clamp((double(p.y)-double(n.params.x))/(double(n.params.y)-double(n.params.x)),0.0,1.0);v=mix(double(n.params.z),double(n.params.w),t);}
-        else if(op==15u){vec2 blend=blendInputs[sampleIndex];v=mix(double(blend.x),values[n.ids.y],double(blend.y));}
+        else if(op==15u){
+#ifdef GRID_INPUT
+            // Normal new-chunk terrain has the vanilla no-blending pair (0,1).
+            // Keep the general buffer-backed form for old/blended arbitrary
+            // coordinate requests, but do not read a giant identical buffer
+            // for the regular grid path.
+            v=values[n.ids.y];
+#else
+            vec2 blend=blendInputs[sampleIndex];v=mix(double(blend.x),values[n.ids.y],double(blend.y));
+#endif
+        }
         else if(op==16u){double x=values[n.ids.y];v=(x>=double(n.params.x)&&x<double(n.params.y))?values[n.ids.z]:values[n.ids.w];}
         else if(op==17u){double rarity=double(spaghettiRarity(float(values[n.ids.y]),n.meta.x==0u?0u:1u));v=rarity*double(abs(normalNoise(p/float(rarity),uint(n.params.x))));}
-        values[i]=v;
+        values[n.meta.w]=v;
     }
     for (uint root = 0u; root < rootCount; root++) {
         results[sampleIndex * rootCount + root] = float(values[rootNodes[root]]);

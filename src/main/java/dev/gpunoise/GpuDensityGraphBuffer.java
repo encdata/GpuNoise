@@ -9,6 +9,7 @@ import net.minecraft.world.level.levelgen.synth.NormalNoise;
 /** Fixed-stride GPU representation of the lowered density graph. */
 final class GpuDensityGraphBuffer {
     static final int NODE_BYTES = 48;
+    static final int MAX_SHADER_REGISTERS = 256;
     record Packed(ByteBuffer nodes, ByteBuffer permutations, ByteBuffer octaves,
                   ByteBuffer samplerMetadata, ByteBuffer splinePoints, ByteBuffer blendedMetadata,
                   int nodeCount, int samplerCount, int blendedCount) {}
@@ -24,6 +25,10 @@ final class GpuDensityGraphBuffer {
     private GpuDensityGraphBuffer() {}
 
     static Packed pack(GpuDensityGraph graph) {
+        if (graph.registerCount() > MAX_SHADER_REGISTERS) {
+            throw new IllegalArgumentException("GPU graph needs " + graph.registerCount()
+                    + " live registers; shader capacity is " + MAX_SHADER_REGISTERS);
+        }
         ByteBuffer output = ByteBuffer.allocateDirect(Math.multiplyExact(graph.nodes().size(), NODE_BYTES))
                 .order(ByteOrder.nativeOrder());
         for (GpuDensityGraph.Node node : graph.nodes()) {
@@ -35,7 +40,7 @@ final class GpuDensityGraphBuffer {
                     .putInt(children.length > 1 ? children[1] : -1)
                     .putInt(children.length > 2 ? children[2] : -1);
             for (int i = 0; i < 4; i++) output.putFloat(i < constants.length ? (float) constants[i] : 0.0f);
-            output.putInt(operation(node.payload())).putInt(children.length).putInt(constants.length).putInt(0);
+            output.putInt(operation(node.payload())).putInt(children.length).putInt(constants.length).putInt(node.register());
         }
         ByteBuffer splinePoints = ByteBuffer.allocateDirect(graph.splines().size() * 64 * 16).order(ByteOrder.nativeOrder());
         for (int splineIndex = 0; splineIndex < graph.splines().size(); splineIndex++) {

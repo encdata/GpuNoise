@@ -1,0 +1,3 @@
+// The grid variant is compiled from density_graph.comp with GRID_INPUT.
+// This marker keeps the generated SPIR-V resource discoverable alongside the
+// grid entry point while the evaluator remains shared with arbitrary samples.

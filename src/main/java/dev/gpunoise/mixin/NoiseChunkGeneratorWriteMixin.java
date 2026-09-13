@@ -9,10 +9,8 @@ import net.minecraft.world.level.levelgen.blending.Blender;
 import net.minecraft.world.level.StructureManager;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.core.Holder;
-import net.minecraft.Util;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.levelgen.NoiseSettings;
-import net.minecraft.world.level.chunk.LevelChunkSection;
 import java.util.concurrent.CompletableFuture;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -22,9 +20,7 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import dev.gpunoise.GpuChunkDensityCache;
-import dev.gpunoise.GpuNoiseConfig;
 import dev.gpunoise.GpuTerrainRuntime;
-import dev.gpunoise.GpuChunkFillCoordinator;
 
 /**
  * Noisium-style worldgen write optimization. Noise generation owns the section
@@ -39,7 +35,7 @@ abstract class NoiseChunkGeneratorWriteMixin {
     private void gpunoise$asyncBatchFill(Blender blender, RandomState randomState, StructureManager structures,
                                          ChunkAccess chunk,
                                          CallbackInfoReturnable<CompletableFuture<ChunkAccess>> callback) {
-        if (!GpuTerrainRuntime.chunkWriterAvailable()) return;
+        if (!GpuTerrainRuntime.gpuOnlyWorldgenAvailable()) return;
         NoiseSettings settings = generatorSettings().value().noiseSettings()
                 .clampToHeightAccessor(chunk.getHeightAccessorForGeneration());
         int minCellY = Mth.floorDiv(settings.minY(), settings.getCellHeight());
@@ -48,13 +44,13 @@ abstract class NoiseChunkGeneratorWriteMixin {
             callback.setReturnValue(CompletableFuture.completedFuture(chunk));
             return;
         }
-        callback.setReturnValue(GpuTerrainRuntime.submitChunkFill(new GpuChunkFillCoordinator.Work() {
-            @Override public ChunkAccess chunk() { return chunk; }
-            @Override public NoiseSettings settings() { return settings; }
-            @Override public ChunkAccess fill(GpuChunkDensityCache cache) {
-                return gpunoise$fillWithGpuReady(blender, randomState, structures, chunk, minCellY, cellCountY, cache);
-            }
-        }).toCompletableFuture());
+        // prepareChunk returns immediately.  doFill is chained only after the
+        // lattice result is installed, so no worldgen thread calls join/get.
+        callback.setReturnValue(GpuTerrainRuntime.submitChunkPipeline(() ->
+                GpuTerrainRuntime.prepareChunk(blender, randomState, structures, chunk,
+                        minCellY, cellCountY, settings)
+                .thenApplyAsync(cache -> gpunoise$fillWithGpuReady(blender, randomState, structures, chunk,
+                        minCellY, cellCountY, cache), net.minecraft.Util.backgroundExecutor())));
     }
 
     private ChunkAccess gpunoise$fillWithGpuReady(Blender blender, RandomState randomState, StructureManager structures,
@@ -71,11 +67,22 @@ abstract class NoiseChunkGeneratorWriteMixin {
             section.acquire();
             sections[sectionCount++] = section;
         }
-        GpuChunkDensityCache.putPrefetched(chunk.getPos().getMinBlockX(), chunk.getPos().getMinBlockZ(), cache);
         try {
-            return gpunoise$doFill(blender, structures, randomState, chunk, minCellY, cellCountY);
+            GpuTerrainRuntime.bindFillCache(cache);
+            try {
+                return gpunoise$doFill(blender, structures, randomState, chunk, minCellY, cellCountY);
+            } finally {
+                GpuTerrainRuntime.clearFillCache();
+            }
         } finally {
-            for (int i = 0; i < sectionCount; i++) sections[i].release();
+            GpuTerrainRuntime.releaseGpuCache(cache);
+            for (int i = 0; i < sectionCount; i++) {
+                // The GPU-owned fill uses unchecked palette writes below, so
+                // rebuild the three section counters once instead of doing
+                // fluid/random-tick bookkeeping for every generated block.
+                sections[i].recalcBlockCounts();
+                sections[i].release();
+            }
         }
     }
 
@@ -92,6 +99,6 @@ abstract class NoiseChunkGeneratorWriteMixin {
     )
     private BlockState gpunoise$writeWithoutSectionLock(
             LevelChunkSection section, int x, int y, int z, BlockState state, boolean ignored) {
-        return section.setBlockState(x, y, z, state, false);
+        return section.getStates().getAndSetUnchecked(x, y, z, state);
     }
 }

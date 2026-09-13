@@ -17,6 +17,7 @@ abstract class NoiseDensityMixin {
 
     @Inject(method = "fillArray", at = @At("HEAD"), cancellable = true)
     private void gpunoise$fillArray(double[] values, DensityFunction.ContextProvider contexts, CallbackInfo callback) {
-        if (GpuTerrainRuntime.tryFill(noise.noise(), xzScale, yScale, contexts, values)) callback.cancel();
+        if (GpuTerrainRuntime.shouldUseLeafNoiseOffload()
+                && GpuTerrainRuntime.tryFill(noise.noise(), xzScale, yScale, contexts, values)) callback.cancel();
     }
 }

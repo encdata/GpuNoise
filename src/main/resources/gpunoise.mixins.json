@@ -11,9 +11,9 @@
     "ImprovedNoiseAccessor",
     "NoiseDensityMixin",
     "NoiseChunkGpuDensityMixin",
+    "NoiseChunkGeneratorBiomeMixin",
     "AquiferGpuInputsMixin",
     "NoiseChunkGeneratorWriteMixin",
-    "C2mePriorityBatchMixin",
     "C2meCompiledDensityFunctionMixin"
   ],
   "injectors": {

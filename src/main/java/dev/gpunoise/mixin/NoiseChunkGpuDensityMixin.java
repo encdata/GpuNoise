@@ -4,10 +4,14 @@ import dev.gpunoise.GpuChunkDensityCache;
 import dev.gpunoise.GpuNoiseChunkAccess;
 import dev.gpunoise.GpuNoiseConfig;
 import dev.gpunoise.GpuTerrainRuntime;
+import dev.gpunoise.GpuTerrainRoots;
 import net.minecraft.world.level.levelgen.DensityFunction;
 import net.minecraft.world.level.levelgen.DensityFunctions;
 import net.minecraft.world.level.levelgen.NoiseChunk;
+import net.minecraft.world.level.levelgen.NoiseRouter;
 import net.minecraft.world.level.levelgen.NoiseSettings;
+import net.minecraft.world.level.biome.Climate;
+import java.util.List;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -27,17 +31,53 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
 
     @Inject(method = "<init>", at = @At("TAIL"))
     private void gpunoise$installGpuCache(CallbackInfo callback) {
-        if (!GpuTerrainRuntime.chunkWriterAvailable()) return;
-        int chunkMinX = firstNoiseX << 2;
-        int chunkMinZ = firstNoiseZ << 2;
-        GpuChunkDensityCache cache = GpuChunkDensityCache.takePrefetched(chunkMinX, chunkMinZ);
-        if (cache == null) cache = GpuChunkDensityCache.create(chunkMinX, chunkMinZ, noiseSettings);
-        gpunoise$cache = cache;
+        GpuChunkDensityCache cache = GpuTerrainRuntime.activeFillCache();
+        if (cache != null && cache.matchesChunk(firstNoiseX << 2, firstNoiseZ << 2)) {
+            gpunoise$cache = cache;
+        }
+    }
+
+    @Inject(method = "cachedClimateSampler", at = @At("HEAD"), cancellable = true)
+    private void gpunoise$useGpuClimate(NoiseRouter router, List<Climate.ParameterPoint> points,
+                                        org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable<Climate.Sampler> callback) {
+        GpuChunkDensityCache cache = gpunoise$getActiveCache();
+        if (cache == null) return;
+        callback.setReturnValue(new Climate.Sampler(
+                new GpuClimateFunction(cache, GpuTerrainRoots.TEMPERATURE, router.temperature()),
+                new GpuClimateFunction(cache, GpuTerrainRoots.VEGETATION, router.vegetation()),
+                new GpuClimateFunction(cache, GpuTerrainRoots.CONTINENTS, router.continents()),
+                new GpuClimateFunction(cache, GpuTerrainRoots.EROSION, router.erosion()),
+                new GpuClimateFunction(cache, GpuTerrainRoots.DEPTH, router.depth()),
+                new GpuClimateFunction(cache, GpuTerrainRoots.RIDGES, router.ridges()), points));
     }
 
     @Override
     public GpuChunkDensityCache gpunoise$gpuCache() {
         return gpunoise$cache;
+    }
+
+    @Override
+    public void gpunoise$setGpuCache(GpuChunkDensityCache cache) {
+        this.gpunoise$cache = cache;
+    }
+
+    @Override
+    public boolean gpunoise$matchesGpuCache(GpuChunkDensityCache cache) {
+        return cache != null && cache.matchesChunk(firstNoiseX << 2, firstNoiseZ << 2);
+    }
+
+    @Unique
+    private GpuChunkDensityCache gpunoise$getActiveCache() {
+        GpuChunkDensityCache cache = this.gpunoise$cache;
+        if (cache == null) {
+            cache = GpuTerrainRuntime.activeFillCache();
+            if (cache != null && cache.matchesChunk(firstNoiseX << 2, firstNoiseZ << 2)) {
+                this.gpunoise$cache = cache;
+            } else {
+                cache = null;
+            }
+        }
+        return cache;
     }
 
     @Redirect(method = "<init>", at = @At(value = "INVOKE",
@@ -49,10 +89,13 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     @Redirect(method = "computePreliminarySurfaceLevel", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/world/level/levelgen/DensityFunction;compute(Lnet/minecraft/world/level/levelgen/DensityFunction$FunctionContext;)D"))
     private double gpunoise$useGpuInitialDensity(DensityFunction vanillaFunction, DensityFunction.FunctionContext context) {
-        GpuChunkDensityCache cache = gpunoise$cache;
+        GpuChunkDensityCache cache = gpunoise$getActiveCache();
         if (cache != null) {
             double gpu = cache.initialDensity(context.blockX(), context.blockY(), context.blockZ());
-            if (!Double.isNaN(gpu)) return gpu;
+            if (!Double.isNaN(gpu)) {
+                GpuTerrainRuntime.markGpuCacheUsed(cache);
+                return gpu;
+            }
         }
         return vanillaFunction.compute(context);
     }
@@ -72,10 +115,28 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
         @Override
         public double compute(DensityFunction.FunctionContext context) {
             if (context == owner) {
-                GpuChunkDensityCache cache = ((GpuNoiseChunkAccess) (Object) owner).gpunoise$gpuCache();
+                GpuNoiseChunkAccess access = (GpuNoiseChunkAccess) (Object) owner;
+                GpuChunkDensityCache cache = access.gpunoise$gpuCache();
+                if (cache == null) {
+                    GpuChunkDensityCache active = GpuTerrainRuntime.activeFillCache();
+                    int minX = context.blockX() & ~15;
+                    int minZ = context.blockZ() & ~15;
+                    if (active != null && access.gpunoise$matchesGpuCache(active)
+                            && active.matchesChunk(minX, minZ)) {
+                        access.gpunoise$setGpuCache(active);
+                        cache = active;
+                    }
+                }
                 if (cache != null) {
                     double gpu = cache.density(context);
-                    if (!Double.isNaN(gpu)) return gpu + beardifier.compute(context);
+                    if (!Double.isNaN(gpu)) {
+                        GpuTerrainRuntime.markGpuCacheUsed(cache);
+                        return gpu + beardifier.compute(context);
+                    }
+                    if (cache.contains(context.blockX(), context.blockY(), context.blockZ())) {
+                        throw new IllegalStateException("Authoritative GPU density cache returned NaN at "
+                                + context.blockX() + "," + context.blockY() + "," + context.blockZ());
+                    }
                 }
             }
             return finalDensity.compute(context) + beardifier.compute(context);
@@ -88,6 +149,40 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
 
         @Override public double minValue() { return finalDensity.minValue() + beardifier.minValue(); }
         @Override public double maxValue() { return finalDensity.maxValue() + beardifier.maxValue(); }
+        @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
+            return DensityFunctions.constant(0.0).codec();
+        }
+    }
+
+    @Unique
+    private static final class GpuClimateFunction implements DensityFunction.SimpleFunction {
+        private final GpuChunkDensityCache cache;
+        private final int root;
+        private final DensityFunction fallback;
+
+        private GpuClimateFunction(GpuChunkDensityCache cache, int root, DensityFunction fallback) {
+            this.cache = cache;
+            this.root = root;
+            this.fallback = fallback;
+        }
+
+        @Override
+        public double compute(DensityFunction.FunctionContext context) {
+            double value = cache.climate(context.blockX(), context.blockY(), context.blockZ(), root);
+            if (!Double.isNaN(value)) {
+                GpuTerrainRuntime.markGpuCacheUsed(cache);
+                return value;
+            }
+            return fallback.compute(context);
+        }
+
+        @Override
+        public DensityFunction mapAll(DensityFunction.Visitor visitor) {
+            return visitor.apply(new GpuClimateFunction(cache, root, fallback.mapAll(visitor)));
+        }
+
+        @Override public double minValue() { return fallback.minValue(); }
+        @Override public double maxValue() { return fallback.maxValue(); }
         @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
             return DensityFunctions.constant(0.0).codec();
         }

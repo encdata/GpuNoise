@@ -73,31 +73,35 @@ public final class GpuNoise {
         GpuTerrainRuntime.start(device);
         try {
             var router = event.getServer().overworld().getChunkSource().randomState().router();
-            int fullNodes = -1;
+            GpuDensityGraph installedGraph = null;
             try {
-                GpuDensityGraph graph = GpuDensityGraphLowerer.lower(GpuDensityGraphCompiler.compile(router));
-                GpuDensityGraphBuffer.Packed packedGraph = GpuDensityGraphBuffer.pack(graph);
-                fullNodes = graph.nodes().size();
+                // Verify the entire router once at startup, but only execute
+                // the terrain and aquifer roots for each chunk cell grid.
+                GpuDensityGraph fullGraph = GpuDensityGraphLowerer.lower(GpuDensityGraphCompiler.compile(router));
+                GpuDensityGraphBuffer.Packed packedGraph = GpuDensityGraphBuffer.pack(fullGraph);
                 LOGGER.info("GPU density graph discovered: {} nodes, {} router roots, {} noise samplers; packed {} bytes for GPU lowering.",
-                        graph.nodes().size(), graph.routerRoots().length, graph.noises().size(), packedGraph.nodes().capacity());
-                if (VulkanComputeProbe.supportsFloat64(device)) GpuTerrainRuntime.verifyGraph(graph, router);
+                        fullGraph.nodes().size(), fullGraph.routerRoots().length, fullGraph.noises().size(), packedGraph.nodes().capacity());
+                if (VulkanComputeProbe.supportsFloat64(device)) GpuTerrainRuntime.verifyGraph(fullGraph, router);
                 else LOGGER.info("GPU density graph verification skipped: selected GPU lacks shaderFloat64.");
+                GpuTerrainRuntime.verifyTerrainGraph(fullGraph, router);
+                GpuDensityGraph terrainGraph = GpuDensityGraphLowerer.lower(GpuDensityGraphCompiler.compileTerrain(router));
+                LOGGER.info("GPU terrain runtime graph: {} nodes, {} required terrain/aquifer roots.",
+                        terrainGraph.nodes().size(), terrainGraph.routerRoots().length);
+                GpuTerrainRuntime.verifyCompactTerrainGraph(terrainGraph, router);
+                GpuTerrainRuntime.installTerrainGraph(terrainGraph);
+                installedGraph = terrainGraph;
             } catch (RuntimeException fullGraphFailure) {
-                LOGGER.warn("Full router parity graph unavailable; continuing with reduced terrain graph.", fullGraphFailure);
+                LOGGER.warn("Full router graph unavailable; strict GPU terrain is disabled for this server.", fullGraphFailure);
             }
-            GpuDensityGraph terrainGraph = GpuDensityGraphLowerer.lower(GpuDensityGraphCompiler.compileTerrain(
-                    router));
-            LOGGER.info("GPU terrain graph reduced to {} nodes from {} full-graph nodes.",
-                    terrainGraph.nodes().size(), fullNodes);
-            GpuTerrainRuntime.installTerrainGraph(terrainGraph);
-            GpuTerrainRuntime.verifyTerrainGraph(terrainGraph, router);
-            LOGGER.warn("GPU chunk writer enabled without parity gating; parity remains diagnostic only.");
+            if (installedGraph != null) {
+                LOGGER.info("GPU terrain graph installed with {} terrain/aquifer roots.", GpuTerrainRoots.COUNT);
+            }
         } catch (RuntimeException unsupported) {
             LOGGER.warn("GPU density graph batch is not enabled yet", unsupported);
         }
         VulkanNoiseBenchmark.run(device);
 
-        LOGGER.info("GPU Noise selected {} ({}) using {} preference. Vanilla noise fill hook is GPU-enabled.",
+        LOGGER.info("GPU Noise selected {} ({}) using {} preference. Terrain uses global GPU graph batches; leaf noise hook is disabled.",
                 device.name(), device.vendorName(), GpuNoiseConfig.GPU_VENDOR.get());
     }
 

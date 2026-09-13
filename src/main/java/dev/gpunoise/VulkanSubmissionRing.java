@@ -1,11 +1,12 @@
 package dev.gpunoise;
 
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.nio.ByteBuffer;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * Safe in-flight submission ring. Each slot owns its Vulkan buffers, command
@@ -13,13 +14,17 @@ import java.nio.ByteBuffer;
  * overwrite resources still used by another dispatch.
  */
 final class VulkanSubmissionRing implements AutoCloseable {
-    // Keep the independent-resource ring at four slots. Increasing this by
-    // creating more engines multiplies LWJGL stack/direct-memory use and can
-    // exhaust the JVM before a shared suballocated ring is implemented.
-    private static final int SLOT_COUNT = 4;
+    // Each independent engine owns large persistent Vulkan buffers. Four
+    // engines used several gigabytes of committed JVM/direct memory on a
+    // normal 6 GB VRAM laptop and could freeze the desktop. Keep one engine
+    // until slots share one device allocation with buffer offsets.
+    private static final int SLOT_COUNT = 1;
     private final PersistentVulkanNormalNoiseEngine[] slots;
     private final AtomicInteger next = new AtomicInteger();
-    private final ExecutorService completion = Executors.newFixedThreadPool(SLOT_COUNT, r -> {
+    /** Requests wait here, not on a worldgen thread, while the shared slot is busy. */
+    private final ConcurrentLinkedQueue<GraphRootsRequest> pendingGraphRoots = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<GraphRootsGridRequest> pendingGraphGrids = new ConcurrentLinkedQueue<>();
+    private final ScheduledExecutorService completion = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "GPU Vulkan completion");
         thread.setDaemon(true);
         return thread;
@@ -36,17 +41,65 @@ final class VulkanSubmissionRing implements AutoCloseable {
             for (int i = 0; i < created; i++) slots[i].close();
             throw failure;
         }
+        // Polling a fence is non-blocking. This executor only completes
+        // futures; it never waits for a terrain submission.
+        completion.scheduleWithFixedDelay(() -> {
+            for (PersistentVulkanNormalNoiseEngine slot : slots) {
+                if (slot != null) slot.pollGraphRootsCompletion();
+            }
+            drainGraphRoots();
+        }, 0, 1, TimeUnit.MILLISECONDS);
     }
 
+    PersistentVulkanNormalNoiseEngine primary() { return slots[0]; }
+
     CompletableFuture<float[]> submitGraphRoots(GpuDensityGraph graph, float[] x, float[] y, float[] z) {
-        PersistentVulkanNormalNoiseEngine slot = slots[Math.floorMod(next.getAndIncrement(), slots.length)];
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                return slot.submitGraphRoots(graph, x, y, z);
-            } catch (Exception failure) {
-                throw new IllegalStateException("GPU ring graph dispatch failed", failure);
+        return submitGraphRoots(graph, x, y, z, x.length);
+    }
+
+    CompletableFuture<float[]> submitGraphRoots(GpuDensityGraph graph, float[] x, float[] y, float[] z, int sampleCount) {
+        CompletableFuture<float[]> future = new CompletableFuture<>();
+        pendingGraphRoots.add(new GraphRootsRequest(graph, x, y, z, sampleCount, future));
+        drainGraphRoots();
+        return future;
+    }
+
+    CompletableFuture<float[]> submitGraphRootsGrid(ByteBuffer metadata, int chunkCount, int samplesPerChunk) {
+        CompletableFuture<float[]> future = new CompletableFuture<>();
+        pendingGraphGrids.add(new GraphRootsGridRequest(metadata, chunkCount, samplesPerChunk, future));
+        drainGraphRoots();
+        return future;
+    }
+
+    /** Starts at most one request per lightweight slot; never rejects work just because GPU is busy. */
+    private synchronized void drainGraphRoots() {
+        for (PersistentVulkanNormalNoiseEngine slot : slots) {
+            if (slot == null || slot.graphRootsInFlight()) continue;
+            GraphRootsRequest request = pendingGraphRoots.poll();
+            if (request == null) {
+                GraphRootsGridRequest grid = pendingGraphGrids.poll();
+                if (grid == null) return;
+                try {
+                    slot.submitGraphRootsGridAsync(grid.metadata, grid.chunkCount, grid.samplesPerChunk)
+                            .whenComplete((values, failure) -> {
+                                if (failure != null) grid.future.completeExceptionally(failure);
+                                else grid.future.complete(values);
+                            });
+                } catch (Throwable failure) {
+                    grid.future.completeExceptionally(new IllegalStateException("GPU ring grid dispatch failed", failure));
+                }
+                continue;
             }
-        }, completion);
+            try {
+                slot.submitGraphRootsAsync(request.graph, request.x, request.y, request.z, request.sampleCount)
+                        .whenComplete((values, failure) -> {
+                            if (failure != null) request.future.completeExceptionally(failure);
+                            else request.future.complete(values);
+                        });
+            } catch (Throwable failure) {
+                request.future.completeExceptionally(new IllegalStateException("GPU ring graph dispatch failed", failure));
+            }
+        }
     }
 
     CompletableFuture<float[]> submitNoise(GpuGlobalNoiseBatch.Packed batch) {
@@ -74,10 +127,29 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     CompletableFuture<GpuFusedResult> submitGraphInterpolated(GpuDensityGraph graph, float[] x, float[] y, float[] z,
                                                         ByteBuffer metadata, int chunkCount, int blocksPerChunk) {
+        return submitGraphInterpolated(graph, x, y, z, x.length, metadata, chunkCount, blocksPerChunk);
+    }
+
+    CompletableFuture<GpuTerrainBatchResult> submitGraphGridInterpolated(ByteBuffer gridMetadata, int chunkCount,
+                                                                           int samplesPerChunk, ByteBuffer outputMetadata,
+                                                                           int blocksPerChunk) {
         PersistentVulkanNormalNoiseEngine slot = slots[Math.floorMod(next.getAndIncrement(), slots.length)];
         return CompletableFuture.supplyAsync(() -> {
             try {
-                return slot.submitGraphInterpolated(graph, x, y, z, metadata, chunkCount, blocksPerChunk);
+                return slot.submitGraphGridInterpolated(gridMetadata, chunkCount, samplesPerChunk,
+                        outputMetadata, blocksPerChunk);
+            } catch (Exception failure) {
+                throw new IllegalStateException("GPU grid terrain output dispatch failed", failure);
+            }
+        }, completion);
+    }
+
+    CompletableFuture<GpuFusedResult> submitGraphInterpolated(GpuDensityGraph graph, float[] x, float[] y, float[] z,
+                                                        int sampleCount, ByteBuffer metadata, int chunkCount, int blocksPerChunk) {
+        PersistentVulkanNormalNoiseEngine slot = slots[Math.floorMod(next.getAndIncrement(), slots.length)];
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return slot.submitGraphInterpolated(graph, x, y, z, sampleCount, metadata, chunkCount, blocksPerChunk);
             } catch (Exception failure) {
                 throw new IllegalStateException("GPU fused terrain dispatch failed", failure);
             }
@@ -95,4 +167,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
             if (slots[i] != null) slots[i].close();
         }
     }
+
+    private record GraphRootsRequest(GpuDensityGraph graph, float[] x, float[] y, float[] z,
+                                     int sampleCount, CompletableFuture<float[]> future) {}
+    private record GraphRootsGridRequest(ByteBuffer metadata, int chunkCount, int samplesPerChunk,
+                                         CompletableFuture<float[]> future) {}
 }
