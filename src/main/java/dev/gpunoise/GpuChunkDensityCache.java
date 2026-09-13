@@ -11,6 +11,7 @@ import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 
 /** GPU cache containing the NoiseChunk cell-boundary grid for one chunk. */
 public final class GpuChunkDensityCache {
+    private static final boolean READ_STATS_ENABLED = Boolean.getBoolean("gpunoise.profileTerrain");
     private static final ConcurrentHashMap<Long, GpuChunkDensityCache> PREFETCHED = new ConcurrentHashMap<>();
     private final int minX, minZ, minY, cellWidth, cellHeight, cellsY, gridX, gridZ;
     private final GpuTerrainGrid grid;
@@ -136,8 +137,10 @@ public final class GpuChunkDensityCache {
         GpuTerrainBlockResult blocks = readyBlocks;
         if (blocks != null && !blocks.isEmpty()
                 && rx < 16 && ry < cellsY * cellHeight && rz < 16) {
-            long direct = blockReads.incrementAndGet();
-            if ((direct & 0x3ffffL) == 0L) logReadStatistics();
+            if (READ_STATS_ENABLED) {
+                long direct = blockReads.incrementAndGet();
+                if ((direct & 0x3ffffL) == 0L) logReadStatistics();
+            }
             return blocks.finalValueAtUnchecked(rx, ry, rz);
         }
         if (rx <= 16 && rz <= 16 && ry <= cellsY * cellHeight
@@ -146,13 +149,17 @@ public final class GpuChunkDensityCache {
             int gy = ry / cellHeight;
             int gz = rz / cellWidth;
             if (gx < gridX && gy <= cellsY && gz < gridZ) {
-                long corners = cornerReads.incrementAndGet();
-                if ((corners & 0x3ffffL) == 0L) logReadStatistics();
+                if (READ_STATS_ENABLED) {
+                    long corners = cornerReads.incrementAndGet();
+                    if ((corners & 0x3ffffL) == 0L) logReadStatistics();
+                }
                 return ready.valueAt((gy * gridX + gx) * gridZ + gz, GpuTerrainRoots.FINAL_DENSITY);
             }
         }
-        long interpolated = interpolatedReads.incrementAndGet();
-        if ((interpolated & 0x3ffffL) == 0L) logReadStatistics();
+        if (READ_STATS_ENABLED) {
+            long interpolated = interpolatedReads.incrementAndGet();
+            if ((interpolated & 0x3ffffL) == 0L) logReadStatistics();
+        }
         return sampleRoot(rx, ry, rz, GpuTerrainRoots.FINAL_DENSITY);
     }
 

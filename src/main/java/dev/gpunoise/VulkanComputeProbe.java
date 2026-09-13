@@ -22,7 +22,7 @@ final class VulkanComputeProbe {
     private VulkanComputeProbe() {}
 
     static boolean verify(GpuDevice expected) {
-        Configuration.STACK_SIZE.set(1_048_576);
+        Configuration.STACK_SIZE.set(8 * 1_048_576);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkApplicationInfo appInfo = VkApplicationInfo.calloc(stack).sType$Default()
                     .pApplicationName(stack.UTF8("GPU Noise Compute Probe"))
