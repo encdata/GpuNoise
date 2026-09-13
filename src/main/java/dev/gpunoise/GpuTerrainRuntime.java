@@ -709,7 +709,7 @@ public final class GpuTerrainRuntime {
         return true;
     }
 
-    public static void stop() {
+    public static synchronized void stop() {
         samplers.clear();
         GpuTerrainAreaRegistry.clear();
         if (terrainScheduler != null) terrainScheduler.close();
@@ -717,9 +717,9 @@ public final class GpuTerrainRuntime {
         if (fusedChunkScheduler != null) fusedChunkScheduler.close();
         if (terrainRootsScheduler != null) terrainRootsScheduler.close();
         if (terrainProvider != null) terrainProvider.close();
+        VulkanSubmissionRing ring = submissionRing;
         terrainRing = null;
         terrainGraph = null;
-        if (submissionRing != null) submissionRing.close();
         submissionRing = null;
         terrainScheduler = null;
         chunkFillCoordinator = null;
@@ -729,7 +729,10 @@ public final class GpuTerrainRuntime {
         graphParity = false;
         if (globalQueue != null) globalQueue.close();
         globalQueue = null;
-        if (engine != null) engine.close();
+        // The ring owns its primary engine. Close it through exactly one
+        // owner; double-destroying Vulkan handles can poison the next run.
+        if (ring != null) ring.close();
+        else if (engine != null) engine.close();
         engine = null;
         device = null;
     }

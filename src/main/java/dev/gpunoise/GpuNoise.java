@@ -11,6 +11,7 @@ import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.server.ServerAboutToStartEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
+import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator;
 import net.minecraft.world.level.levelgen.NoiseSettings;
@@ -37,7 +38,13 @@ public final class GpuNoise {
         NeoForge.EVENT_BUS.addListener(this::onServerAboutToStart);
         NeoForge.EVENT_BUS.addListener(this::onServerStarting);
         NeoForge.EVENT_BUS.addListener(this::onServerStarted);
+        NeoForge.EVENT_BUS.addListener(this::onServerStopping);
         modContainer.registerConfig(ModConfig.Type.COMMON, GpuNoiseConfig.SPEC);
+    }
+
+    private void onServerStopping(ServerStoppingEvent event) {
+        GpuTerrainRuntime.stop();
+        warmedDevice = null;
     }
 
     private void onServerStarted(ServerStartedEvent event) {
