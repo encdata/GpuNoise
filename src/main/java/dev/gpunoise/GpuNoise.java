@@ -127,9 +127,12 @@ public final class GpuNoise {
             }
             var router = server.overworld().getChunkSource().randomState().router();
             GpuDensityGraph installedGraph = null;
+            // The complete router is useful for a startup parity diagnostic,
+            // but it is not the active terrain contract. Mods may add custom
+            // functions to unrelated roots (veins, aquifer helpers, etc.).
+            // Do not disable supported terrain roots merely because that
+            // diagnostic graph cannot represent an unrelated custom branch.
             try {
-                // Verify the entire router once at startup, but only execute
-                // the terrain and aquifer roots for each chunk cell grid.
                 GpuDensityGraph fullGraph = GpuDensityGraphLowerer.lower(GpuDensityGraphCompiler.compile(router));
                 GpuDensityGraphBuffer.Packed packedGraph = GpuDensityGraphBuffer.pack(fullGraph);
                 LOGGER.info("GPU density graph discovered: {} nodes, {} router roots, {} noise samplers; packed {} bytes for GPU lowering.",
@@ -144,6 +147,11 @@ public final class GpuNoise {
                     GpuTerrainRuntime.verifyTerrainGraph(fullGraph, router);
                     return null;
                 });
+            } catch (RuntimeException diagnosticFailure) {
+                LOGGER.info("GPU full-router parity diagnostic skipped: {}", diagnosticFailure.getMessage());
+            }
+
+            try {
                 GpuDensityGraph terrainGraph = GpuDensityGraphLowerer.lower(GpuDensityGraphCompiler.compileTerrain(router));
                 LOGGER.info("GPU terrain runtime graph: {} nodes, {} required terrain/aquifer roots.",
                         terrainGraph.nodes().size(), terrainGraph.routerRoots().length);
@@ -163,8 +171,8 @@ public final class GpuNoise {
                     });
                     GpuTerrainRuntime.warmTerrainGpu(settings);
                 }
-            } catch (RuntimeException fullGraphFailure) {
-                LOGGER.warn("Full router graph unavailable; strict GPU terrain is disabled for this server.", fullGraphFailure);
+            } catch (RuntimeException terrainFailure) {
+                LOGGER.warn("GPU terrain graph unavailable; vanilla terrain remains enabled: {}", terrainFailure.getMessage());
             }
             if (installedGraph != null) {
                 LOGGER.info("GPU terrain graph installed with {} terrain/aquifer roots.", GpuTerrainRoots.COUNT);
