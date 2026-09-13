@@ -82,13 +82,6 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
         return cache;
     }
 
-    @org.spongepowered.asm.mixin.injection.ModifyArg(method = "<init>", at = @At(value = "INVOKE",
-            target = "Lnet/minecraft/world/level/levelgen/DensityFunctions;cacheAllInCell(Lnet/minecraft/world/level/levelgen/DensityFunction;)Lnet/minecraft/world/level/levelgen/DensityFunction;"), index = 0)
-    private DensityFunction gpunoise$wrapFinalDensity(DensityFunction finalDensity) {
-        GpuTerrainProfiler.recordFinalDensityWrapperCreated();
-        return new GpuFinalDensity(finalDensity, beardifier, (NoiseChunk) (Object) this);
-    }
-
     /**
      * C2ME's compiled router path reaches the block-state lambda directly,
      * bypassing the DensityFunction wrapper above.  This redirect is the
@@ -136,58 +129,6 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
             }
         }
         return vanillaFunction.compute(context);
-    }
-
-    @Unique
-    private static final class GpuFinalDensity implements DensityFunction.SimpleFunction {
-        private final DensityFunction finalDensity;
-        private final DensityFunction beardifier;
-        private final NoiseChunk owner;
-
-        private GpuFinalDensity(DensityFunction finalDensity, DensityFunction beardifier, NoiseChunk owner) {
-            this.finalDensity = finalDensity;
-            this.beardifier = beardifier;
-            this.owner = owner;
-        }
-
-        @Override
-        public double compute(DensityFunction.FunctionContext context) {
-            GpuTerrainProfiler.recordFinalDensityWrapper();
-            GpuNoiseChunkAccess access = (GpuNoiseChunkAccess) (Object) owner;
-            GpuChunkDensityCache cache = access.gpunoise$gpuCache();
-            int minX = context.blockX() & ~15;
-            int minZ = context.blockZ() & ~15;
-            GpuChunkDensityCache active = GpuTerrainRuntime.activeFillCache();
-            if (active != null && access.gpunoise$matchesGpuCache(active)
-                    && active.matchesChunk(minX, minZ)) {
-                access.gpunoise$setGpuCache(active);
-                cache = active;
-            }
-            if (cache != null && cache.matchesChunk(minX, minZ)) {
-                double gpu = cache.density(context);
-                if (!Double.isNaN(gpu)) {
-                    GpuTerrainProfiler.recordGpuFinalDensity();
-                    GpuTerrainRuntime.markGpuCacheUsed(cache);
-                    return gpu + beardifier.compute(context);
-                }
-                if (cache.contains(context.blockX(), context.blockY(), context.blockZ())) {
-                    throw new IllegalStateException("Authoritative GPU density cache returned NaN at "
-                            + context.blockX() + "," + context.blockY() + "," + context.blockZ());
-                }
-            }
-            return finalDensity.compute(context) + beardifier.compute(context);
-        }
-
-        @Override
-        public DensityFunction mapAll(DensityFunction.Visitor visitor) {
-            return visitor.apply(new GpuFinalDensity(finalDensity.mapAll(visitor), beardifier.mapAll(visitor), owner));
-        }
-
-        @Override public double minValue() { return finalDensity.minValue() + beardifier.minValue(); }
-        @Override public double maxValue() { return finalDensity.maxValue() + beardifier.maxValue(); }
-        @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
-            return DensityFunctions.constant(0.0).codec();
-        }
     }
 
     @Unique
