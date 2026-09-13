@@ -13,15 +13,18 @@ import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 public final class GpuChunkDensityCache {
     private static final boolean READ_STATS_ENABLED = Boolean.getBoolean("gpunoise.profileTerrain");
     private static final ConcurrentHashMap<Long, GpuChunkDensityCache> PREFETCHED = new ConcurrentHashMap<>();
-    private final int minX, minZ, minY, cellWidth, cellHeight, cellsY, gridX, gridZ;
+    private final int minX, minZ, minY, cellWidth, cellHeight, cellsY, maxRelativeY, gridX, gridZ;
     private final boolean powerOfTwoCells;
     private final int cellWidthShift, cellHeightShift;
     private final float inverseCellWidth, inverseCellHeight;
     private final GpuTerrainGrid grid;
     private final CompletionStage<GpuTerrainBatchResult> result;
     private final GpuWorldgenDependency exact;
-    private volatile GpuTerrainRootsResult readyRoots;
-    private volatile GpuTerrainBlockResult readyBlocks;
+    // The completion stage publishes these fields before doFill is started.
+    // They are immutable afterward; keeping them non-volatile avoids a pair
+    // of volatile reads on every final-density lookup.
+    private GpuTerrainRootsResult readyRoots;
+    private GpuTerrainBlockResult readyBlocks;
     private final AtomicBoolean consumed = new AtomicBoolean();
     private final AtomicBoolean submitted = new AtomicBoolean();
     private final AtomicBoolean completed = new AtomicBoolean();
@@ -29,6 +32,13 @@ public final class GpuChunkDensityCache {
     private static final AtomicLong interpolatedReads = new AtomicLong();
     private static final AtomicLong blockReads = new AtomicLong();
     private static final AtomicLong lastReadLogBucket = new AtomicLong(-1L);
+    // doFill walks all block positions of a cell consecutively. Reuse the
+    // eight immutable final-density corners while evaluating that run.
+    private int cachedFinalGx = Integer.MIN_VALUE;
+    private int cachedFinalGy;
+    private int cachedFinalGz;
+    private float cachedFinal000, cachedFinal100, cachedFinal010, cachedFinal110;
+    private float cachedFinal001, cachedFinal101, cachedFinal011, cachedFinal111;
     // Terrain graph roots: final, initial, barrier, floodedness, spread, lava,
     // erosion, and depth.
     // All three are interpolated in one dispatch and kept in the same result
@@ -47,6 +57,7 @@ public final class GpuChunkDensityCache {
         this.inverseCellWidth = 1.0f / cellWidth;
         this.inverseCellHeight = 1.0f / cellHeight;
         this.cellsY = settings.height() / cellHeight;
+        this.maxRelativeY = cellsY * cellHeight;
         int width = 16 / cellWidth + 1;
         int depth = 16 / cellWidth + 1;
         this.gridX = width;
@@ -138,21 +149,25 @@ public final class GpuChunkDensityCache {
         int rx = context.blockX() - minX;
         int ry = context.blockY() - minY;
         int rz = context.blockZ() - minZ;
-        if ((rx | ry | rz) < 0 || rx > 16 || rz > 16 || ry > cellsY * cellHeight) return Double.NaN;
+        if ((rx | ry | rz) < 0 || rx > 16 || rz > 16 || ry > maxRelativeY) return Double.NaN;
         if (exact != null) return sampleExactRoot(rx, ry, rz, GpuTerrainRoots.FINAL_DENSITY);
         GpuTerrainRootsResult ready = readyRoots;
         if (ready == null) return Double.NaN;
-        GpuTerrainBlockResult blocks = readyBlocks;
-        if (blocks != null && !blocks.isEmpty()
-                && rx < 16 && ry < cellsY * cellHeight && rz < 16) {
-            if (READ_STATS_ENABLED) {
-                long direct = blockReads.incrementAndGet();
-                if ((direct & 0x3ffffL) == 0L) logReadStatistics();
+        if (GpuTerrainRuntime.terrainBlockOutputEnabled()) {
+            GpuTerrainBlockResult blocks = readyBlocks;
+            if (blocks != null && !blocks.isEmpty()
+                    && rx < 16 && ry < maxRelativeY && rz < 16) {
+                if (READ_STATS_ENABLED) {
+                    long direct = blockReads.incrementAndGet();
+                    if ((direct & 0x3ffffL) == 0L) logReadStatistics();
+                }
+                return blocks.finalValueAtUnchecked(rx, ry, rz);
             }
-            return blocks.finalValueAtUnchecked(rx, ry, rz);
         }
-        if (rx <= 16 && rz <= 16 && ry <= cellsY * cellHeight
-                && rx % cellWidth == 0 && ry % cellHeight == 0 && rz % cellWidth == 0) {
+        boolean aligned = powerOfTwoCells
+                ? ((rx & (cellWidth - 1)) | (ry & (cellHeight - 1)) | (rz & (cellWidth - 1))) == 0
+                : rx % cellWidth == 0 && ry % cellHeight == 0 && rz % cellWidth == 0;
+        if (rx <= 16 && rz <= 16 && ry <= maxRelativeY && aligned) {
             int gx = rx / cellWidth;
             int gy = ry / cellHeight;
             int gz = rz / cellWidth;
@@ -189,7 +204,7 @@ public final class GpuChunkDensityCache {
         int rx = x - minX, ry = y - minY, rz = z - minZ;
         if (exact != null) return exact.contains(x, y, z);
         return rx >= 0 && rz >= 0 && ry >= 0 && rx <= 16 && rz <= 16
-                && ry <= cellsY * cellHeight;
+                && ry <= maxRelativeY;
     }
     public double aquiferFloodedness(int x, int y, int z) {
         return rootDensity(x, y, z, GpuTerrainRoots.FLOODEDNESS);
@@ -254,11 +269,41 @@ public final class GpuChunkDensityCache {
             ty = (float)(ry - gy * cellHeight) * inverseCellHeight;
             tz = (float)(rz - gz * cellWidth) * inverseCellWidth;
         }
-        return lerp3(value(values, gx, gy, gz, root), value(values, gx + 1, gy, gz, root),
-                value(values, gx, gy + 1, gz, root), value(values, gx + 1, gy + 1, gz, root),
-                value(values, gx, gy, gz + 1, root), value(values, gx + 1, gy, gz + 1, root),
-                value(values, gx, gy + 1, gz + 1, root), value(values, gx + 1, gy + 1, gz + 1, root),
-                tx, ty, tz);
+        float c000, c100, c010, c110, c001, c101, c011, c111;
+        if (root == GpuTerrainRoots.FINAL_DENSITY
+                && gx == cachedFinalGx && gy == cachedFinalGy && gz == cachedFinalGz) {
+            c000 = cachedFinal000;
+            c100 = cachedFinal100;
+            c010 = cachedFinal010;
+            c110 = cachedFinal110;
+            c001 = cachedFinal001;
+            c101 = cachedFinal101;
+            c011 = cachedFinal011;
+            c111 = cachedFinal111;
+        } else {
+            c000 = value(values, gx, gy, gz, root);
+            c100 = value(values, gx + 1, gy, gz, root);
+            c010 = value(values, gx, gy + 1, gz, root);
+            c110 = value(values, gx + 1, gy + 1, gz, root);
+            c001 = value(values, gx, gy, gz + 1, root);
+            c101 = value(values, gx + 1, gy, gz + 1, root);
+            c011 = value(values, gx, gy + 1, gz + 1, root);
+            c111 = value(values, gx + 1, gy + 1, gz + 1, root);
+            if (root == GpuTerrainRoots.FINAL_DENSITY) {
+                cachedFinalGx = gx;
+                cachedFinalGy = gy;
+                cachedFinalGz = gz;
+                cachedFinal000 = c000;
+                cachedFinal100 = c100;
+                cachedFinal010 = c010;
+                cachedFinal110 = c110;
+                cachedFinal001 = c001;
+                cachedFinal101 = c101;
+                cachedFinal011 = c011;
+                cachedFinal111 = c111;
+            }
+        }
+        return lerp3(c000, c100, c010, c110, c001, c101, c011, c111, tx, ty, tz);
     }
 
     private float value(GpuTerrainRootsResult values, int gx, int gy, int gz, int root) {
