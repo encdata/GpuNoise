@@ -6,6 +6,9 @@ import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
 
 import java.util.List;
 import java.util.Set;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.LinkedHashSet;
 
 public final class GpuNoiseMixinPlugin implements IMixinConfigPlugin {
     @Override
@@ -25,7 +28,55 @@ public final class GpuNoiseMixinPlugin implements IMixinConfigPlugin {
         // The optional C2ME target is resolved by Mixin after plugin loading;
         // probing it here can use a different loader and incorrectly skip
         // the bridge when C2ME is present.
+        if (mixinClassName.endsWith("C2meCompiledDensityFunctionMixin")) {
+            return findClass(targetClassName) != null;
+        }
+        if (mixinClassName.endsWith("C2mePriorityBatchMixin")) {
+            Class<?> target = findClass(targetClassName);
+            return target != null
+                    && hasMethod(target, "updatePriorityFromLevelOnMain", long.class, int.class)
+                    && hasMethod(target, "setConsolidatingLevelUpdates", boolean.class)
+                    && hasField(target, "consolidatingLevelUpdates");
+        }
         return true;
+    }
+
+    private static Class<?> findClass(String name) {
+        Set<ClassLoader> loaders = new LinkedHashSet<>();
+        addLoader(loaders, GpuNoiseMixinPlugin.class.getClassLoader());
+        addLoader(loaders, Thread.currentThread().getContextClassLoader());
+        addLoader(loaders, ClassLoader.getSystemClassLoader());
+        for (ClassLoader loader : loaders) {
+            try {
+                return Class.forName(name, false, loader);
+            } catch (ClassNotFoundException | LinkageError ignored) {
+                // Try the next loader; NeoForge and C2ME can use separate
+                // transforming loaders during early server startup.
+            }
+        }
+        return null;
+    }
+
+    private static void addLoader(Set<ClassLoader> loaders, ClassLoader loader) {
+        while (loader != null && loaders.add(loader)) loader = loader.getParent();
+    }
+
+    private static boolean hasMethod(Class<?> type, String name, Class<?>... parameters) {
+        try {
+            Method method = type.getDeclaredMethod(name, parameters);
+            return method != null;
+        } catch (NoSuchMethodException ignored) {
+            return false;
+        }
+    }
+
+    private static boolean hasField(Class<?> type, String name) {
+        try {
+            Field field = type.getDeclaredField(name);
+            return field != null;
+        } catch (NoSuchFieldException ignored) {
+            return false;
+        }
     }
 
     @Override
