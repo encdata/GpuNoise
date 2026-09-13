@@ -28,4 +28,9 @@ final class GpuTerrainRootsResult {
             throw new IndexOutOfBoundsException();
         return values[offset + sample * roots + root];
     }
+
+    /** Caller has already validated the sample and root coordinates. */
+    float valueAtUnchecked(int sample, int root) {
+        return values[offset + sample * roots + root];
+    }
 }

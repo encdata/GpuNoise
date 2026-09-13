@@ -14,6 +14,9 @@ public final class GpuChunkDensityCache {
     private static final boolean READ_STATS_ENABLED = Boolean.getBoolean("gpunoise.profileTerrain");
     private static final ConcurrentHashMap<Long, GpuChunkDensityCache> PREFETCHED = new ConcurrentHashMap<>();
     private final int minX, minZ, minY, cellWidth, cellHeight, cellsY, gridX, gridZ;
+    private final boolean powerOfTwoCells;
+    private final int cellWidthShift, cellHeightShift;
+    private final float inverseCellWidth, inverseCellHeight;
     private final GpuTerrainGrid grid;
     private final CompletionStage<GpuTerrainBatchResult> result;
     private final GpuWorldgenDependency exact;
@@ -38,6 +41,11 @@ public final class GpuChunkDensityCache {
         this.minY = settings.minY();
         this.cellWidth = settings.getCellWidth();
         this.cellHeight = settings.getCellHeight();
+        this.powerOfTwoCells = Integer.bitCount(cellWidth) == 1 && Integer.bitCount(cellHeight) == 1;
+        this.cellWidthShift = powerOfTwoCells ? Integer.numberOfTrailingZeros(cellWidth) : 0;
+        this.cellHeightShift = powerOfTwoCells ? Integer.numberOfTrailingZeros(cellHeight) : 0;
+        this.inverseCellWidth = 1.0f / cellWidth;
+        this.inverseCellHeight = 1.0f / cellHeight;
         this.cellsY = settings.height() / cellHeight;
         int width = 16 / cellWidth + 1;
         int depth = 16 / cellWidth + 1;
@@ -229,12 +237,23 @@ public final class GpuChunkDensityCache {
         // for those endpoints instead of falling back to CPU evaluation.
         if (values == null || root < 0 || root >= ROOTS || rx < 0 || rz < 0 || ry < 0
                 || rx > 16 || rz > 16 || ry > cellsY * cellHeight) return Double.NaN;
-        int gx = Math.min(rx / cellWidth, gridX - 2);
-        int gy = Math.min(ry / cellHeight, cellsY - 1);
-        int gz = Math.min(rz / cellWidth, gridZ - 2);
-        float tx = (float)(rx - gx * cellWidth) / cellWidth;
-        float ty = (float)(ry - gy * cellHeight) / cellHeight;
-        float tz = (float)(rz - gz * cellWidth) / cellWidth;
+        int gx, gy, gz;
+        float tx, ty, tz;
+        if (powerOfTwoCells) {
+            gx = Math.min(rx >> cellWidthShift, gridX - 2);
+            gy = Math.min(ry >> cellHeightShift, cellsY - 1);
+            gz = Math.min(rz >> cellWidthShift, gridZ - 2);
+            tx = (rx - (gx << cellWidthShift)) * inverseCellWidth;
+            ty = (ry - (gy << cellHeightShift)) * inverseCellHeight;
+            tz = (rz - (gz << cellWidthShift)) * inverseCellWidth;
+        } else {
+            gx = Math.min(rx / cellWidth, gridX - 2);
+            gy = Math.min(ry / cellHeight, cellsY - 1);
+            gz = Math.min(rz / cellWidth, gridZ - 2);
+            tx = (float)(rx - gx * cellWidth) * inverseCellWidth;
+            ty = (float)(ry - gy * cellHeight) * inverseCellHeight;
+            tz = (float)(rz - gz * cellWidth) * inverseCellWidth;
+        }
         return lerp3(value(values, gx, gy, gz, root), value(values, gx + 1, gy, gz, root),
                 value(values, gx, gy + 1, gz, root), value(values, gx + 1, gy + 1, gz, root),
                 value(values, gx, gy, gz + 1, root), value(values, gx + 1, gy, gz + 1, root),
@@ -243,7 +262,7 @@ public final class GpuChunkDensityCache {
     }
 
     private float value(GpuTerrainRootsResult values, int gx, int gy, int gz, int root) {
-        return values.valueAt((gy * gridX + gx) * gridZ + gz, root);
+        return values.valueAtUnchecked((gy * gridX + gx) * gridZ + gz, root);
     }
 
     private double sampleExactRoot(int rx, int ry, int rz, int root) {
