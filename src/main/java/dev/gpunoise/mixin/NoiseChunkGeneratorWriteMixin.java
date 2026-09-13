@@ -47,11 +47,15 @@ abstract class NoiseChunkGeneratorWriteMixin {
     @org.spongepowered.asm.mixin.Unique
     private boolean gpunoise$lastWrittenBlockFluidCached;
 
+    @org.spongepowered.asm.mixin.Unique
+    private boolean gpunoise$gpuFillActive;
+
     @Inject(method = "fillFromNoise", at = @At("HEAD"), cancellable = true)
     private void gpunoise$asyncBatchFill(Blender blender, RandomState randomState, StructureManager structures,
                                          ChunkAccess chunk,
                                          CallbackInfoReturnable<CompletableFuture<ChunkAccess>> callback) {
-        if (!GpuTerrainRuntime.gpuOnlyWorldgenAvailable()) return;
+        if (!GpuTerrainRuntime.gpuOnlyWorldgenAvailable()
+                || !GpuTerrainRuntime.matchesTerrainRouter(randomState)) return;
         NoiseSettings settings = generatorSettings().value().noiseSettings()
                 .clampToHeightAccessor(chunk.getHeightAccessorForGeneration());
         int minCellY = Mth.floorDiv(settings.minY(), settings.getCellHeight());
@@ -85,6 +89,7 @@ abstract class NoiseChunkGeneratorWriteMixin {
         }
         try {
             GpuTerrainRuntime.bindFillCache(cache);
+            gpunoise$gpuFillActive = true;
             gpunoise$debugVoidTerrain = SharedConstants.debugVoidTerrain(chunk.getPos());
             gpunoise$debugVoidTerrainCached = true;
             long fillStart = GpuTerrainProfiler.beginFill();
@@ -92,6 +97,7 @@ abstract class NoiseChunkGeneratorWriteMixin {
                 return gpunoise$doFill(blender, structures, randomState, chunk, minCellY, cellCountY);
             } finally {
                 GpuTerrainProfiler.endFill(fillStart);
+                gpunoise$gpuFillActive = false;
                 gpunoise$debugVoidTerrainCached = false;
                 GpuTerrainRuntime.clearFillCache();
             }
@@ -115,7 +121,10 @@ abstract class NoiseChunkGeneratorWriteMixin {
             )
     )
     private BlockState gpunoise$writeWithoutSectionLock(
-            LevelChunkSection section, int x, int y, int z, BlockState state, boolean ignored) {
+                                                  LevelChunkSection section, int x, int y, int z, BlockState state, boolean ignored) {
+        if (!gpunoise$gpuFillActive) {
+            return section.setBlockState(x, y, z, state, ignored);
+        }
         gpunoise$lastWrittenBlockHasFluid = ((GpuLevelChunkSectionAccess) (Object) section)
                 .gpunoise$writeGpuBlock((y << 4 | z) << 4 | x, state);
         gpunoise$lastWrittenBlockFluidCached = true;
@@ -133,6 +142,9 @@ abstract class NoiseChunkGeneratorWriteMixin {
     private boolean gpunoise$updateHeightmapDescending(
             net.minecraft.world.level.levelgen.Heightmap heightmap,
             int x, int y, int z, BlockState state) {
+        if (!gpunoise$gpuFillActive) {
+            return heightmap.update(x, y, z, state);
+        }
         if (heightmap instanceof GpuHeightmapAccess fast
                 && fast.gpunoise$tryDescendingWrite(x, y, z, state)) {
             return true;
@@ -148,6 +160,10 @@ abstract class NoiseChunkGeneratorWriteMixin {
             )
     )
     private boolean gpunoise$reuseWrittenFluidState(net.minecraft.world.level.material.FluidState fluidState) {
+        if (!gpunoise$gpuFillActive) {
+            gpunoise$lastWrittenBlockFluidCached = false;
+            return fluidState.isEmpty();
+        }
         if (gpunoise$lastWrittenBlockFluidCached) {
             gpunoise$lastWrittenBlockFluidCached = false;
             return !gpunoise$lastWrittenBlockHasFluid;
@@ -168,7 +184,7 @@ abstract class NoiseChunkGeneratorWriteMixin {
             )
     )
     private boolean gpunoise$cachedDebugVoidTerrain(net.minecraft.world.level.ChunkPos pos) {
-        if (gpunoise$debugVoidTerrainCached) {
+        if (gpunoise$gpuFillActive && gpunoise$debugVoidTerrainCached) {
             return gpunoise$debugVoidTerrain;
         }
         return SharedConstants.debugVoidTerrain(pos);

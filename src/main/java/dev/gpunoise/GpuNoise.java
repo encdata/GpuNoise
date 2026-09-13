@@ -139,7 +139,7 @@ public final class GpuNoise {
                     GpuTerrainRuntime.verifyCompactTerrainGraph(terrainGraph, router);
                     return null;
                 });
-                GpuTerrainRuntime.installTerrainGraph(terrainGraph);
+                GpuTerrainRuntime.installTerrainGraph(terrainGraph, router);
                 installedGraph = terrainGraph;
                 if (server.overworld().getChunkSource().getGenerator()
                         instanceof NoiseBasedChunkGenerator noiseGenerator) {

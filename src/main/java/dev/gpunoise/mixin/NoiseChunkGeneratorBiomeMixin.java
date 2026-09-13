@@ -29,12 +29,13 @@ abstract class NoiseChunkGeneratorBiomeMixin {
             RandomState randomState, Blender blender, StructureManager structures, ChunkAccess chunk,
             Operation<CompletableFuture<ChunkAccess>> original) {
         if (!GpuTerrainRuntime.c2meDfcAvailable()
-                || !GpuTerrainRuntime.gpuOnlyWorldgenAvailable()) {
+                || !GpuTerrainRuntime.gpuOnlyWorldgenAvailable()
+                || !GpuTerrainRuntime.matchesTerrainRouter(randomState)) {
             return original.call(randomState, blender, structures, chunk);
         }
         NoiseSettings settings = generatorSettings().value().noiseSettings()
                 .clampToHeightAccessor(chunk.getHeightAccessorForGeneration());
-        return GpuTerrainRuntime.prepareChunkForBiomes(chunk, settings).thenComposeAsync(cache -> {
+        return GpuTerrainRuntime.prepareChunkForBiomes(randomState, chunk, settings).thenComposeAsync(cache -> {
             GpuTerrainRuntime.bindFillCache(cache);
             try {
                 return original.call(randomState, blender, structures, chunk)

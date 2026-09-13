@@ -29,6 +29,8 @@ public final class GpuTerrainRuntime {
     private static volatile GpuTerrainGraphProvider terrainProvider;
     private static volatile VulkanSubmissionRing terrainRing;
     private static volatile GpuDensityGraph terrainGraph;
+    /** The exact router used to build and parity-check terrainGraph. */
+    private static volatile NoiseRouter terrainRouter;
     /** Full per-block readback is retained only as an explicit diagnostic fallback. */
     private static final boolean FULL_BLOCK_OUTPUT = Boolean.getBoolean("gpunoise.fullBlockOutput");
     private static final GpuChunkPipelineGate chunkPipelineGate = new GpuChunkPipelineGate(
@@ -133,6 +135,12 @@ public final class GpuTerrainRuntime {
         return c2meDfcAvailable() && terrainInputsAvailable() && terrainRootsScheduler != null;
     }
 
+    /** Prevents an overworld graph from being used by another dimension or generator. */
+    public static boolean matchesTerrainRouter(RandomState randomState) {
+        NoiseRouter installed = terrainRouter;
+        return installed != null && randomState != null && randomState.router() == installed;
+    }
+
     /**
      * Starts exactly one cell-lattice request for a chunk.  This is the only
      * submission point for authoritative fillFromNoise work: callers receive
@@ -141,7 +149,7 @@ public final class GpuTerrainRuntime {
     public static java.util.concurrent.CompletableFuture<GpuChunkDensityCache> prepareChunk(
             Blender blender, RandomState randomState, StructureManager structures, ChunkAccess chunk,
             int minCellY, int cellCountY, NoiseSettings settings) {
-        if (!gpuOnlyWorldgenAvailable() || cellCountY <= 0) {
+        if (!gpuOnlyWorldgenAvailable() || !matchesTerrainRouter(randomState) || cellCountY <= 0) {
             cpuFallbackChunks.incrementAndGet();
             return java.util.concurrent.CompletableFuture.failedFuture(
                     new IllegalStateException("GPU terrain pipeline is unavailable"));
@@ -160,8 +168,8 @@ public final class GpuTerrainRuntime {
     }
 
     public static java.util.concurrent.CompletableFuture<GpuChunkDensityCache> prepareChunkForBiomes(
-            ChunkAccess chunk, NoiseSettings settings) {
-        if (!gpuOnlyWorldgenAvailable()) {
+            RandomState randomState, ChunkAccess chunk, NoiseSettings settings) {
+        if (!gpuOnlyWorldgenAvailable() || !matchesTerrainRouter(randomState)) {
             return java.util.concurrent.CompletableFuture.failedFuture(
                     new IllegalStateException("GPU terrain pipeline is unavailable"));
         }
@@ -214,13 +222,14 @@ public final class GpuTerrainRuntime {
         GPU_DENSITY_REQUIRED.set(Boolean.FALSE);
     }
 
-    static synchronized void installTerrainGraph(GpuDensityGraph graph) {
+    static synchronized void installTerrainGraph(GpuDensityGraph graph, NoiseRouter router) {
         if (engine == null) throw new IllegalStateException("GPU engine is not started");
         if (terrainScheduler != null) terrainScheduler.close();
         if (terrainProvider != null) terrainProvider.close();
         if (terrainRootsScheduler != null) terrainRootsScheduler.close();
         terrainRing = submissionRing;
         terrainGraph = graph;
+        terrainRouter = router;
         GpuNoise.LOGGER.info("GPU terrain graph registerCount={}", graph.registerCount());
         terrainRootsScheduler = new GpuTerrainRootsBatchScheduler();
         terrainProvider = null;
