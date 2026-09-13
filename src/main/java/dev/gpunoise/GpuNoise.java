@@ -113,6 +113,11 @@ public final class GpuNoise {
     private void installWorldGraph(MinecraftServer server) {
         GpuDevice device = warmedDevice;
         try {
+            if (!(server.overworld().getChunkSource().getGenerator()
+                    instanceof NoiseBasedChunkGenerator)) {
+                LOGGER.info("GPU terrain skipped: overworld generator is not NoiseBasedChunkGenerator.");
+                return;
+            }
             var router = server.overworld().getChunkSource().randomState().router();
             GpuDensityGraph installedGraph = null;
             try {
