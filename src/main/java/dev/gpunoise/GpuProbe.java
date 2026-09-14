@@ -24,9 +24,28 @@ final class GpuProbe {
         try {
             return VulkanBootstrapThread.call(() -> findPreferredDeviceOnThread(preference));
         } catch (Throwable failure) {
-            GpuNoise.LOGGER.warn("Vulkan probe failed; leaving vanilla terrain enabled.", failure);
+            if (containsUnsatisfiedLinkError(failure)) {
+                GpuNoise.LOGGER.warn("GPU Noise inactive: the system Vulkan loader/driver is unavailable ({}); install a Vulkan runtime and GPU driver.",
+                        nativeFailureMessage(failure));
+            } else {
+                GpuNoise.LOGGER.warn("Vulkan probe failed; leaving vanilla terrain enabled.", failure);
+            }
             return null;
         }
+    }
+
+    private static boolean containsUnsatisfiedLinkError(Throwable failure) {
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            if (current instanceof UnsatisfiedLinkError) return true;
+        }
+        return false;
+    }
+
+    private static String nativeFailureMessage(Throwable failure) {
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            if (current instanceof UnsatisfiedLinkError linkError) return linkError.getMessage();
+        }
+        return failure.getMessage();
     }
 
     private static GpuDevice findPreferredDeviceOnThread(GpuNoiseConfig.GpuVendorPreference preference) {
