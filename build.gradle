@@ -56,7 +56,12 @@ runs {
         // Please read: https://stackoverflow.com/questions/2031163/when-to-use-the-different-log-levels
         systemProperty 'forge.logging.console.level', 'debug'
 
-        workingDirectory project.layout.projectDirectory.dir('run').dir(name)
+        // Keep the normal per-run directories, but allow isolated benchmark
+        // launches to use a separate game directory without colliding with a
+        // server that is already running in run/server.
+        def configuredRunDirectory = providers.gradleProperty('gpunoiseRunDir')
+                .orElse("run/${name}")
+        workingDirectory project.file(configuredRunDirectory.get())
 
         modSource project.sourceSets.main
     }
@@ -74,6 +79,10 @@ runs {
         systemProperty 'gpunoise.profileTerrain', System.getProperty('gpunoise.profileTerrain', 'false')
         systemProperty 'gpunoise.disableChunkWriter', System.getProperty('gpunoise.disableChunkWriter', 'false')
         argument '--nogui'
+        def configuredServerPort = providers.gradleProperty('gpunoiseServerPort')
+        if (configuredServerPort.isPresent()) {
+            arguments.addAll '--port', configuredServerPort.get()
+        }
     }
 
     // This run config launches GameTestServer and runs all registered gametests, then exits.
@@ -124,6 +133,13 @@ dependencies {
             prefer lwjgl_version
         }
     }
+    // LWJGL's Java bindings are not enough for standalone servers. Include
+    // all platform native payloads in the legacy -all artifact; LWJGL picks
+    // the matching one at runtime (liblwjgl.so on Linux, lwjgl.dll on
+    // Windows, and liblwjgl.dylib on macOS).
+    jarJar(implementation("org.lwjgl:lwjgl:${lwjgl_version}:natives-windows"))
+    jarJar(implementation("org.lwjgl:lwjgl:${lwjgl_version}:natives-linux"))
+    jarJar(implementation("org.lwjgl:lwjgl:${lwjgl_version}:natives-macos"))
     // NeoGradle 7 uses this configuration for ordinary libraries in dev runs.
     localRunRuntime "org.lwjgl:lwjgl-vulkan:${lwjgl_version}"
     localRunRuntime "org.lwjgl:lwjgl:${lwjgl_version}"
