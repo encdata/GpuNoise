@@ -107,6 +107,7 @@ runs {
 // "optional", meaning it will not be pulled by dependents of this mod.
 configurations {
     runtimeClasspath.extendsFrom localRuntime
+    lwjglNatives
 }
 
 dependencies {
@@ -133,13 +134,14 @@ dependencies {
             prefer lwjgl_version
         }
     }
-    // LWJGL's Java bindings are not enough for standalone servers. Include
-    // all platform native payloads in the legacy -all artifact; LWJGL picks
-    // the matching one at runtime (liblwjgl.so on Linux, lwjgl.dll on
-    // Windows, and liblwjgl.dylib on macOS).
-    jarJar(implementation("org.lwjgl:lwjgl:${lwjgl_version}:natives-windows"))
-    jarJar(implementation("org.lwjgl:lwjgl:${lwjgl_version}:natives-linux"))
-    jarJar(implementation("org.lwjgl:lwjgl:${lwjgl_version}:natives-macos"))
+    // Keep native payloads out of Jar-in-Jar module metadata. Native
+    // classifiers share org.lwjgl's Maven identifier with the Java core jar;
+    // registering them as modules can make NeoForge select a native jar in
+    // place of org.lwjgl. They are flattened into the standalone artifact
+    // below, where LWJGL's loader discovers the platform resource directly.
+    lwjglNatives "org.lwjgl:lwjgl:${lwjgl_version}:natives-windows"
+    lwjglNatives "org.lwjgl:lwjgl:${lwjgl_version}:natives-linux"
+    lwjglNatives "org.lwjgl:lwjgl:${lwjgl_version}:natives-macos"
     // NeoGradle 7 uses this configuration for ordinary libraries in dev runs.
     localRunRuntime "org.lwjgl:lwjgl-vulkan:${lwjgl_version}"
     localRunRuntime "org.lwjgl:lwjgl:${lwjgl_version}"
@@ -165,6 +167,17 @@ dependencies {
     // For more info:
     // http://www.gradle.org/docs/current/userguide/artifact_dependencies_tutorial.html
     // http://www.gradle.org/docs/current/userguide/dependency_management.html
+}
+
+// Include platform native resources without adding duplicate module entries
+// to META-INF/jarjar/metadata.json.
+def lwjglNativeTrees = configurations.lwjglNatives.collect { zipTree(it) }
+tasks.named('jarJar') {
+    from(lwjglNativeTrees) {
+        include 'windows/**'
+        include 'linux/**'
+        include 'macos/**'
+    }
 }
 
 // Client/integrated-server variant: retain the Vulkan binding, but omit the
