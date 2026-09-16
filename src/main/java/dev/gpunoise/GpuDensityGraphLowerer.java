@@ -10,7 +10,7 @@ import java.util.List;
 final class GpuDensityGraphLowerer {
     private static final Set<String> SUPPORTED = Set.of(
             "Constant", "Noise", "Ap2", "MulOrAdd", "Clamp", "Mapped", "Marker",
-            "Shift", "ShiftA", "ShiftB", "ShiftedNoise", "Spline", "BlendedNoise", "YClampedGradient", "BlendDensity", "RangeChoice", "WeirdScaledSampler"
+            "Shift", "ShiftA", "ShiftB", "ShiftedNoise", "TectonicConfigNoise", "TectonicInvert", "Spline", "BlendedNoise", "YClampedGradient", "BlendDensity", "RangeChoice", "WeirdScaledSampler"
     );
 
     private GpuDensityGraphLowerer() {}

@@ -18,6 +18,7 @@ import static org.lwjgl.vulkan.VK10.*;
 /** Reusable Vulkan resources for repeated NormalNoise submissions. */
 final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     static final int CAPACITY = 262_144;
+    static final int GRAPH_NODE_CAPACITY = 2048;
     // interpolationOutput stores the compact per-block final-density output.
     static final int INTERPOLATION_OUTPUT_FLOATS = CAPACITY * 16;
     private final VkInstance instance;
@@ -74,7 +75,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             coordinates = buffer(CAPACITY * 32L, stack); // 32-byte global-noise sample records
             // Graph dispatches can return up to 16 router roots per sample.
             results = buffer(CAPACITY * 16L * 4L, stack);
-            graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack); graphNodes = deviceLocalBuffer(1024L * GpuDensityGraphBuffer.NODE_BYTES, stack); graphSplinePoints = deviceLocalBuffer(1024L * 64L * 16L, stack); graphBlendedMetadata = deviceLocalBuffer(1024L * 192L, stack); graphBlendInputs = hostVisibleBuffer(CAPACITY * 8L, stack); graphRoots = deviceLocalBuffer(64L, stack);
+            graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack); graphNodes = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack); graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 64L * 16L, stack); graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack); graphBlendInputs = hostVisibleBuffer(CAPACITY * 8L, stack); graphRoots = deviceLocalBuffer(64L, stack);
             interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack); interpolationOutput = buffer((long) CAPACITY * 16L * Float.BYTES, stack);
             permutations = deviceLocalBuffer(8 * 1024 * 1024L, stack); octaves = deviceLocalBuffer(8 * 1024 * 1024L, stack); samplerMetadata = deviceLocalBuffer(64 * 1024L, stack);
             shader = shader(stack); descriptorLayout = descriptorLayout(stack); pipelineLayout = pipelineLayout(stack);
@@ -112,9 +113,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             coordinates = buffer(CAPACITY * 32L, stack);
             results = buffer(CAPACITY * 16L * 4L, stack);
             graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack);
-            graphNodes = deviceLocalBuffer(1024L * GpuDensityGraphBuffer.NODE_BYTES, stack);
-            graphSplinePoints = deviceLocalBuffer(1024L * 64L * 16L, stack);
-            graphBlendedMetadata = deviceLocalBuffer(1024L * 192L, stack);
+            graphNodes = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack);
+            graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 64L * 16L, stack);
+            graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack);
             graphBlendInputs = hostVisibleBuffer(CAPACITY * 8L, stack);
             graphRoots = deviceLocalBuffer(64L, stack);
             interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack); interpolationOutput = buffer((long) CAPACITY * 16L * Float.BYTES, stack);
@@ -157,7 +158,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     synchronized float[] submitGraph(GpuDensityGraph graph, float[] xs, float[] ys, float[] zs, int resultNode) throws Exception {
         if (xs.length != ys.length || xs.length != zs.length || xs.length > CAPACITY) throw new IllegalArgumentException("invalid graph batch");
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
-        if (packed.nodeCount() > 1024) throw new IllegalArgumentException("density graph exceeds GPU node capacity");
+        if (packed.nodeCount() > GRAPH_NODE_CAPACITY) throw new IllegalArgumentException("density graph exceeds GPU node capacity");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ByteBuffer coords = stack.malloc(xs.length * 16).order(ByteOrder.nativeOrder());
             for (int i = 0; i < xs.length; i++) coords.putFloat(xs[i]).putFloat(ys[i]).putFloat(zs[i]).putFloat(0);
@@ -205,7 +206,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             throw new IllegalArgumentException("invalid graph batch");
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
         int rootCount = graph.routerRoots().length;
-        if (packed.nodeCount() > 1024 || rootCount > 16) throw new IllegalArgumentException("density graph exceeds GPU capacity");
+        if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16) throw new IllegalArgumentException("density graph exceeds GPU capacity");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
             ByteBuffer coords = stack.malloc(sampleCount * 16).order(ByteOrder.nativeOrder());
@@ -254,7 +255,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             throw new IllegalArgumentException("invalid graph batch");
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
         int rootCount = graph.routerRoots().length;
-        if (packed.nodeCount() > 1024 || rootCount > 16) throw new IllegalArgumentException("density graph exceeds GPU capacity");
+        if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16) throw new IllegalArgumentException("density graph exceeds GPU capacity");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
             ByteBuffer coords = stack.malloc(sampleCount * 16).order(ByteOrder.nativeOrder());
@@ -308,7 +309,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         GpuDensityGraph graph = GpuTerrainRuntime.currentTerrainGraph();
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
         int rootCount = graph.routerRoots().length;
-        if (packed.nodeCount() > 1024 || rootCount > 16) throw new IllegalArgumentException("density graph exceeds GPU capacity");
+        if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16) throw new IllegalArgumentException("density graph exceeds GPU capacity");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
             put(graphCoordinates, metadata, stack);
@@ -407,7 +408,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         int outputRoots = GpuTerrainRuntime.terrainBlockOutputRootCount();
         int sampleCount = Math.multiplyExact(chunkCount, samplesPerChunk);
         int blockCount = Math.multiplyExact(chunkCount, blocksPerChunk);
-        if (packed.nodeCount() > 1024 || rootCount > 16 || outputRoots > rootCount
+        if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16 || outputRoots > rootCount
                 || (long) sampleCount * rootCount * Float.BYTES > results.size
                 || (long) blockCount * outputRoots * Float.BYTES > interpolationOutput.size)
             throw new IllegalArgumentException("grid interpolation batch exceeds GPU capacity");
@@ -489,7 +490,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         int rootCount = graph.routerRoots().length;
         int blockCount = Math.multiplyExact(chunkCount, blocksPerChunk);
         int outputRoots = GpuTerrainRuntime.terrainOutputRootCount();
-        if (packed.nodeCount() > 1024 || rootCount > 16 || outputRoots > rootCount
+        if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16 || outputRoots > rootCount
                 || metadata.remaining() > interpolationMetadata.size
                 || blockCount * outputRoots * 4L > interpolationOutput.size) throw new IllegalArgumentException("fused batch exceeds GPU capacity");
         try (MemoryStack stack = MemoryStack.stackPush()) {

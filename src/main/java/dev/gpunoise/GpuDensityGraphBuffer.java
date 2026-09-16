@@ -19,7 +19,7 @@ final class GpuDensityGraphBuffer {
             Map.entry("MulOrAdd", 4), Map.entry("Clamp", 5), Map.entry("Mapped", 6),
             Map.entry("Marker", 7), Map.entry("Shift", 8), Map.entry("ShiftA", 9),
             Map.entry("ShiftB", 10), Map.entry("ShiftedNoise", 11), Map.entry("Spline", 12),
-            Map.entry("BlendedNoise", 13), Map.entry("YClampedGradient", 14), Map.entry("BlendDensity", 15), Map.entry("RangeChoice", 16), Map.entry("WeirdScaledSampler", 17)
+            Map.entry("BlendedNoise", 13), Map.entry("YClampedGradient", 14), Map.entry("BlendDensity", 15), Map.entry("RangeChoice", 16), Map.entry("WeirdScaledSampler", 17), Map.entry("TectonicConfigNoise", 18), Map.entry("TectonicInvert", 19)
     );
 
     private GpuDensityGraphBuffer() {}
@@ -172,6 +172,8 @@ final class GpuDensityGraphBuffer {
             case "SQUEEZE" -> 10;
             case "TYPE1" -> 0;
             case "TYPE2" -> 1;
+            case "true" -> 1;
+            case "false" -> 0;
             default -> Math.abs(payload.hashCode());
         };
     }
