@@ -103,7 +103,8 @@ parity checks.
   cosine, float/double floor and ceiling to saturated Java integers, integer
   absolute value, and wrapping integer square overloads are lowered explicitly.
   `Mth.sin` and `Mth.cos` use dedicated float-rounded IR mappings, distinct
-  from double `Math` operations; `Math.signum(float)` and
+  from double `Math` operations; `Mth.sqrt(float)` has its own float-rounded
+  mapping. `Math.signum(float)` and
   `Math.signum(double)` retain their respective input precision.
   Minecraft's indexed sine table is generated once and uploaded to persistent
   graph storage, preserving vanilla's angle quantization without per-dispatch

@@ -18,7 +18,7 @@ public final class GpuDensityExpression {
     public enum Operation { ADD, SUBTRACT, MULTIPLY, DIVIDE, MIN, MAX, REMAINDER, ATAN2, POW }
     public enum Mapping {
         ABS, SQUARE, CUBE, HALF_NEGATIVE, QUARTER_NEGATIVE, SQUEEZE,
-        FLOOR, CEIL, SQRT, SIN, COS, EXP, LOG, TANH, SIN_FLOAT, COS_FLOAT
+        FLOOR, CEIL, SQRT, SIN, COS, EXP, LOG, TANH, SIN_FLOAT, COS_FLOAT, SQRT_FLOAT
     }
     public enum Coordinate { X, Y, Z }
     public enum Backend { POINT_SAMPLE, TERRAIN_GRID }
@@ -236,6 +236,7 @@ public final class GpuDensityExpression {
                         case FLOOR -> Math.floor(input);
                         case CEIL -> Math.ceil(input);
                         case SQRT -> Math.sqrt(input);
+                        case SQRT_FLOAT -> (double) (float) Math.sqrt((float) input);
                         case SIN -> Math.sin(input);
                         case COS -> Math.cos(input);
                         case SIN_FLOAT -> (double) GpuDensityGraphBuffer.mthSin((float) input);
@@ -588,6 +589,7 @@ public final class GpuDensityExpression {
                 case FLOOR -> Math.floor(input);
                 case CEIL -> Math.ceil(input);
                 case SQRT -> Math.sqrt(input);
+                case SQRT_FLOAT -> (double) (float) Math.sqrt((float) input);
                 case SIN -> Math.sin(input);
                 case COS -> Math.cos(input);
                 case SIN_FLOAT -> (double) GpuDensityGraphBuffer.mthSin((float) input);

@@ -582,6 +582,15 @@ final class GpuDensityBytecodeCompiler {
         }
 
         private void mathCall(String owner, String name, String descriptor, Value[] arguments) {
+            if (owner.equals("net/minecraft/util/Mth") && name.equals("sqrt")
+                    && descriptor.equals("(F)F") && arguments.length == 1) {
+                Value input = arguments[0];
+                int result = builder.map(GpuDensityExpression.Mapping.SQRT_FLOAT, input.expression());
+                Double constant = input.constant() == null ? null
+                        : (double) (float) Math.sqrt(input.constant().floatValue());
+                stack.add(Value.value(result, constant));
+                return;
+            }
             if (owner.equals("net/minecraft/util/Mth") && arguments.length == 1
                     && descriptor.equals("(F)F")
                     && (name.equals("sin") || name.equals("cos"))) {

@@ -266,6 +266,7 @@ double mapValue(double x,uint op){
     if(op==17u)return double(log(float(x)));
     if(op==19u)return double(mthSinValues[uint(int(float(x)*10430.378)&65535)]);
     if(op==20u)return double(mthSinValues[uint(int(float(x)*10430.378+16384.0)&65535)]);
+    if(op==21u)return double(sqrt(float(x)));
     if(op==18u){
         float value=float(x);
         if(value>10.0)return 1.0;

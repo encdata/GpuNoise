@@ -253,6 +253,7 @@ final class GpuDensityGraphBuffer {
             case "TANH" -> 18;
             case "SIN_FLOAT" -> 19;
             case "COS_FLOAT" -> 20;
+            case "SQRT_FLOAT" -> 21;
             case "IADD" -> 1;
             case "ISUB" -> 2;
             case "IMUL" -> 3;

@@ -983,6 +983,7 @@ final class GpuDensityExpressionSmoke {
                     + net.minecraft.util.Mth.ceil(z * 0.1) * 0.01
                     + net.minecraft.util.Mth.sin(fx) * 0.1F
                     + net.minecraft.util.Mth.cos(fx) * 0.1F
+                    + net.minecraft.util.Mth.sqrt(net.minecraft.util.Mth.abs(fx)) * 0.001F
                     + net.minecraft.util.Mth.abs(x) * 1.0e-9
                     + net.minecraft.util.Mth.square(x) * 1.0e-12;
         }
