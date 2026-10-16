@@ -127,6 +127,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new DefaultInterfaceDensity());
     }
 
+    static VulkanBranchFixture recordConfigurationFixture() {
+        return graphFixture(new RecordConfigurationDensity());
+    }
+
     static VulkanBranchFixture minecraftMathOverloadsFixture() {
         return graphFixture(new MinecraftMathOverloadsDensity());
     }
@@ -512,6 +516,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new ConstantArrayHelperDensity(), "constant-index terrain arrays");
         verifyStandaloneMath(new InheritedComputeDensity(), "inherited terrain compute implementation");
         verifyStandaloneMath(new DefaultInterfaceDensity(), "default interface terrain compute implementation");
+        verifyStandaloneMath(new RecordConfigurationDensity(), "immutable terrain record configuration");
         verifyStandaloneMath(new MinecraftMathOverloadsDensity(), "Mth float and integer overloads");
         verifyStandaloneMath(new DynamicClampDensity(), "dynamic Mth.clamp overloads");
 
@@ -1172,6 +1177,18 @@ final class GpuDensityExpressionSmoke {
     }
 
     private static final class DefaultInterfaceDensity implements DefaultInterfaceTerrainDensity {}
+
+    private record TerrainShapeParameters(double horizontalScale, double verticalScale) {}
+
+    private static final class RecordConfigurationDensity extends NumericSmokeDensity {
+        private final TerrainShapeParameters parameters = new TerrainShapeParameters(0.03125, 0.125);
+
+        @Override public double compute(FunctionContext context) {
+            double x = context.blockX() * parameters.horizontalScale();
+            double y = context.blockY() * parameters.verticalScale();
+            return Math.sin(x) * 0.25 + Math.abs(y) * 0.01;
+        }
+    }
 
     private static final class MinecraftMathOverloadsDensity extends NumericSmokeDensity {
         @Override public double compute(FunctionContext context) {

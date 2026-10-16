@@ -120,6 +120,65 @@ final class GpuDensityBytecodeCompiler {
         return null;
     }
 
+    private record ResolvedMethod(ClassNode owner, MethodNode method) {}
+
+    private static ResolvedMethod resolveHelperMethod(Class<?> receiverType, String symbolicOwner,
+                                                       String name, String descriptor,
+                                                       boolean staticCall) {
+        Class<?> symbolicClass = resolveOwnerClass(receiverType, symbolicOwner);
+        if (staticCall) {
+            for (Class<?> current = symbolicClass; current != null; current = current.getSuperclass()) {
+                ClassNode node = readClassNode(receiverType, Type.getInternalName(current));
+                MethodNode method = findMethod(node, name, descriptor);
+                if (method != null && (method.access & Opcodes.ACC_STATIC) != 0)
+                    return new ResolvedMethod(node, method);
+            }
+            return null;
+        }
+        if (!symbolicClass.isAssignableFrom(receiverType)) return null;
+        if (!symbolicClass.isInterface()) {
+            boolean reachedSymbolicOwner = false;
+            for (Class<?> current = receiverType; current != null; current = current.getSuperclass()) {
+                if (current == symbolicClass) reachedSymbolicOwner = true;
+                if (!reachedSymbolicOwner && !symbolicClass.isAssignableFrom(current)) continue;
+                ClassNode node = readClassNode(receiverType, Type.getInternalName(current));
+                MethodNode method = findMethod(node, name, descriptor);
+                if (method == null || (method.access & (Opcodes.ACC_STATIC | Opcodes.ACC_ABSTRACT)) != 0)
+                    continue;
+                if (current != symbolicClass && (method.access & Opcodes.ACC_PRIVATE) != 0) continue;
+                return new ResolvedMethod(node, method);
+            }
+        }
+
+        Set<Class<?>> interfaces = new HashSet<>();
+        collectInterfaces(symbolicClass.isInterface() ? new Class<?>[]{symbolicClass}
+                : symbolicClass.getInterfaces(), interfaces);
+        List<ResolvedMethod> candidates = new ArrayList<>();
+        for (Class<?> type : interfaces) {
+            ClassNode node = readClassNode(receiverType, Type.getInternalName(type));
+            MethodNode method = findMethod(node, name, descriptor);
+            if (method != null && (method.access & (Opcodes.ACC_STATIC | Opcodes.ACC_ABSTRACT)) == 0)
+                candidates.add(new ResolvedMethod(node, method));
+        }
+        ResolvedMethod selected = null;
+        for (ResolvedMethod candidate : candidates) {
+            Class<?> candidateType = resolveOwnerClass(receiverType, candidate.owner().name);
+            boolean shadowed = false;
+            for (ResolvedMethod other : candidates) {
+                Class<?> otherType = resolveOwnerClass(receiverType, other.owner().name);
+                if (candidateType != otherType && candidateType.isAssignableFrom(otherType)) {
+                    shadowed = true;
+                    break;
+                }
+            }
+            if (!shadowed) {
+                if (selected != null) return null;
+                selected = candidate;
+            }
+        }
+        return selected;
+    }
+
     private static Class<?> findDefaultComputeInterface(Class<?> densityType) {
         Set<Class<?>> interfaces = new HashSet<>();
         for (Class<?> current = densityType; current != null; current = current.getSuperclass()) {
@@ -191,18 +250,36 @@ final class GpuDensityBytecodeCompiler {
         return false;
     }
 
+    private static boolean isObjectHierarchyOwner(Class<?> objectType, String internalName) {
+        for (Class<?> current = objectType; current != null; current = current.getSuperclass()) {
+            if (Type.getInternalName(current).equals(internalName)) return true;
+            for (Class<?> implemented : current.getInterfaces()) {
+                if (isObjectHierarchyInterface(implemented, internalName)) return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isObjectHierarchyInterface(Class<?> type, String internalName) {
+        if (Type.getInternalName(type).equals(internalName)) return true;
+        for (Class<?> parent : type.getInterfaces()) {
+            if (isObjectHierarchyInterface(parent, internalName)) return true;
+        }
+        return false;
+    }
+
     private static String failureSummary(Exception failure) {
         String message = failure.getMessage();
         return failure.getClass().getSimpleName()
                 + (message == null || message.isBlank() ? "" : ": " + message);
     }
 
-    private enum Kind { VALUE, THIS, CONTEXT, NOISE, DENSITY, ARRAY, COMPARE }
+    private enum Kind { VALUE, THIS, CONTEXT, NOISE, DENSITY, ARRAY, OBJECT, COMPARE }
     private enum Axis { X, Y, Z }
     private record LoopRegion(int firstInstruction, int backEdgeInstruction) {}
 
     private record Value(Kind kind, int expression, NormalNoise noise, DensityFunction density,
-                         Object arrayValue,
+                         Object referenceValue,
                          Axis axis, double axisScale, Double constant,
                          int comparisonRight, String comparisonMode) {
         static Value value(int expression, Double constant) {
@@ -222,6 +299,9 @@ final class GpuDensityBytecodeCompiler {
         }
         static Value array(Object value) {
             return new Value(Kind.ARRAY, -1, null, null, value, null, 0.0, null, -1, null);
+        }
+        static Value object(Object value) {
+            return new Value(Kind.OBJECT, -1, null, null, value, null, 0.0, null, -1, null);
         }
         static Value comparison(int left, int right, String mode) {
             return new Value(Kind.COMPARE, left, null, null, null, null, 0.0, null, right, mode);
@@ -586,12 +666,17 @@ final class GpuDensityBytecodeCompiler {
             boolean staticRead = instruction.getOpcode() == Opcodes.GETSTATIC;
             if (!staticRead && instruction.getOpcode() != Opcodes.GETFIELD)
                 reject("field writes are not supported: " + instruction.owner + "." + instruction.name);
+            Object fieldInstance = function;
             if (!staticRead) {
                 Value receiver = pop("field access");
-                if (receiver.kind() != Kind.THIS)
-                    reject("field access through a value other than the density object: " + instruction.name);
+                if (receiver.kind() == Kind.OBJECT
+                        && isObjectHierarchyOwner(receiver.referenceValue().getClass(), instruction.owner)) {
+                    fieldInstance = receiver.referenceValue();
+                } else if (receiver.kind() != Kind.THIS) {
+                    reject("field access through an unsupported object: " + instruction.name);
+                }
             }
-            Object fieldValue = readField(function, instruction.owner, instruction.name,
+            Object fieldValue = readField(fieldInstance, instruction.owner, instruction.name,
                     instruction.desc, staticRead);
             if (fieldValue instanceof Number number) {
                 switch (instruction.desc) {
@@ -610,6 +695,8 @@ final class GpuDensityBytecodeCompiler {
                 stack.add(Value.density(density));
             } else if (fieldValue != null && fieldValue.getClass().isArray()) {
                 stack.add(Value.array(fieldValue));
+            } else if (fieldValue != null && fieldValue.getClass().isRecord()) {
+                stack.add(Value.object(fieldValue));
             } else {
                 reject("field " + instruction.name + " has unsupported runtime type "
                         + (fieldValue == null ? "null" : fieldValue.getClass().getName()));
@@ -626,7 +713,7 @@ final class GpuDensityBytecodeCompiler {
                 reject("array index must be a compile-time integer");
             }
             int elementIndex = (int) (double) index.constant();
-            Object values = array.arrayValue();
+            Object values = array.referenceValue();
             int length = java.lang.reflect.Array.getLength(values);
             if (elementIndex < 0 || elementIndex >= length) {
                 reject("constant array index " + elementIndex + " is outside length " + length);
@@ -675,7 +762,7 @@ final class GpuDensityBytecodeCompiler {
         private void arrayLength() {
             Value array = pop("array length");
             if (array.kind() != Kind.ARRAY) reject("array length requires a final density-object array field");
-            pushIntegerConstant(java.lang.reflect.Array.getLength(array.arrayValue()));
+            pushIntegerConstant(java.lang.reflect.Array.getLength(array.referenceValue()));
         }
 
         private void invoke(MethodInsnNode call) {
@@ -734,18 +821,26 @@ final class GpuDensityBytecodeCompiler {
             boolean sameClass = owner.equals(this.owner.name);
             boolean densityHierarchyHelper = receiver != null && receiver.kind() == Kind.THIS
                     && isDensityHierarchyOwner(function.getClass(), owner);
+            boolean nestedObjectHelper = receiver != null && receiver.kind() == Kind.OBJECT
+                    && isInlineableHelperOwner(owner)
+                    && isObjectHierarchyOwner(receiver.referenceValue().getClass(), owner);
             boolean externalStaticHelper = call.getOpcode() == Opcodes.INVOKESTATIC
                     && !sameClass && isInlineableHelperOwner(owner);
-            if (sameClass || densityHierarchyHelper || externalStaticHelper) {
-                ClassNode helperOwner = sameClass ? this.owner : readClassNode(function.getClass(), owner);
-                MethodNode target = findMethod(helperOwner, name, call.desc);
-                if (target != null) {
+            if (sameClass || densityHierarchyHelper || nestedObjectHelper || externalStaticHelper) {
+                Class<?> receiverType = receiver != null && receiver.kind() == Kind.OBJECT
+                        ? receiver.referenceValue().getClass() : function.getClass();
+                ResolvedMethod resolved = resolveHelperMethod(receiverType, owner, name, call.desc,
+                        call.getOpcode() == Opcodes.INVOKESTATIC);
+                if (resolved != null) {
+                    ClassNode helperOwner = resolved.owner();
+                    MethodNode target = resolved.method();
                     if (inlineDepth >= 16) reject("helper-call depth exceeds 16");
                     boolean targetStatic = (target.access & Opcodes.ACC_STATIC) != 0;
                     if (targetStatic != (call.getOpcode() == Opcodes.INVOKESTATIC))
                         reject("helper invocation staticness does not match its method declaration");
-                    if (!targetStatic && (receiver == null || receiver.kind() != Kind.THIS))
-                        reject("instance helper must be called on the density object");
+                    if (!targetStatic && (receiver == null
+                            || receiver.kind() != Kind.THIS && receiver.kind() != Kind.OBJECT))
+                        reject("instance helper must be called on the density object or immutable record");
                     if (Type.getReturnType(target.desc).getSort() == Type.VOID)
                         reject("void helper calls have side effects and cannot be inlined");
                     Value result = new Interpreter(function, helperOwner, target, builder, inlineDepth + 1,
