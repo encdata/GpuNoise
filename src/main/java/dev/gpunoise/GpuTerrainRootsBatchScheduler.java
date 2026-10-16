@@ -20,6 +20,9 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     /** Spatial batch footprint requested for terrain generation. */
     private static final int BATCH_SIZE_CHUNKS = 10;
     private static final int MAX_CHUNKS = 100;
+    /** Search a bounded 50x50 chunk area so neighboring prefetch tiles can coalesce. */
+    private static final int SEARCH_RADIUS_REGIONS = (int) Math.max(1L,
+            Math.min(4L, Long.getLong("gpunoise.terrainBatchRegionRadius", 2L)));
     /** Amortize CPU/GPU submission overhead while keeping a hard dispatch bound. */
     private static final int TARGET_CHUNKS = (int) Math.max(1L,
             Math.min(MAX_CHUNKS, Long.getLong("gpunoise.terrainBatchTargetChunks", 96L)));
@@ -55,8 +58,9 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
 
     GpuTerrainRootsBatchScheduler() {
         for (int i = 0; i < 8; i++) metadataPool.add(new DispatchMetadata());
-        GpuNoise.LOGGER.info("GPU terrain batch window={}ms, target={}, chunk limit={}",
-                TimeUnit.NANOSECONDS.toMillis(BATCH_WINDOW_NANOS), TARGET_CHUNKS, MAX_CHUNKS);
+        GpuNoise.LOGGER.info("GPU terrain batch window={}ms, target={}, chunk limit={}, searchRadiusRegions={}",
+                TimeUnit.NANOSECONDS.toMillis(BATCH_WINDOW_NANOS), TARGET_CHUNKS, MAX_CHUNKS,
+                SEARCH_RADIUS_REGIONS);
         worker.execute(this::run);
     }
 
@@ -196,8 +200,8 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
             int centerX = (int) (entry.getKey().region >> 32);
             int centerZ = (int) entry.getKey().region;
             int count = 0;
-            for (int dx = -1; dx <= 1 && count < capacity; dx++) {
-                for (int dz = -1; dz <= 1 && count < capacity; dz++) {
+            for (int dx = -SEARCH_RADIUS_REGIONS; dx <= SEARCH_RADIUS_REGIONS && count < capacity; dx++) {
+                for (int dz = -SEARCH_RADIUS_REGIONS; dz <= SEARCH_RADIUS_REGIONS && count < capacity; dz++) {
                     long region = ((long) (centerX + dx) << 32) ^ ((centerZ + dz) & 0xffffffffL);
                     ArrayDeque<Pending> nearby = pendingByRegion.get(
                             new BatchKey(region, entry.getKey().layout));
@@ -217,9 +221,10 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     private List<Long> nearbyRegions(long center, GridLayout layout) {
         int centerX = (int) (center >> 32);
         int centerZ = (int) center;
-        List<Long> regions = new ArrayList<>(9);
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dz = -1; dz <= 1; dz++) {
+        int diameter = SEARCH_RADIUS_REGIONS * 2 + 1;
+        List<Long> regions = new ArrayList<>(diameter * diameter);
+        for (int dx = -SEARCH_RADIUS_REGIONS; dx <= SEARCH_RADIUS_REGIONS; dx++) {
+            for (int dz = -SEARCH_RADIUS_REGIONS; dz <= SEARCH_RADIUS_REGIONS; dz++) {
                 long region = ((long) (centerX + dx) << 32) ^ ((centerZ + dz) & 0xffffffffL);
                 if (pendingByRegion.containsKey(new BatchKey(region, layout))) {
                     regions.add(region);

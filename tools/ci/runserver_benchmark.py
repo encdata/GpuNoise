@@ -50,6 +50,9 @@ if not 1 <= BATCH_WINDOW_MS <= 250:
 BATCH_TARGET_CHUNKS = int(os.environ.get("GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS", "96"))
 if not 1 <= BATCH_TARGET_CHUNKS <= 100:
     raise ValueError("GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS must be between 1 and 100")
+BATCH_REGION_RADIUS = int(os.environ.get("GPUNOISE_TERRAIN_BATCH_REGION_RADIUS", "2"))
+if not 1 <= BATCH_REGION_RADIUS <= 4:
+    raise ValueError("GPUNOISE_TERRAIN_BATCH_REGION_RADIUS must be between 1 and 4")
 FULL_BLOCK_OUTPUT = os.environ.get("GPUNOISE_BENCHMARK_FULL_BLOCK_OUTPUT", "false").lower()
 if FULL_BLOCK_OUTPUT not in {"true", "false"}:
     raise ValueError("GPUNOISE_BENCHMARK_FULL_BLOCK_OUTPUT must be true or false")
@@ -66,7 +69,10 @@ SERVER_CRASH = re.compile(
 GPU_COUNTS = re.compile(
     r"GPU terrain: submitted=(\d+), completed=(\d+), consumed=(\d+), fallback=(\d+)"
 )
-GPU_BATCH_WINDOW = re.compile(r"GPU terrain batch window=(\d+)ms, target=(\d+), chunk limit=(\d+)")
+GPU_BATCH_WINDOW = re.compile(
+    r"GPU terrain batch window=(\d+)ms, target=(\d+), chunk limit=(\d+), "
+    r"searchRadiusRegions=(\d+)"
+)
 GPU_BATCHING = re.compile(
     r"GPU terrain roots batching: avgChunksPerDispatch=([\d.]+), "
     r"avgSamplesPerDispatch=([\d.]+),"
@@ -189,6 +195,7 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
             command.append("-Dgpunoise.fullBlockOutput=true")
         command.append(f"-Dgpunoise.terrainBatchWindowMs={BATCH_WINDOW_MS}")
         command.append(f"-Dgpunoise.terrainBatchTargetChunks={BATCH_TARGET_CHUNKS}")
+        command.append(f"-Dgpunoise.terrainBatchRegionRadius={BATCH_REGION_RADIUS}")
     print(f"Starting {mode} Chunky benchmark (full_block_output={FULL_BLOCK_OUTPUT}): {' '.join(command)}", flush=True)
     process = subprocess.Popen(
         command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -322,12 +329,14 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
             )
             batch_window = GPU_BATCH_WINDOW.search(run_log)
             if (batch_window is None or int(batch_window.group(1)) != BATCH_WINDOW_MS
-                    or int(batch_window.group(2)) != BATCH_TARGET_CHUNKS):
+                    or int(batch_window.group(2)) != BATCH_TARGET_CHUNKS
+                    or int(batch_window.group(4)) != BATCH_REGION_RADIUS):
                 observed = "missing" if batch_window is None else f"{batch_window.group(1)}ms"
                 raise RuntimeError(
                     f"GPU batch policy was window={observed}, target="
                     f"{batch_window.group(2) if batch_window else 'missing'}; expected "
-                    f"window={BATCH_WINDOW_MS}ms, target={BATCH_TARGET_CHUNKS}"
+                    f"window={BATCH_WINDOW_MS}ms, target={BATCH_TARGET_CHUNKS}, "
+                    f"searchRadiusRegions={BATCH_REGION_RADIUS}"
                 )
             shader_variants = GPU_SHADER_VARIANT.findall(run_log)
             # Keep the paired throughput comparison on the parity-preserving

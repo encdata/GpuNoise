@@ -69,10 +69,25 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   CPS and Lavapipe 21.780 CPS (paired ratio 0.642). Dispatches averaged
   14.39-14.65 chunks. Chunk latency buckets were p50 2.5 seconds, p95 5
   seconds, and p99 5 seconds. GPU cache use and zero CPU fallback gates passed.
-  The scheduler was still dispatching a single prefetched tile early, so the
-  96-target/no-early-tile experiment is a separate pending measurement. New CI
-  runs use a 1,600-block radius (100 chunks per direction) to measure sustained
-  pregen, with a one-hour Chunky timeout.
+  At that point the scheduler still dispatched a single prefetched tile early;
+  a follow-up removed the early dispatch and raised the target to 96, measured
+  below. New CI runs use a 1,600-block radius (100 chunks per direction) to
+  measure sustained pregen, with a one-hour Chunky timeout.
+- The 96-target/no-early-tile production run (commit `f2e980a`, radius 256
+  blocks) completed at median CPU 44.632 CPS and Lavapipe 31.941 CPS (paired
+  ratio 0.718). Average dispatch fill was 18.23-19.60 chunks, still far below
+  the target. CPU preparation took 0.29-0.49 ms per dispatch, while
+  submit-to-fence took 269-289 ms and result readback 1.06-1.87 ms. The fence
+  interval includes up to 1 ms of polling and cannot be interpreted as pure
+  shader execution time. Chunk latency buckets improved to p50 1 second and
+  p95/p99 2.5 seconds, but remain too high for the no-stutter target. This
+  points the next pass toward dispatch occupancy and the compute/device path,
+  rather than CPU-side buffer preparation. The 100-chunk-radius paired run is
+  now in CI. Its next scheduler pass searches a 50x50 chunk region (radius two
+  10x10 buckets) for compatible queued chunks, keeping the 50 ms deadline and
+  96-chunk target unchanged. The reason is the measured ~44 ms enqueue wait
+  with only 18-20 chunks per dispatch: the queue had time to collect, but the
+  previous 30x30 search region could not find enough nearby work.
 
 ## Work passes
 
