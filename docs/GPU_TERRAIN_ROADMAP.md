@@ -158,3 +158,9 @@ than Vulkan buffer capacity, is currently preventing large batches. A follow-up
 Lavapipe CPS, so the longer wait was removed. The current pass prefetches each
 aligned 5x5 chunk tile once, then batches those ready grids with a 20 ms window;
 tile bookkeeping is bounded to 4,096 entries.
+
+The first tile-prefetch CI run passed shader smoke and completed the 1,089
+chunk pair at 60.842 CPU CPS and 45.190 Lavapipe CPS (0.743x CPU). It consumed
+1,207 GPU caches with no fallbacks and averaged 15.125 chunks per dispatch,
+compared with 1.82 before prefetch. GitHub-hosted runner speeds vary between
+runs; the improved batch size is the clearest result from this comparison.
