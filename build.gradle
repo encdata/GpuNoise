@@ -84,6 +84,7 @@ runs {
             systemProperty 'gpunoise.chunkyCenterZ', System.getProperty('gpunoise.chunkyCenterZ')
         }
         systemProperty 'gpunoise.forceCpuTerrain', System.getProperty('gpunoise.forceCpuTerrain', 'false')
+        systemProperty 'gpunoise.fullBlockOutput', System.getProperty('gpunoise.fullBlockOutput', 'false')
         systemProperty 'gpunoise.profileTerrain', System.getProperty('gpunoise.profileTerrain', 'false')
         systemProperty 'gpunoise.disableChunkWriter', System.getProperty('gpunoise.disableChunkWriter', 'false')
         argument '--nogui'

@@ -123,6 +123,11 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool) -> tuple[in
         "-Dgpunoise.chunkyCenterZ=0",
         f"-Dgpunoise.forceCpuTerrain={str(force_cpu).lower()}",
     ]
+    if not force_cpu:
+        # Exercise the Vulkan interpolation buffer through NoiseChunk's
+        # authoritative final-density callback; per-chunk samples compare the
+        # GPU materialization with the Java cell-corner interpolation first.
+        command.append("-Dgpunoise.fullBlockOutput=true")
     print(f"Starting {mode} Chunky benchmark: {' '.join(command)}", flush=True)
     process = subprocess.Popen(
         command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

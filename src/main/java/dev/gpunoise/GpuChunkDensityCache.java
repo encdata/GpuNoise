@@ -133,6 +133,7 @@ public final class GpuChunkDensityCache {
         return result.thenAccept(values -> {
             readyRoots = values.corners();
             readyBlocks = values.blocks();
+            if (GpuTerrainRuntime.terrainBlockOutputEnabled()) validateBlockInterpolation();
         });
     }
 
@@ -204,6 +205,14 @@ public final class GpuChunkDensityCache {
         if (exact != null) return sampleExactRoot(rx, ry, rz, GpuTerrainRoots.FINAL_DENSITY);
         GpuTerrainRootsResult ready = readyRoots;
         if (ready == null) return Double.NaN;
+        double blockValue = sampleBlockRoot(rx, ry, rz, GpuTerrainRoots.FINAL_DENSITY);
+        if (!Double.isNaN(blockValue)) {
+            if (READ_STATS_ENABLED) {
+                long direct = blockReads.incrementAndGet();
+                if ((direct & 0x3ffffL) == 0L) logReadStatistics();
+            }
+            return blockValue;
+        }
         boolean aligned = powerOfTwoCells
                 ? ((rx & (cellWidth - 1)) | (ry & (cellHeight - 1)) | (rz & (cellWidth - 1))) == 0
                 : rx % cellWidth == 0 && ry % cellHeight == 0 && rz % cellWidth == 0;
@@ -344,6 +353,28 @@ public final class GpuChunkDensityCache {
             }
         }
         return lerp3(c000, c100, c010, c110, c001, c101, c011, c111, tx, ty, tz);
+    }
+
+    /** Checks the shader's block-grid layout against the Java corner interpolator before use. */
+    private void validateBlockInterpolation() {
+        GpuTerrainBlockResult blocks = readyBlocks;
+        if (blocks == null || blocks.isEmpty()) {
+            throw new IllegalStateException("GPU block interpolation was enabled but returned no block values");
+        }
+        int blockCount = Math.multiplyExact(16 * 16, maxRelativeY);
+        for (int sample = 0; sample < 32; sample++) {
+            int index = (int) (((long) sample * 7_919L + 17L) % blockCount);
+            int x = index % 16;
+            int z = index / 16 % 16;
+            int y = index / (16 * 16);
+            double expected = sampleRoot(x, y, z, GpuTerrainRoots.FINAL_DENSITY);
+            double actual = blocks.finalValueAtUnchecked(x, y, z);
+            if (!Double.isFinite(expected) || Math.abs(actual - expected) > 1.0e-5) {
+                throw new IllegalStateException("GPU block interpolation mismatch at "
+                        + (minX + x) + "," + (minY + y) + "," + (minZ + z)
+                        + ": GPU=" + actual + ", CPU=" + expected);
+            }
+        }
     }
 
     private float value(GpuTerrainRootsResult values, int gx, int gy, int gz, int root) {
