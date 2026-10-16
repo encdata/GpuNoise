@@ -249,6 +249,11 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
         if not force_cpu:
             if not gpu_counts or max(counts[2] for counts in gpu_counts) <= 0:
                 raise RuntimeError("GPU benchmark completed without any GPU terrain cache being consumed")
+            fallback_chunks = max(counts[3] for counts in gpu_counts)
+            if fallback_chunks != 0:
+                raise RuntimeError(
+                    f"GPU benchmark used CPU terrain fallback for {fallback_chunks} chunks"
+                )
             run_log = log_path.read_text(encoding="utf-8")
             if "GPU terrain grid parity:" not in run_log:
                 raise RuntimeError("GPU terrain grid parity check did not run")
