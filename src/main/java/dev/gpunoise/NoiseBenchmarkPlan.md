@@ -88,6 +88,14 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   96-chunk target unchanged. The reason is the measured ~44 ms enqueue wait
   with only 18-20 chunks per dispatch: the queue had time to collect, but the
   previous 30x30 search region could not find enough nearby work.
+- The capacity-aware batch pass (commit `8f3fa5c`, still at a 256-block radius
+  and the 30x30 search region) built and completed all CI gates. It measured
+  median CPU 33.404 CPS and Lavapipe 23.222 CPS (ratio 0.681), with 15.84-17.62
+  chunks per dispatch and 371-395 ms average submit-to-fence. Its p50 chunk
+  latency was 2.5 seconds and p95/p99 reached 5 seconds. This runner result is
+  slower than the earlier 96-target run; the capacity check did not increase
+  occupancy, and runner variation prevents attributing the CPS change to that
+  code. The larger region search is the next isolated scheduling change.
 
 ## Work passes
 

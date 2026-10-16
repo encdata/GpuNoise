@@ -114,11 +114,10 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 List<Pending> batch = new ArrayList<>(maxChunks);
                 int input = 0;
                 long outputFloats = 0;
-                // Prefer the selected aligned 5x5 bucket, then borrow from
-                // adjacent buckets when it is underfilled.  Chunk grids are
-                // self-describing, so this keeps one dispatch useful even
-                // when C2ME's traversal crosses a 5x5 boundary between two
-                // scheduler wakeups.
+                // Prefer regions closest to the fullest compatible candidate,
+                // then borrow across the bounded 50x50 search area. Chunk grids
+                // are self-describing, so unrelated chunk coordinates can
+                // share a dispatch without changing per-chunk result slicing.
                 for (long candidateRegion : nearbyRegions(batchKey.region, batchKey.layout)) {
                     BatchKey candidateKey = new BatchKey(candidateRegion, batchKey.layout);
                     ArrayDeque<Pending> candidateQueue = pendingByRegion.get(candidateKey);
