@@ -446,8 +446,6 @@ final class GpuDensityBytecodeCompiler {
                             continue;
                         }
                         if (target <= pc) reject("backward conditional branch is not supported");
-                        if (insideStaticLoop(pc))
-                            reject("dynamic conditional branches inside a static loop are not supported");
                         if (++branchForks > 128) reject("conditional expansion exceeds 128 branch points");
                         List<Value> branchStack = new ArrayList<>(stack);
                         Map<Integer, Value> branchLocals = new HashMap<>(locals);
@@ -463,14 +461,12 @@ final class GpuDensityBytecodeCompiler {
                         int merged = builder.select(condition, whenJumpTaken.expression(), whenFallThrough.expression());
                         return Value.value(merged, null);
                     } else if (instruction instanceof TableSwitchInsnNode tableSwitch) {
-                        if (insideStaticLoop(pc)) reject("switches inside a static loop are not supported");
                         int count = tableSwitch.labels.size();
                         if (count > 64) reject("table switch exceeds the 64-case compiler limit");
                         int[] keys = new int[count];
                         for (int i = 0; i < count; i++) keys[i] = tableSwitch.min + i;
                         return switchBranch(pc, tableSwitch.dflt, tableSwitch.labels, keys);
                     } else if (instruction instanceof LookupSwitchInsnNode lookupSwitch) {
-                        if (insideStaticLoop(pc)) reject("switches inside a static loop are not supported");
                         int count = lookupSwitch.labels.size();
                         if (count > 64) reject("lookup switch exceeds the 64-case compiler limit");
                         int[] keys = new int[count];

@@ -217,6 +217,12 @@ final class GpuDensityExpressionSmoke {
                 GpuDensityGraphCompiler.compileDensityFunction(function, true)), function);
     }
 
+    static VulkanBranchFixture boundedConditionalLoopFixture() {
+        DensityFunction function = new BoundedConditionalLoopDensity();
+        return new VulkanBranchFixture(GpuDensityGraphLowerer.lower(
+                GpuDensityGraphCompiler.compileDensityFunction(function, true)), function);
+    }
+
     static void verify() {
         requireOpcode("EXPR_ADD", 1);
         requireOpcode("EXPR_SUBTRACT", 2);
@@ -514,6 +520,20 @@ final class GpuDensityExpressionSmoke {
         }
         GpuDensityGraphBuffer.pack(boundedLoopFixture().graph());
 
+        BoundedConditionalLoopDensity conditionalLoop = new BoundedConditionalLoopDensity();
+        GpuDensityBytecodeCompiler.Result conditionalLoopResult =
+                GpuDensityBytecodeCompiler.compile(conditionalLoop);
+        if (conditionalLoopResult.expression() == null) {
+            throw new AssertionError("bounded loop with dynamic terrain branches should compile: "
+                    + conditionalLoopResult.rejection());
+        }
+        for (int xValue : new int[]{-17, -3, -1, 0, 1, 3, 17}) {
+            double expected = conditionalLoop.compute(new DensityFunction.SinglePointContext(xValue, 0, 0));
+            requireClose(conditionalLoopResult.expression().evaluate(xValue, 0, 0), expected,
+                    "dynamic branch inside bounded loop at x=" + xValue);
+        }
+        GpuDensityGraphBuffer.pack(boundedConditionalLoopFixture().graph());
+
         verifyMinecraftLerpBytecode();
 
         ScalarMathDensity scalarMath = new ScalarMathDensity();
@@ -807,6 +827,26 @@ final class GpuDensityExpressionSmoke {
         @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
         @Override public double minValue() { return -4_000_000.0; }
         @Override public double maxValue() { return 4_000_000.0; }
+        @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
+            return DensityFunctions.constant(0.0).codec();
+        }
+    }
+
+    private static final class BoundedConditionalLoopDensity implements DensityFunction.SimpleFunction {
+        @Override public double compute(FunctionContext context) {
+            double sum = 0.0;
+            for (int octave = 0; octave < 3; octave++) {
+                if (context.blockX() + octave < 0) {
+                    sum += context.blockX() * (0.125 + octave * 0.01);
+                } else {
+                    sum -= octave * 0.25;
+                }
+            }
+            return sum;
+        }
+        @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
+        @Override public double minValue() { return -100_000.0; }
+        @Override public double maxValue() { return 100_000.0; }
         @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
             return DensityFunctions.constant(0.0).codec();
         }

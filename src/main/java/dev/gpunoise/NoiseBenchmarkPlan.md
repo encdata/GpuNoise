@@ -54,6 +54,12 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
 - Hot-path nanosecond timing is sampled once per 64 lookups per worker thread;
   successful operations are still counted on every call. Sampling prevents
   diagnostic timing overhead from being added to every density evaluation.
+- Bytecode translation now permits dynamic forward conditionals and switches
+  inside statically bounded loops. The current structured interpreter unrolls
+  those loops and expresses each branch as select nodes; its existing bytecode
+  and branch expansion budgets still reject graphs whose expansion is too
+  large. CPU evaluation remains the fallback for unbounded loops and other
+  unsupported control flow.
 - Each chunk cache snapshots the installed graph's immutable root-support mask
   once at construction. Per-block and per-aquifer lookups then test a local
   integer bit instead of repeatedly loading the global volatile graph reference
