@@ -85,6 +85,34 @@ parity checks.
 - Prepare aquifer random-cell metadata on the CPU where Minecraft object or
   random-state access is required, then pass immutable numeric records to the
   shader. Validate random sequences and neighborhood boundaries exactly.
+- Start from `Aquifer.NoiseBasedAquifer.computeSubstance` for the pinned game
+  version. Preserve its order: positive density returns the caller's default
+  solid; lava from the global picker wins for non-positive density; otherwise
+  choose the nearest three aquifer centers, evaluate their fluid statuses and
+  similarities, test barrier pressure, and return the selected status or air.
+  Keep the flowing-fluid update bit alongside the result; it affects later
+  chunk fluid scheduling even when the chosen block state is unchanged.
+- Use integer world coordinates and exact floor division for aquifer grid
+  coordinates. The three nearest random centers are sampled from the 3x3x3
+  neighborhood using 16x12x16 grid spacing and bounded offsets (10, 9, 10).
+  Stable tie handling matters because the third-nearest selection feeds both
+  similarity and pressure decisions.
+- Port `similarity(d1,d2) = 1 - abs(d2-d1)/25` and vanilla pressure as its own
+  validated shader operation. Pressure includes the water/lava interface
+  special case, fluid-level midpoint and distance terms, a lazily evaluated
+  barrier-noise value, and the final `2 * (barrier + adjustment)` result.
+  Do not approximate this with density thresholds or sampled aquifer noise.
+- Keep fluid picking, preliminary surface sampling, surface level selection,
+  and fluid type selection as explicit inputs/operations. These consult
+  `NoiseChunk`, density roots, and world settings; the shader must not infer
+  them from one generic aquifer vector. Begin with CPU-prepared status records
+  for the exact chunk, then move individual pure numeric operations only when
+  their input contract is complete.
+- Define the first packed output as a material/fluid registry key plus flags
+  for null/default-solid, explicit air, water/lava, and scheduled fluid update.
+  A null substance is not the same value as an explicit air block. Resolve
+  registry objects and write sections on the CPU until whole-section and
+  heightmap parity is established.
 - Emit compact material/fluid IDs rather than returning one float per block.
 - Differentially compare complete chunk sections and heightmaps before
   enabling GPU writes. Keep CPU section writes as the first safe commit path;
@@ -164,3 +192,7 @@ chunk pair at 60.842 CPU CPS and 45.190 Lavapipe CPS (0.743x CPU). It consumed
 1,207 GPU caches with no fallbacks and averaged 15.125 chunks per dispatch,
 compared with 1.82 before prefetch. GitHub-hosted runner speeds vary between
 runs; the improved batch size is the clearest result from this comparison.
+This is the current recorded throughput result. It measures the existing
+GPU density/interpolation workload under Mesa Lavapipe, not GPU-selected block
+states and not physical GPU performance. The in-progress follow-up Actions run
+only records this result in the roadmap.
