@@ -41,6 +41,8 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     private final AtomicLong totalChunksDispatched = new AtomicLong();
     private final AtomicLong totalSamplesDispatched = new AtomicLong();
     private final AtomicLong totalQueueWaitNanos = new AtomicLong();
+    private final AtomicLong completedDispatches = new AtomicLong();
+    private final AtomicLong totalDispatchLatencyNanos = new AtomicLong();
 
     GpuTerrainRootsBatchScheduler() {
         for (int i = 0; i < 8; i++) metadataPool.add(new DispatchMetadata());
@@ -121,12 +123,6 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 long queueWaitNanos = 0L;
                 for (Pending item : batch) queueWaitNanos += System.nanoTime() - item.enqueuedNanos;
                 totalQueueWaitNanos.addAndGet(queueWaitNanos);
-                if ((dispatchCount.get() & 63L) == 0L) {
-                    GpuNoise.LOGGER.info("GPU terrain roots batching: avgChunksPerDispatch={}, avgSamplesPerDispatch={}, avgQueueWaitMsPerChunk={}",
-                            (double) totalChunksDispatched.get() / dispatchCount.get(),
-                            (double) totalSamplesDispatched.get() / dispatchCount.get(),
-                            totalQueueWaitNanos.get() / (double) totalChunksDispatched.get() / 1_000_000.0);
-                }
                 dispatch(batch, samplesPerChunk, input);
             }
         } catch (InterruptedException interrupted) {
@@ -246,6 +242,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         metadata.flip();
         if (!blockOutput) outputMetadata.limit(0);
         outputMetadata.flip();
+        long submittedAt = System.nanoTime();
         try {
             GpuTerrainRuntime.submitTerrainGridInterpolated(metadata, batch.size(), samplesPerChunk,
                     outputMetadata, blocksPerChunk).whenComplete((values, failure) -> {
@@ -264,12 +261,25 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                     for (Pending item : batch) item.future.completeExceptionally(completionFailure);
                 } finally {
                     metadataPool.offer(buffers);
+                    recordDispatchLatency(submittedAt);
                 }
             });
         } catch (Throwable submissionFailure) {
             metadataPool.offer(buffers);
             for (Pending item : batch) item.future.completeExceptionally(submissionFailure);
+            recordDispatchLatency(submittedAt);
         }
+    }
+
+    private void recordDispatchLatency(long submittedAt) {
+        totalDispatchLatencyNanos.addAndGet(System.nanoTime() - submittedAt);
+        long completed = completedDispatches.incrementAndGet();
+        if ((completed & 63L) != 0L) return;
+        GpuNoise.LOGGER.info("GPU terrain roots batching: avgChunksPerDispatch={}, avgSamplesPerDispatch={}, avgQueueWaitMsPerChunk={}, avgSubmitToCompleteMsPerDispatch={}",
+                (double) totalChunksDispatched.get() / dispatchCount.get(),
+                (double) totalSamplesDispatched.get() / dispatchCount.get(),
+                totalQueueWaitNanos.get() / (double) totalChunksDispatched.get() / 1_000_000.0,
+                totalDispatchLatencyNanos.get() / (double) completed / 1_000_000.0);
     }
 
     private static int blocksPerChunk(GpuTerrainGrid grid) {

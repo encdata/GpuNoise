@@ -291,6 +291,7 @@ The terrain roots batcher now reuses a bounded pool of direct metadata buffers
 until each asynchronous Vulkan submission completes. This removes per-dispatch
 native metadata allocation without letting an in-flight submission observe
 overwritten records. Periodic batch telemetry now includes enqueue-to-dispatch
-wait per chunk as well as average batch fill. The next CI run must establish
-whether the allocation reduction changes end-to-end throughput; Lavapipe is
+wait per chunk, average batch fill, and submit-to-completion latency. The next
+CI run must establish whether the allocation reduction changes end-to-end
+throughput; Lavapipe is
 still only a CPU Vulkan backend and cannot establish discrete-GPU speedup.
