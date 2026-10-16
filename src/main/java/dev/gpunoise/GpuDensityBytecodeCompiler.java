@@ -834,9 +834,12 @@ final class GpuDensityBytecodeCompiler {
 
         private Value lerp2Value(Value delta1, Value delta2, Value start1, Value end1,
                                  Value start2, Value end2) {
-            Value first = lerpValue(delta2, start1, end1);
-            Value second = lerpValue(delta2, start2, end2);
-            return lerpValue(delta1, first, second);
+            // Mth.lerp2 interpolates each X pair first, then interpolates the
+            // two results along Y. Keeping the vanilla axis order matters for
+            // custom terrain expressions with asymmetric corner values.
+            Value first = lerpValue(delta1, start1, end1);
+            Value second = lerpValue(delta1, start2, end2);
+            return lerpValue(delta2, first, second);
         }
 
         private Value mappedValue(GpuDensityExpression.Mapping mapping, Value input) {
