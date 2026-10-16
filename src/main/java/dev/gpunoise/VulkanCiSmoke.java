@@ -23,13 +23,16 @@ public final class VulkanCiSmoke {
         GpuDensityGraph graph = new GpuDensityGraph(
                 List.of(new GpuDensityGraph.Node("Constant", new int[0], new double[]{EXPECTED}, null, 0)),
                 new int[]{0}, List.of(), List.of(), List.of(), List.of(), 1);
+        System.out.println("Vulkan CI smoke: creating submission ring");
         VulkanSubmissionRing ring = VulkanBootstrapThread.call(() -> new VulkanSubmissionRing(device));
         try (ring) {
             float[] x = {-64.0f, 0.0f, 16_777_216.0f, 30_000_000.0f};
             float[] y = {-64.0f, 0.0f, 128.0f, 320.0f};
             float[] z = {64.0f, 0.0f, -16_777_216.0f, -30_000_000.0f};
+            System.out.println("Vulkan CI smoke: dispatching coordinate graph shader");
             float[] graphResults = ring.submitGraphRoots(graph, x, y, z)
                     .get(60, TimeUnit.SECONDS);
+            System.out.println("Vulkan CI smoke: coordinate graph shader completed");
             assertConstantResults("coordinate graph shader", graphResults, x.length);
 
             // One 2x2x2 grid exercises the GRID_INPUT shader variant and its
@@ -37,8 +40,10 @@ public final class VulkanCiSmoke {
             ByteBuffer metadata = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder());
             metadata.putInt(-16).putInt(-8).putInt(32)
                     .putInt(2).putInt(2).putInt(2).putInt(1).putInt(1).flip();
+            System.out.println("Vulkan CI smoke: dispatching terrain grid shader");
             float[] gridResults = ring.submitGraphRootsGrid(metadata, 1, 8)
                     .get(60, TimeUnit.SECONDS);
+            System.out.println("Vulkan CI smoke: terrain grid shader completed");
             assertConstantResults("terrain grid shader", gridResults, 8);
         }
 
