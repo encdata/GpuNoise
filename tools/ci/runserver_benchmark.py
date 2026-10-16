@@ -116,7 +116,9 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool) -> tuple[in
     command = [
         "./gradlew", "--no-daemon", "runServer",
         f"-PgpunoiseRunDir=run/ci-{mode}",
-        "-Dgpunoise.chunkyRadius=64",
+        # At radius 64 the generated area can finish before GpuTerrainRuntime
+        # emits its first 64-chunk usage-stat milestone.
+        "-Dgpunoise.chunkyRadius=128",
         "-Dgpunoise.chunkyCenterX=0",
         "-Dgpunoise.chunkyCenterZ=0",
         f"-Dgpunoise.forceCpuTerrain={str(force_cpu).lower()}",
