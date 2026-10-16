@@ -887,6 +887,19 @@ final class GpuDensityBytecodeCompiler {
                         : mathBinary(GpuDensityExpression.Operation.ADD, arguments[1], scaled));
                 return;
             }
+            if (owner.equals("net/minecraft/util/Mth")
+                    && (name.equals("length") || name.equals("lengthSquared"))) {
+                boolean floatResult = descriptor.equals("(FFF)F");
+                boolean valid = floatResult && arguments.length == 3 && name.equals("lengthSquared")
+                        || descriptor.equals("(DD)D") && arguments.length == 2
+                        || descriptor.equals("(DDD)D") && arguments.length == 3;
+                if (valid) {
+                    Value sum = lengthSquaredValue(arguments, floatResult);
+                    if (name.equals("length")) sum = squareRootValue(sum, false);
+                    stack.add(sum);
+                    return;
+                }
+            }
             if (owner.equals("net/minecraft/util/Mth") && descriptor.equals("(D)D")
                     && arguments.length == 1 && name.equals("smoothstep")) {
                 Value x = arguments[0];
@@ -1047,6 +1060,30 @@ final class GpuDensityBytecodeCompiler {
             int expression = builder.floatOperation("FNEG", input.expression(), -1);
             Double constant = input.constant() == null ? null
                     : (double) -(float) input.constant().doubleValue();
+            return Value.value(expression, constant);
+        }
+
+        private Value lengthSquaredValue(Value[] coordinates, boolean floatResult) {
+            Value sum = null;
+            for (Value coordinate : coordinates) {
+                Value square = floatResult
+                        ? floatMathBinary("FMUL", coordinate, coordinate)
+                        : mathBinary(GpuDensityExpression.Operation.MULTIPLY, coordinate, coordinate);
+                sum = sum == null ? square : floatResult
+                        ? floatMathBinary("FADD", sum, square)
+                        : mathBinary(GpuDensityExpression.Operation.ADD, sum, square);
+            }
+            return sum;
+        }
+
+        private Value squareRootValue(Value input, boolean floatResult) {
+            int expression = builder.map(floatResult
+                    ? GpuDensityExpression.Mapping.SQRT_FLOAT : GpuDensityExpression.Mapping.SQRT,
+                    input.expression());
+            Double constant = input.constant() == null ? null : floatResult
+                    ? (double) (float) Math.sqrt((float) (double) input.constant())
+                    : Math.sqrt(input.constant());
+            if (constant != null && !Double.isFinite(constant)) constant = null;
             return Value.value(expression, constant);
         }
 

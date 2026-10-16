@@ -114,6 +114,9 @@ parity checks.
   Float/double `rotLerp` and float degree-difference, rotation-clamp, and
   approach helpers compose the same explicit wrap, compare, select, and
   per-operation float IR used by their standalone primitives.
+  Double 2D/3D `Mth.length` and `lengthSquared`, plus float 3D
+  `lengthSquared`, lower to fused graph arithmetic and retain sequential JVM
+  rounding for the float overload.
   `Math.signum(float)` and
   `Math.signum(double)` retain their respective input precision.
   Minecraft's indexed sine table is generated once and uploaded to persistent

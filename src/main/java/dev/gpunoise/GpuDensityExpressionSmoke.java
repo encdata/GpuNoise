@@ -103,6 +103,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new AngleMotionMathDensity());
     }
 
+    static VulkanBranchFixture vectorLengthMathFixture() {
+        return graphFixture(new VectorLengthMathDensity());
+    }
+
     static VulkanBranchFixture minecraftMathOverloadsFixture() {
         return graphFixture(new MinecraftMathOverloadsDensity());
     }
@@ -482,6 +486,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new ModuloAndAngleMathDensity(), "Mth modulo and angle functions");
         verifyStandaloneMath(new TriangleWaveMathDensity(), "Mth triangle wave");
         verifyStandaloneMath(new AngleMotionMathDensity(), "Mth angle motion functions");
+        verifyStandaloneMath(new VectorLengthMathDensity(), "Mth vector length functions");
         verifyStandaloneMath(new MinecraftMathOverloadsDensity(), "Mth float and integer overloads");
         verifyStandaloneMath(new DynamicClampDensity(), "dynamic Mth.clamp overloads");
 
@@ -1040,6 +1045,22 @@ final class GpuDensityExpressionSmoke {
                     + net.minecraft.util.Mth.rotLerp(0.35F, current, target) * 0.001F
                     + net.minecraft.util.Mth.rotLerp(context.blockY() * 0.01,
                             context.blockX() * 2.5, context.blockZ() * -3.25) * 0.0001;
+        }
+    }
+
+    private static final class VectorLengthMathDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            float x = context.blockX() * 0.125F;
+            float y = context.blockY() * -0.0625F;
+            float z = context.blockZ() * 0.25F;
+            double dx = context.blockX() * 0.03125;
+            double dy = context.blockY() * -0.015625;
+            double dz = context.blockZ() * 0.0625;
+            return net.minecraft.util.Mth.lengthSquared(x, y, z) * 0.001F
+                    + net.minecraft.util.Mth.length(dx, dz) * 0.01
+                    + net.minecraft.util.Mth.length(dx, dy, dz) * 0.01
+                    + net.minecraft.util.Mth.lengthSquared(dx, dy) * 0.001
+                    + net.minecraft.util.Mth.lengthSquared(dx, dy, dz) * 0.001;
         }
     }
 
