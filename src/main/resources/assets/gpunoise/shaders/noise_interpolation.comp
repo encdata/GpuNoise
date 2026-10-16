@@ -18,7 +18,7 @@ layout(push_constant) uniform Parameters {
 float lerp3(float c000,float c100,float c010,float c110,float c001,float c101,float c011,float c111,vec3 t){
     float x00=mix(c000,c100,t.x), x10=mix(c010,c110,t.x);
     float x01=mix(c001,c101,t.x), x11=mix(c011,c111,t.x);
-    return mix(mix(x00,x10,t.z),mix(x01,x11,t.z),t.y);
+    return mix(mix(x00,x10,t.y),mix(x01,x11,t.y),t.z);
 }
 
 void main(){
