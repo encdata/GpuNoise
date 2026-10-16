@@ -119,6 +119,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new ConstantArrayHelperDensity());
     }
 
+    static VulkanBranchFixture inheritedComputeFixture() {
+        return graphFixture(new InheritedComputeDensity());
+    }
+
     static VulkanBranchFixture minecraftMathOverloadsFixture() {
         return graphFixture(new MinecraftMathOverloadsDensity());
     }
@@ -502,6 +506,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new IntegerInterpolationMathDensity(), "Mth integer interpolation functions");
         verifyStandaloneMath(new ExternalStaticHelperDensity(), "external static terrain helpers");
         verifyStandaloneMath(new ConstantArrayHelperDensity(), "constant-index terrain arrays");
+        verifyStandaloneMath(new InheritedComputeDensity(), "inherited terrain compute implementation");
         verifyStandaloneMath(new MinecraftMathOverloadsDensity(), "Mth float and integer overloads");
         verifyStandaloneMath(new DynamicClampDensity(), "dynamic Mth.clamp overloads");
 
@@ -1126,6 +1131,23 @@ final class GpuDensityExpressionSmoke {
             return sum;
         }
     }
+
+    private abstract static class SharedTerrainDensity extends NumericSmokeDensity {
+        private final double horizontalScale = 0.03125;
+        private final double verticalScale = 0.125;
+
+        @Override public double compute(FunctionContext context) {
+            return shape(context.blockX(), context.blockY(), context.blockZ());
+        }
+
+        private double shape(int x, int y, int z) {
+            double ridge = Math.abs(x - z) * horizontalScale;
+            double elevation = y * verticalScale;
+            return ridge + (y > 0 ? elevation * 0.01 : -elevation * 0.02);
+        }
+    }
+
+    private static final class InheritedComputeDensity extends SharedTerrainDensity {}
 
     private static final class MinecraftMathOverloadsDensity extends NumericSmokeDensity {
         @Override public double compute(FunctionContext context) {

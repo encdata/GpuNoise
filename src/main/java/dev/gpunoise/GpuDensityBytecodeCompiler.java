@@ -62,15 +62,23 @@ final class GpuDensityBytecodeCompiler {
         if (type.getName().startsWith("net.minecraft."))
             return Result.rejected("Minecraft implementation is handled by the vanilla graph lowering");
         try {
-            ClassNode owner = readClassNode(type, Type.getInternalName(type));
+            ClassNode owner = null;
             MethodNode compute = null;
-            for (MethodNode method : owner.methods) {
-                if (method.name.equals("compute") && method.desc.equals(COMPUTE_DESC)) {
-                    if (compute != null) return Result.rejected("class contains duplicate compute(FunctionContext) methods");
+            // Density implementations often inherit a shared compute method
+            // from a mod's abstract base class. Resolve Java's virtual method
+            // lookup before interpreting bytecode, rather than requiring each
+            // concrete density class to redeclare the method.
+            for (Class<?> current = type; current != null && current != DensityFunction.class;
+                    current = current.getSuperclass()) {
+                ClassNode candidate = readClassNode(current, Type.getInternalName(current));
+                MethodNode method = findMethod(candidate, "compute", COMPUTE_DESC);
+                if (method != null && (method.access & (Opcodes.ACC_ABSTRACT | Opcodes.ACC_NATIVE)) == 0) {
+                    owner = candidate;
                     compute = method;
+                    break;
                 }
             }
-            if (compute == null) return Result.rejected("compute(FunctionContext):double bytecode was not found");
+            if (compute == null) return Result.rejected("compute(FunctionContext):double bytecode was not found in the density class hierarchy");
             Interpreter interpreter = new Interpreter(function, owner, compute,
                     new GpuDensityExpression.Builder(), 0, new int[]{50_000}, Value.receiver(Kind.THIS),
                     new Value[]{Value.receiver(Kind.CONTEXT)});
