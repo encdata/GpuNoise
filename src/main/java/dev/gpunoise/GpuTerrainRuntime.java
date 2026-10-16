@@ -97,7 +97,8 @@ public final class GpuTerrainRuntime {
 
     /** Enables cell-grid input substitution only after graph parity passes. */
     public static boolean terrainInputsAvailable() {
-        return device != null && terrainGraph != null && graphParity;
+        return !Boolean.getBoolean("gpunoise.forceCpuTerrain")
+                && device != null && terrainGraph != null && graphParity;
     }
 
     /**

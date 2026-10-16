@@ -33,20 +33,27 @@ jobs:
           sudo apt-get install --yes glslc mesa-vulkan-drivers vulkan-tools
 
       - name: Verify Mesa Lavapipe is available
-        env:
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
         run: |
+          icd="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f \( -iname '*lvp*.json' -o -iname '*lavapipe*.json' \) -print -quit)"
+          test -n "$icd"
+          echo "Using Mesa ICD: $icd"
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+          export VK_ICD_FILENAMES="$icd"
           vulkaninfo --summary | tee /tmp/vulkan-summary.txt
           grep -Eqi 'llvmpipe|lavapipe' /tmp/vulkan-summary.txt
 
       - name: Build with Gradle
         run: ./gradlew --no-daemon build vulkanSmoke
-        env:
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+
+      - name: Run C2ME Chunky CPU and GPU worldgen benchmark
+        run: python3 tools/ci/runserver_benchmark.py
 
       - name: Upload mod artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: gpunoise-${{ github.sha }}
-          path: build/libs/*.jar
+          path: |
+            build/libs/*.jar
+            build/reports/ci/*.log
           if-no-files-found: error

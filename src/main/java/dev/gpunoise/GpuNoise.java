@@ -52,8 +52,12 @@ public final class GpuNoise {
         var server = event.getServer();
         server.execute(() -> {
             var random = ThreadLocalRandom.current();
-            int centerX = Math.floorDiv(random.nextInt(-1_800_000, 1_800_001), 16) * 16;
-            int centerZ = Math.floorDiv(random.nextInt(-1_800_000, 1_800_001), 16) * 16;
+            int randomCenterX = Math.floorDiv(random.nextInt(-1_800_000, 1_800_001), 16) * 16;
+            int randomCenterZ = Math.floorDiv(random.nextInt(-1_800_000, 1_800_001), 16) * 16;
+            int centerX = Integer.getInteger("gpunoise.chunkyCenterX", randomCenterX);
+            int centerZ = Integer.getInteger("gpunoise.chunkyCenterZ", randomCenterZ);
+            int radius = Integer.getInteger("gpunoise.chunkyRadius", 800);
+            if (radius <= 0) throw new IllegalArgumentException("gpunoise.chunkyRadius must be positive");
             var source = server.createCommandSourceStack().withPermission(4);
             // Always replace a previous benchmark task. Chunky keeps task
             // state in the world, so start alone may only report that an old
@@ -61,12 +65,13 @@ public final class GpuNoise {
             server.getCommands().performPrefixedCommand(source, "chunky cancel");
             server.getCommands().performPrefixedCommand(source, "chunky world minecraft:overworld");
             server.getCommands().performPrefixedCommand(source, "chunky center " + centerX + " " + centerZ);
-            // 800 blocks gives a 101x101 chunk square: approximately 10,000
-            // chunks while keeping the benchmark finite and reproducible.
-            server.getCommands().performPrefixedCommand(source, "chunky radius 800");
+            // Chunky measures radius in blocks. Defaults to the original
+            // 800-block development benchmark; CI supplies a smaller radius.
+            server.getCommands().performPrefixedCommand(source, "chunky radius " + radius);
             server.getCommands().performPrefixedCommand(source, "chunky start");
             server.getCommands().performPrefixedCommand(source, "chunky confirm");
-            LOGGER.info("Started fresh development Chunky benchmark: approximately 10,201 chunks centered at {},{}.", centerX, centerZ);
+            LOGGER.info("Started fresh development Chunky benchmark: radius={} blocks, center={},{}.",
+                    radius, centerX, centerZ);
         });
     }
 

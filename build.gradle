@@ -76,6 +76,14 @@ runs {
         // Enable manually for a fresh-coordinate Chunky benchmark; keep normal
         // server starts focused on gameplay and terrain integration.
         systemProperty 'gpunoise.chunkyBenchmark', 'true'
+        systemProperty 'gpunoise.chunkyRadius', System.getProperty('gpunoise.chunkyRadius', '800')
+        if (System.getProperty('gpunoise.chunkyCenterX') != null) {
+            systemProperty 'gpunoise.chunkyCenterX', System.getProperty('gpunoise.chunkyCenterX')
+        }
+        if (System.getProperty('gpunoise.chunkyCenterZ') != null) {
+            systemProperty 'gpunoise.chunkyCenterZ', System.getProperty('gpunoise.chunkyCenterZ')
+        }
+        systemProperty 'gpunoise.forceCpuTerrain', System.getProperty('gpunoise.forceCpuTerrain', 'false')
         systemProperty 'gpunoise.profileTerrain', System.getProperty('gpunoise.profileTerrain', 'false')
         systemProperty 'gpunoise.disableChunkWriter', System.getProperty('gpunoise.disableChunkWriter', 'false')
         argument '--nogui'
@@ -145,6 +153,11 @@ dependencies {
     // NeoGradle 7 uses this configuration for ordinary libraries in dev runs.
     localRunRuntime "org.lwjgl:lwjgl-vulkan:${lwjgl_version}"
     localRunRuntime "org.lwjgl:lwjgl:${lwjgl_version}"
+    if (System.getProperty('os.name', '').toLowerCase().contains('linux')) {
+        // Dev run configurations do not use the flattened native payload in
+        // the published jar, so provide LWJGL's Linux native to runServer CI.
+        localRunRuntime "org.lwjgl:lwjgl:${lwjgl_version}:natives-linux"
+    }
 
     // Example optional mod dependency with JEI
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime
