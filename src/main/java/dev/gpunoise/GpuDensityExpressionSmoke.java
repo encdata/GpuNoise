@@ -55,6 +55,22 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new DynamicClampDensity());
     }
 
+    static VulkanBranchFixture transcendentalMathFixture() {
+        return graphFixture(new TranscendentalMathDensity());
+    }
+
+    static VulkanBranchFixture powerMathFixture() {
+        return graphFixture(new PowerMathDensity());
+    }
+
+    static VulkanBranchFixture mapMathFixture() {
+        return graphFixture(new MapMathDensity());
+    }
+
+    static VulkanBranchFixture interpolationMathFixture() {
+        return graphFixture(new InterpolationMathDensity());
+    }
+
     private static VulkanBranchFixture graphFixture(DensityFunction function) {
         return new VulkanBranchFixture(GpuDensityGraphLowerer.lower(
                 GpuDensityGraphCompiler.compileDensityFunction(function, true)), function);
@@ -418,6 +434,10 @@ final class GpuDensityExpressionSmoke {
 
         verifyStandaloneMath(new DoubleMinMaxDensity(), "double Math.min/max");
         verifyStandaloneMath(new FloatMathDensity(), "float Math overloads and Mth.square");
+        verifyStandaloneMath(new TranscendentalMathDensity(), "transcendental Math");
+        verifyStandaloneMath(new PowerMathDensity(), "pow, atan2, and signum");
+        verifyStandaloneMath(new MapMathDensity(), "Mth mapping functions");
+        verifyStandaloneMath(new InterpolationMathDensity(), "Mth interpolation functions");
         verifyStandaloneMath(new DynamicClampDensity(), "dynamic Mth.clamp overloads");
 
         DynamicPowerDensity dynamicPower = new DynamicPowerDensity();
@@ -852,6 +872,47 @@ final class GpuDensityExpressionSmoke {
             float fx = (float) x, fy = (float) y, fz = (float) z;
             return net.minecraft.util.Mth.clamp(x * 0.02, y * 0.01, z * 0.03) * 0.01
                     + net.minecraft.util.Mth.clamp(fx * 0.01F, fy * 0.02F, fz * 0.03F) * 0.01;
+        }
+    }
+
+    private static final class TranscendentalMathDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            double x = context.blockX(), y = context.blockY(), z = context.blockZ();
+            return Math.floor(y * 0.25) + Math.ceil(x * 0.1)
+                    + Math.sqrt(Math.abs(x)) * 0.01 + Math.sin(x * 0.05)
+                    + Math.cos(z * 0.05) + Math.log(Math.exp(0.25)) * 0.1
+                    + Math.tanh(x * 0.01) * 0.1;
+        }
+    }
+
+    private static final class PowerMathDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            double x = context.blockX(), z = context.blockZ();
+            return Math.atan2(z, x) * 0.05
+                    + Math.pow(0.5 + Math.abs(x) * 0.01 + Math.abs(z) * 0.005, 1.7) * 0.1
+                    + Math.signum(x) * 0.01;
+        }
+    }
+
+    private static final class MapMathDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            double x = context.blockX(), y = context.blockY(), z = context.blockZ();
+            return net.minecraft.util.Mth.map(x, -128.0, 128.0, -1.0, 1.0)
+                    + net.minecraft.util.Mth.clampedMap(y, -32.0, 32.0, -1.0, 1.0)
+                    + net.minecraft.util.Mth.inverseLerp(z, -64.0, 64.0)
+                    + net.minecraft.util.Mth.absMax(x, z) * 0.001
+                    + net.minecraft.util.Mth.smoothstep(x / 256.0);
+        }
+    }
+
+    private static final class InterpolationMathDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            double x = context.blockX(), y = context.blockY(), z = context.blockZ();
+            return net.minecraft.util.Mth.clampedLerp(-2.0, 3.0, x / 32.0) * 0.01
+                    + net.minecraft.util.Mth.lerp2(x / 64.0, y / 32.0,
+                            -3.0, 1.0, 2.0, -1.0) * 0.02
+                    + net.minecraft.util.Mth.lerp3(x / 64.0, y / 32.0, z / 64.0,
+                            -2.0, 1.0, 0.5, 3.0, 4.0, -1.5, 2.5, -3.0) * 0.01;
         }
     }
 

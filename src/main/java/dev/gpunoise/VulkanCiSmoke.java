@@ -88,28 +88,23 @@ public final class VulkanCiSmoke {
                 }
             }
 
-            GpuDensityExpressionSmoke.VulkanBranchFixture mathFixture =
-                    GpuDensityExpressionSmoke.scalarMathFixture();
             float[] mathX = {-81.0f, -1.0f, 0.0f, 17.0f, 192.0f};
             float[] mathY = {-17.0f, 0.0f, 1.0f, 9.0f, 80.0f};
             float[] mathZ = {-5.0f, 1.0f, 0.0f, 31.0f, -64.0f};
-            float[] mathResults = ring.submitGraphRoots(mathFixture.graph(), mathX, mathY, mathZ)
-                    .get(60, TimeUnit.SECONDS);
-            for (int sample = 0; sample < mathX.length; sample++) {
-                double expected = mathFixture.javaFunction().compute(
-                        new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(
-                                (int) mathX[sample], (int) mathY[sample], (int) mathZ[sample]));
-                if (Math.abs(mathResults[sample] - expected) > 0.005) {
-                    throw new IllegalStateException("Scalar Math Java bytecode mismatch at sample " + sample
-                            + ": expected " + expected + ", got " + mathResults[sample]);
-                }
-            }
             assertNumericFixture(ring, GpuDensityExpressionSmoke.doubleMinMaxFixture(),
                     "double Math.min/max", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.floatMathFixture(),
                     "float Math and Mth.square", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.dynamicClampFixture(),
                     "dynamic double/float Mth.clamp", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.transcendentalMathFixture(),
+                    "transcendental Math", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.powerMathFixture(),
+                    "pow, atan2, and signum", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.mapMathFixture(),
+                    "Mth mapping functions", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.interpolationMathFixture(),
+                    "Mth interpolation functions", mathX, mathY, mathZ);
 
             GpuDensityExpressionSmoke.VulkanBranchFixture integerFixture =
                     GpuDensityExpressionSmoke.integerMathFixture();
@@ -266,7 +261,7 @@ public final class VulkanCiSmoke {
             assertConstantResults("terrain grid shader", gridResults, 8);
 
             GpuDensityExpressionSmoke.VulkanBranchFixture customGridFixture =
-                    GpuDensityExpressionSmoke.scalarMathFixture();
+                    GpuDensityExpressionSmoke.interpolationMathFixture();
             float[] customGridResults = ring.submitGraphRootsGrid(
                     customGridFixture.graph(), metadata, 1, 8).get(60, TimeUnit.SECONDS);
             for (int sample = 0; sample < customGridResults.length; sample++) {

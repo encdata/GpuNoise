@@ -111,7 +111,11 @@ parity checks.
   `FCMPL`/`FCMPG` and `DCMPL`/`DCMPG` NaN ordering is retained. Loops with
   statically known exits unroll up to 64 iterations; dynamic loops and
   dynamic branches inside loop bodies remain CPU fallbacks. No mod Java is
-  executed from a shader. The Mesa smoke path checks
+  executed from a shader. Mesa smoke fixtures dispatch transcendental math,
+  power and sign operations, Minecraft mapping functions, interpolation,
+  float overloads, and dynamic clamps independently so a numerical mismatch
+  identifies its operation group instead of failing an opaque composite graph.
+  The Mesa smoke path also checks
   nested ternaries, a noise-dependent floating branch, and a switch expression
   through lowering, packing, and dispatch against Java results. This grows the
   automatic compiler while preserving the vanilla implementation as oracle.
