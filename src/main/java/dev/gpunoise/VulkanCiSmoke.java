@@ -6,7 +6,6 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.levelgen.DensityFunction;
-import net.minecraft.world.level.levelgen.DensityFunctions;
 
 /** Headless Vulkan smoke test for CI's Mesa Lavapipe device. */
 public final class VulkanCiSmoke {
@@ -260,7 +259,7 @@ public final class VulkanCiSmoke {
     }
 
     private static void verifyDensityFunctionTranslators() {
-        DensityFunction inheritedGraph = DensityFunctions.constant(0.25);
+        DensityFunction inheritedGraph = densityProxy(DensityFunction.class);
         GpuDensityFunctionTranslators.registerForSubtypes(CustomDensityFamily.class,
                 ignored -> inheritedGraph);
         DensityFunction inherited = densityProxy(CustomDensityImplementation.class);
@@ -269,7 +268,7 @@ public final class VulkanCiSmoke {
             throw new IllegalStateException("Custom density supertype translator was not selected");
         }
 
-        DensityFunction exactGraph = DensityFunctions.constant(0.75);
+        DensityFunction exactGraph = densityProxy(DensityFunction.class);
         @SuppressWarnings("unchecked")
         Class<DensityFunction> generatedType = (Class<DensityFunction>) inherited.getClass();
         GpuDensityFunctionTranslators.register(generatedType, ignored -> exactGraph);
@@ -278,9 +277,9 @@ public final class VulkanCiSmoke {
         }
 
         GpuDensityFunctionTranslators.registerForSubtypes(LeftDensityApi.class,
-                ignored -> DensityFunctions.constant(1.0));
+                ignored -> densityProxy(DensityFunction.class));
         GpuDensityFunctionTranslators.registerForSubtypes(RightDensityApi.class,
-                ignored -> DensityFunctions.constant(-1.0));
+                ignored -> densityProxy(DensityFunction.class));
         DensityFunction ambiguous = densityProxy(LeftDensityApi.class, RightDensityApi.class);
         try {
             GpuDensityFunctionTranslators.translate(ambiguous);
