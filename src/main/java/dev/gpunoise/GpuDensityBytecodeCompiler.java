@@ -134,7 +134,7 @@ final class GpuDensityBytecodeCompiler {
             return new Value(kind, -1, null, null, null, null, 0.0, null, -1, null);
         }
         static Value noise(NormalNoise noise) {
-            return new Value(Kind.NOISE, -1, noise, null, null, null, null, 0.0, null, -1, null);
+            return new Value(Kind.NOISE, -1, noise, null, null, null, 0.0, null, -1, null);
         }
         static Value density(DensityFunction density) {
             return new Value(Kind.DENSITY, -1, null, density, null, null, 0.0, null, -1, null);
