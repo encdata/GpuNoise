@@ -6,9 +6,11 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import net.minecraft.world.level.levelgen.DensityFunction;
 import net.minecraft.world.level.levelgen.synth.NormalNoise;
 import org.objectweb.asm.ClassReader;
@@ -78,6 +80,13 @@ final class GpuDensityBytecodeCompiler {
                     break;
                 }
             }
+            if (compute == null) {
+                Class<?> defaultOwner = findDefaultComputeInterface(type);
+                if (defaultOwner != null) {
+                    owner = readClassNode(defaultOwner, Type.getInternalName(defaultOwner));
+                    compute = findMethod(owner, "compute", COMPUTE_DESC);
+                }
+            }
             if (compute == null) return Result.rejected("compute(FunctionContext):double bytecode was not found in the density class hierarchy");
             Interpreter interpreter = new Interpreter(function, owner, compute,
                     new GpuDensityExpression.Builder(), 0, new int[]{50_000}, Value.receiver(Kind.THIS),
@@ -109,6 +118,48 @@ final class GpuDensityBytecodeCompiler {
             if (method.name.equals(name) && method.desc.equals(descriptor)) return method;
         }
         return null;
+    }
+
+    private static Class<?> findDefaultComputeInterface(Class<?> densityType) {
+        Set<Class<?>> interfaces = new HashSet<>();
+        for (Class<?> current = densityType; current != null; current = current.getSuperclass()) {
+            collectInterfaces(current.getInterfaces(), interfaces);
+        }
+        List<Class<?>> candidates = new ArrayList<>();
+        for (Class<?> candidate : interfaces) {
+            if (!DensityFunction.class.isAssignableFrom(candidate)) continue;
+            try {
+                java.lang.reflect.Method method = candidate.getDeclaredMethod("compute",
+                        DensityFunction.FunctionContext.class);
+                int modifiers = method.getModifiers();
+                if (method.getReturnType() == double.class && !Modifier.isStatic(modifiers)
+                        && !Modifier.isAbstract(modifiers)) candidates.add(candidate);
+            } catch (NoSuchMethodException ignored) {
+                // The implementation may be inherited from a parent interface.
+            }
+        }
+        Class<?> selected = null;
+        for (Class<?> candidate : candidates) {
+            boolean shadowed = false;
+            for (Class<?> other : candidates) {
+                if (candidate != other && candidate.isAssignableFrom(other)) {
+                    shadowed = true;
+                    break;
+                }
+            }
+            if (!shadowed) {
+                if (selected != null) throw new UnsupportedBytecode(
+                        "multiple unrelated density interfaces provide default compute implementations");
+                selected = candidate;
+            }
+        }
+        return selected;
+    }
+
+    private static void collectInterfaces(Class<?>[] interfaces, Set<Class<?>> collected) {
+        for (Class<?> type : interfaces) {
+            if (collected.add(type)) collectInterfaces(type.getInterfaces(), collected);
+        }
     }
 
     private static boolean isInlineableHelperOwner(String internalName) {

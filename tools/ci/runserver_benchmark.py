@@ -158,7 +158,6 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
         # GPU materialization with the Java cell-corner interpolation first.
         command.append("-Dgpunoise.fullBlockOutput=true")
         command.append(f"-Dgpunoise.terrainBatchWindowMs={BATCH_WINDOW_MS}")
-        command.append("-Dgpunoise.fastMath=true")
     print(f"Starting {mode} Chunky benchmark: {' '.join(command)}", flush=True)
     process = subprocess.Popen(
         command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -246,7 +245,10 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
                 observed = "missing" if batch_window is None else f"{batch_window.group(1)}ms"
                 raise RuntimeError(f"GPU batch-window setting was {observed}; expected {BATCH_WINDOW_MS}ms")
             shader_variants = GPU_SHADER_VARIANT.findall(run_log)
-            expected_fast_math = "false" if force_cpu else "true"
+            # Keep the paired throughput comparison on the parity-preserving
+            # shader. FP32 math remains an explicit experiment: the compiler
+            # smoke suite includes large accumulations that exceed Java parity.
+            expected_fast_math = "false"
             if not shader_variants or shader_variants[-1][1] != expected_fast_math:
                 observed = "missing" if not shader_variants else shader_variants[-1][1]
                 raise RuntimeError(f"GPU shader fastMath mode was {observed}; expected {expected_fast_math}")

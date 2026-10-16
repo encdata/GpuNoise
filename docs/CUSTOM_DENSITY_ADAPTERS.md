@@ -63,8 +63,9 @@ capacity checks still happen during graph compilation.
 The point-sample shader supports coordinates, finite constants, NormalNoise,
 double arithmetic, mapped scalar math, float arithmetic with per-operation
 32-bit rounding, Java 32-bit integer arithmetic, numeric casts, and
-compare/select nodes. The bytecode frontend also recognizes inherited
-`compute(FunctionContext)` implementations, bounded pure instance helpers in
+compare/select nodes. The bytecode frontend also recognizes inherited class
+and unambiguous default-interface `compute(FunctionContext)` implementations,
+bounded pure instance helpers in
 the density class hierarchy, bounded forward branches and switches, static
 loops of at most 64 iterations, static helper methods, `Math` scalar methods,
 and `Mth` mapping helpers. Dynamic loops,

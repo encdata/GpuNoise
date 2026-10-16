@@ -123,6 +123,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new InheritedComputeDensity());
     }
 
+    static VulkanBranchFixture defaultInterfaceComputeFixture() {
+        return graphFixture(new DefaultInterfaceDensity());
+    }
+
     static VulkanBranchFixture minecraftMathOverloadsFixture() {
         return graphFixture(new MinecraftMathOverloadsDensity());
     }
@@ -507,6 +511,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new ExternalStaticHelperDensity(), "external static terrain helpers");
         verifyStandaloneMath(new ConstantArrayHelperDensity(), "constant-index terrain arrays");
         verifyStandaloneMath(new InheritedComputeDensity(), "inherited terrain compute implementation");
+        verifyStandaloneMath(new DefaultInterfaceDensity(), "default interface terrain compute implementation");
         verifyStandaloneMath(new MinecraftMathOverloadsDensity(), "Mth float and integer overloads");
         verifyStandaloneMath(new DynamicClampDensity(), "dynamic Mth.clamp overloads");
 
@@ -1150,6 +1155,23 @@ final class GpuDensityExpressionSmoke {
     }
 
     private static final class InheritedComputeDensity extends SharedTerrainDensity {}
+
+    private interface DefaultInterfaceTerrainDensity extends DensityFunction.SimpleFunction {
+        @Override default double compute(FunctionContext context) {
+            double x = context.blockX() * 0.03125;
+            double z = context.blockZ() * 0.0625;
+            return Math.sin(x - z) * 0.5 + Math.abs(x + z) * 0.01;
+        }
+
+        @Override default DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
+        @Override default double minValue() { return -2.0; }
+        @Override default double maxValue() { return 2.0; }
+        @Override default net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
+            return DensityFunctions.constant(0.0).codec();
+        }
+    }
+
+    private static final class DefaultInterfaceDensity implements DefaultInterfaceTerrainDensity {}
 
     private static final class MinecraftMathOverloadsDensity extends NumericSmokeDensity {
         @Override public double compute(FunctionContext context) {
