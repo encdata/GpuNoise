@@ -144,6 +144,8 @@ public final class VulkanCiSmoke {
                     "Mth integer interpolation functions", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.externalStaticHelperFixture(),
                     "external static terrain helpers", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.constantArrayHelperFixture(),
+                    "constant-index terrain arrays", mathX, mathY, mathZ);
             GpuDensityExpressionSmoke.VulkanBranchFixture minecraftMathFixture =
                     GpuDensityExpressionSmoke.minecraftMathOverloadsFixture();
             float[] overloadX = {-2_147_483_648.0f, -46_341.0f, 0.0f, 46_341.0f, 2_147_483_520.0f};

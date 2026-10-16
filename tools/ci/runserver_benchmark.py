@@ -55,6 +55,7 @@ SERVER_CRASH = re.compile(
 GPU_COUNTS = re.compile(
     r"GPU terrain: submitted=(\d+), completed=(\d+), consumed=(\d+), fallback=(\d+)"
 )
+GPU_BATCH_WINDOW = re.compile(r"GPU terrain batch window=(\d+)ms, chunk limit=(\d+)")
 
 
 def fetch_mods(destination: Path) -> None:
@@ -235,8 +236,13 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
         if not force_cpu:
             if not gpu_counts or max(counts[2] for counts in gpu_counts) <= 0:
                 raise RuntimeError("GPU benchmark completed without any GPU terrain cache being consumed")
-            if "GPU terrain grid parity:" not in log_path.read_text(encoding="utf-8"):
+            run_log = log_path.read_text(encoding="utf-8")
+            if "GPU terrain grid parity:" not in run_log:
                 raise RuntimeError("GPU terrain grid parity check did not run")
+            batch_window = GPU_BATCH_WINDOW.search(run_log)
+            if batch_window is None or int(batch_window.group(1)) != BATCH_WINDOW_MS:
+                observed = "missing" if batch_window is None else f"{batch_window.group(1)}ms"
+                raise RuntimeError(f"GPU batch-window setting was {observed}; expected {BATCH_WINDOW_MS}ms")
 
         if run_vulkan_smoke and "GPU_NOISE_VULKAN_SMOKE_PASSED" not in log_path.read_text(encoding="utf-8"):
             raise RuntimeError("Vulkan server lifecycle smoke did not report success")

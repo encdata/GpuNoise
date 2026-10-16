@@ -115,6 +115,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new ExternalStaticHelperDensity());
     }
 
+    static VulkanBranchFixture constantArrayHelperFixture() {
+        return graphFixture(new ConstantArrayHelperDensity());
+    }
+
     static VulkanBranchFixture minecraftMathOverloadsFixture() {
         return graphFixture(new MinecraftMathOverloadsDensity());
     }
@@ -497,6 +501,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new VectorLengthMathDensity(), "Mth vector length functions");
         verifyStandaloneMath(new IntegerInterpolationMathDensity(), "Mth integer interpolation functions");
         verifyStandaloneMath(new ExternalStaticHelperDensity(), "external static terrain helpers");
+        verifyStandaloneMath(new ConstantArrayHelperDensity(), "constant-index terrain arrays");
         verifyStandaloneMath(new MinecraftMathOverloadsDensity(), "Mth float and integer overloads");
         verifyStandaloneMath(new DynamicClampDensity(), "dynamic Mth.clamp overloads");
 
@@ -1100,6 +1105,19 @@ final class GpuDensityExpressionSmoke {
             double elevation = y * scale;
             double ridge = ridge(elevation, y - elevation);
             return ridge * 0.5 + (y > 0 ? elevation * 0.01 : -elevation * 0.02);
+        }
+    }
+
+    private static final class ConstantArrayHelperDensity extends NumericSmokeDensity {
+        private final float[] octaveWeights = {0.5F, -0.25F, 0.125F, -0.0625F, 0.03125F};
+
+        @Override public double compute(FunctionContext context) {
+            float x = context.blockX() * 0.03125F;
+            float sum = 0.0F;
+            for (int octave = 0; octave < octaveWeights.length; octave++) {
+                sum += net.minecraft.util.Mth.sin(x * (octave + 1)) * octaveWeights[octave];
+            }
+            return sum;
         }
     }
 

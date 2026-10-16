@@ -88,9 +88,11 @@ parity checks.
   operation before broad modpack terrain graphs can be enabled by default.
 - Custom density compilation now also inspects `compute(FunctionContext)` JVM
   bytecode after explicit translators. It recursively inlines bounded pure
-  same-class helpers and static helpers in dependency classes, carries final `DensityFunction` fields as graph
-  dependencies and inlines class/interface static-final primitive constants, expands bounded forward branches into compare/select nodes,
-  lowers bounded integer table/lookup switches through the same IR, and
+  same-class helpers and static helpers in dependency classes, carries final
+  `DensityFunction` fields as graph dependencies, snapshots final instance
+  arrays at constant indices, and reads final static primitive values.
+  Bounded forward branches become compare/select nodes; bounded integer
+  table/lookup switches lower through the same IR. The compiler recognizes
   recognizes `floor`, `ceil`, `sqrt`, `sin`, `cos`, `exp`, `log`, and the
   `Mth.map`, `clampedMap`, `inverseLerp`, `clampedLerp`, `lerp2`, and
   `lerp3`, plus `absMax`, `smoothstep`, `atan2`, `pow`, `signum`, and `tanh`.
@@ -121,7 +123,9 @@ parity checks.
   float multiplication and floor, and positive-delta selection semantics.
   The terrain roots queue's batch window is now configurable from 1–250 ms;
   CI benchmarks use 50 ms and report both average batch fill and dispatch
-  latency so queue coalescing can be tuned against actual GPU CPS.
+  latency so queue coalescing can be tuned against actual GPU CPS. The run
+  harness verifies the selected window reached the server before accepting
+  any benchmark measurement.
   `Math.signum(float)` and
   `Math.signum(double)` retain their respective input precision.
   Minecraft's indexed sine table is generated once and uploaded to persistent

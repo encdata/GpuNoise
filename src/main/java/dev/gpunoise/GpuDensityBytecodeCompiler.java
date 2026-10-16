@@ -17,7 +17,6 @@ import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FieldInsnNode;
-import org.objectweb.asm.tree.FieldNode;
 import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.IincInsnNode;
 import org.objectweb.asm.tree.IntInsnNode;
@@ -117,30 +116,34 @@ final class GpuDensityBytecodeCompiler {
                 + (message == null || message.isBlank() ? "" : ": " + message);
     }
 
-    private enum Kind { VALUE, THIS, CONTEXT, NOISE, DENSITY, COMPARE }
+    private enum Kind { VALUE, THIS, CONTEXT, NOISE, DENSITY, ARRAY, COMPARE }
     private enum Axis { X, Y, Z }
     private record LoopRegion(int firstInstruction, int backEdgeInstruction) {}
 
     private record Value(Kind kind, int expression, NormalNoise noise, DensityFunction density,
+                         Object arrayValue,
                          Axis axis, double axisScale, Double constant,
                          int comparisonRight, String comparisonMode) {
         static Value value(int expression, Double constant) {
-            return new Value(Kind.VALUE, expression, null, null, null, 0.0, constant, -1, null);
+            return new Value(Kind.VALUE, expression, null, null, null, null, 0.0, constant, -1, null);
         }
         static Value coordinate(int expression, Axis axis, double scale) {
-            return new Value(Kind.VALUE, expression, null, null, axis, scale, null, -1, null);
+            return new Value(Kind.VALUE, expression, null, null, null, axis, scale, null, -1, null);
         }
         static Value receiver(Kind kind) {
-            return new Value(kind, -1, null, null, null, 0.0, null, -1, null);
+            return new Value(kind, -1, null, null, null, null, 0.0, null, -1, null);
         }
         static Value noise(NormalNoise noise) {
-            return new Value(Kind.NOISE, -1, noise, null, null, 0.0, null, -1, null);
+            return new Value(Kind.NOISE, -1, noise, null, null, null, null, 0.0, null, -1, null);
         }
         static Value density(DensityFunction density) {
-            return new Value(Kind.DENSITY, -1, null, density, null, 0.0, null, -1, null);
+            return new Value(Kind.DENSITY, -1, null, density, null, null, 0.0, null, -1, null);
+        }
+        static Value array(Object value) {
+            return new Value(Kind.ARRAY, -1, null, null, value, null, 0.0, null, -1, null);
         }
         static Value comparison(int left, int right, String mode) {
-            return new Value(Kind.COMPARE, left, null, null, null, 0.0, null, right, mode);
+            return new Value(Kind.COMPARE, left, null, null, null, null, 0.0, null, right, mode);
         }
     }
 
@@ -454,6 +457,9 @@ final class GpuDensityBytecodeCompiler {
                 case Opcodes.ARETURN -> reject("compute method returned a nonnumeric value");
                 case Opcodes.POP -> pop("POP");
                 case Opcodes.DUP -> stack.add(peek("DUP"));
+                case Opcodes.IALOAD, Opcodes.LALOAD, Opcodes.FALOAD, Opcodes.DALOAD,
+                        Opcodes.AALOAD, Opcodes.BALOAD, Opcodes.CALOAD, Opcodes.SALOAD -> arrayLoad(opcode);
+                case Opcodes.ARRAYLENGTH -> arrayLength();
                 case Opcodes.SWAP -> {
                     Value first = pop("SWAP"), second = pop("SWAP");
                     stack.add(first); stack.add(second);
@@ -504,10 +510,8 @@ final class GpuDensityBytecodeCompiler {
                 if (receiver.kind() != Kind.THIS)
                     reject("field access through a value other than the density object: " + instruction.name);
             }
-            Object fieldValue = staticRead
-                    ? readStaticConstant(function, owner, instruction.owner,
-                            instruction.name, instruction.desc)
-                    : readField(function, instruction.owner, instruction.name, instruction.desc);
+            Object fieldValue = readField(function, instruction.owner, instruction.name,
+                    instruction.desc, staticRead);
             if (fieldValue instanceof Number number) {
                 switch (instruction.desc) {
                     case "B", "C", "I", "S", "Z" -> pushIntegerConstant(number.intValue());
@@ -523,10 +527,74 @@ final class GpuDensityBytecodeCompiler {
                 stack.add(Value.noise(noise));
             } else if (fieldValue instanceof DensityFunction density) {
                 stack.add(Value.density(density));
+            } else if (fieldValue != null && fieldValue.getClass().isArray()) {
+                stack.add(Value.array(fieldValue));
             } else {
                 reject("field " + instruction.name + " has unsupported runtime type "
                         + (fieldValue == null ? "null" : fieldValue.getClass().getName()));
             }
+        }
+
+        private void arrayLoad(int opcode) {
+            Value index = popValue("array index");
+            Value array = pop("array reference");
+            if (array.kind() != Kind.ARRAY) reject("array load requires a final density-object array field");
+            if (index.constant() == null || !Double.isFinite(index.constant())
+                    || index.constant() != Math.rint(index.constant())
+                    || index.constant() < Integer.MIN_VALUE || index.constant() > Integer.MAX_VALUE) {
+                reject("array index must be a compile-time integer");
+            }
+            int elementIndex = (int) (double) index.constant();
+            Object values = array.arrayValue();
+            int length = java.lang.reflect.Array.getLength(values);
+            if (elementIndex < 0 || elementIndex >= length) {
+                reject("constant array index " + elementIndex + " is outside length " + length);
+            }
+            Class<?> component = values.getClass().getComponentType();
+            boolean validArray = switch (opcode) {
+                case Opcodes.IALOAD -> component == int.class;
+                case Opcodes.LALOAD -> component == long.class;
+                case Opcodes.FALOAD -> component == float.class;
+                case Opcodes.DALOAD -> component == double.class;
+                case Opcodes.BALOAD -> component == byte.class || component == boolean.class;
+                case Opcodes.CALOAD -> component == char.class;
+                case Opcodes.SALOAD -> component == short.class;
+                case Opcodes.AALOAD -> !component.isPrimitive();
+                default -> false;
+            };
+            if (!validArray) reject("array load opcode does not match " + component.getTypeName() + "[]");
+            Object value = java.lang.reflect.Array.get(values, elementIndex);
+            if (value instanceof Number number) {
+                if (opcode == Opcodes.IALOAD || opcode == Opcodes.BALOAD
+                        || opcode == Opcodes.CALOAD || opcode == Opcodes.SALOAD) {
+                    pushIntegerConstant(number.intValue());
+                } else if (opcode == Opcodes.FALOAD) {
+                    pushConstant(number.floatValue());
+                } else if (opcode == Opcodes.DALOAD) {
+                    pushConstant(number.doubleValue());
+                } else {
+                    reject("long array elements are not represented by the density IR");
+                }
+            } else if (value instanceof Boolean booleanValue && opcode == Opcodes.BALOAD) {
+                pushIntegerConstant(booleanValue ? 1 : 0);
+            } else if (value instanceof Character characterValue && opcode == Opcodes.CALOAD) {
+                pushIntegerConstant(characterValue);
+            } else if (value instanceof NormalNoise noise && opcode == Opcodes.AALOAD) {
+                stack.add(Value.noise(noise));
+            } else if (value instanceof DensityFunction density && opcode == Opcodes.AALOAD) {
+                stack.add(Value.density(density));
+            } else if (value != null && value.getClass().isArray() && opcode == Opcodes.AALOAD) {
+                stack.add(Value.array(value));
+            } else {
+                reject("array element type is not a supported scalar, noise, or density: "
+                        + (value == null ? "null" : value.getClass().getName()));
+            }
+        }
+
+        private void arrayLength() {
+            Value array = pop("array length");
+            if (array.kind() != Kind.ARRAY) reject("array length requires a final density-object array field");
+            pushIntegerConstant(java.lang.reflect.Array.getLength(array.arrayValue()));
         }
 
         private void invoke(MethodInsnNode call) {
@@ -1430,8 +1498,10 @@ final class GpuDensityBytecodeCompiler {
         }
     }
 
-    private static Object readField(Object instance, String owner, String name, String descriptor) {
-        Field field = findField(instance.getClass(), owner, name);
+    private static Object readField(Object instance, String owner, String name, String descriptor,
+                                    boolean staticAccess) {
+        Class<?> root = staticAccess ? resolveOwnerClass(instance.getClass(), owner) : instance.getClass();
+        Field field = findField(root, owner, name);
         if (field == null) {
             throw new UnsupportedBytecode("field owner is not in the density class/interface hierarchy: " + owner);
         }
@@ -1441,38 +1511,29 @@ final class GpuDensityBytecodeCompiler {
             }
             if (!field.trySetAccessible()) throw new UnsupportedBytecode("field is inaccessible: " + name);
             int modifiers = field.getModifiers();
-            if (Modifier.isStatic(modifiers))
-                throw new UnsupportedBytecode("instance field access resolved to a static field: " + name);
+            if (Modifier.isStatic(modifiers) != staticAccess)
+                throw new UnsupportedBytecode("field access kind does not match runtime field: " + name);
             if (!Modifier.isFinal(modifiers))
                 throw new UnsupportedBytecode("mutable field is not supported: " + name);
-            return field.get(instance);
+            return field.get(staticAccess ? null : instance);
         } catch (IllegalAccessException failure) {
             throw new UnsupportedBytecode("field cannot be read: " + name);
         }
     }
 
-    private static Object readStaticConstant(Object density, ClassNode currentOwner, String owner,
-                                             String name, String descriptor) {
-        ClassNode declaringOwner = owner.equals(currentOwner.name)
-                ? currentOwner : readClassNode(density.getClass(), owner);
-        for (FieldNode field : declaringOwner.fields) {
-            if (!field.name.equals(name) || !field.desc.equals(descriptor)) continue;
-            if ((field.access & (Opcodes.ACC_STATIC | Opcodes.ACC_FINAL))
-                    != (Opcodes.ACC_STATIC | Opcodes.ACC_FINAL)) {
-                throw new UnsupportedBytecode("static helper field is not final: " + name);
+    private static Class<?> resolveOwnerClass(Class<?> resourceOwner, String internalName) {
+        String binaryName = internalName.replace('/', '.');
+        ClassLoader[] loaders = {resourceOwner.getClassLoader(), Thread.currentThread().getContextClassLoader(),
+                GpuDensityBytecodeCompiler.class.getClassLoader()};
+        for (ClassLoader loader : loaders) {
+            if (loader == null) continue;
+            try {
+                return Class.forName(binaryName, false, loader);
+            } catch (ClassNotFoundException | LinkageError ignored) {
+                // Try the remaining mod and runtime class loaders.
             }
-            if (field.value == null) {
-                throw new UnsupportedBytecode("static field requires class initialization and is not a bytecode constant: "
-                        + owner.replace('/', '.') + "." + name);
-            }
-            if (!(field.value instanceof Number || field.value instanceof Boolean
-                    || field.value instanceof Character)) {
-                throw new UnsupportedBytecode("static field is not a primitive numeric constant: " + name);
-            }
-            return field.value;
         }
-        throw new UnsupportedBytecode("static constant was not found in class bytecode: "
-                + owner.replace('/', '.') + "." + name);
+        throw new UnsupportedBytecode("field owner class is unavailable: " + binaryName);
     }
 
     private static Field findField(Class<?> type, String owner, String name) {

@@ -87,6 +87,7 @@ runs {
         systemProperty 'gpunoise.fullBlockOutput', System.getProperty('gpunoise.fullBlockOutput', 'false')
         systemProperty 'gpunoise.profileTerrain', System.getProperty('gpunoise.profileTerrain', 'false')
         systemProperty 'gpunoise.disableChunkWriter', System.getProperty('gpunoise.disableChunkWriter', 'false')
+        systemProperty 'gpunoise.terrainBatchWindowMs', System.getProperty('gpunoise.terrainBatchWindowMs', '20')
         systemProperty 'gpunoise.vulkanSmoke', System.getProperty('gpunoise.vulkanSmoke', 'false')
         argument '--nogui'
         def configuredServerPort = providers.gradleProperty('gpunoiseServerPort')
