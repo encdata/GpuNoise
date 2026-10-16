@@ -67,6 +67,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new Atan2MathDensity());
     }
 
+    static VulkanBranchFixture atan2SignedZeroFixture() {
+        return graphFixture(new Atan2SignedZeroDensity());
+    }
+
     static VulkanBranchFixture signumMathFixture() {
         return graphFixture(new SignumMathDensity());
     }
@@ -449,6 +453,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new TranscendentalMathDensity(), "transcendental Math");
         verifyStandaloneMath(new PowerMathDensity(), "pow");
         verifyStandaloneMath(new Atan2MathDensity(), "atan2");
+        verifyStandaloneMath(new Atan2SignedZeroDensity(), "atan2 signed zero");
         verifyStandaloneMath(new SignumMathDensity(), "signum");
         verifyStandaloneMath(new MapMathDensity(), "Mth mapping functions");
         verifyStandaloneMath(new InterpolationMathDensity(), "Mth interpolation functions");
@@ -910,6 +915,14 @@ final class GpuDensityExpressionSmoke {
     private static final class Atan2MathDensity extends NumericSmokeDensity {
         @Override public double compute(FunctionContext context) {
             return Math.atan2(context.blockZ(), context.blockX()) * 0.05;
+        }
+    }
+
+    private static final class Atan2SignedZeroDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            double y = context.blockX() * -0.0;
+            double x = context.blockZ() * -0.0;
+            return Math.atan2(y, x);
         }
     }
 

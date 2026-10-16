@@ -103,6 +103,10 @@ public final class VulkanCiSmoke {
                     "pow", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.atan2MathFixture(),
                     "atan2", mathX, mathY, mathZ);
+            float[] atanAxes = {-1.0f, -1.0f, 1.0f, 1.0f, 0.0f};
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.atan2SignedZeroFixture(),
+                    "atan2 signed-zero quadrants", atanAxes, new float[atanAxes.length],
+                    new float[]{-1.0f, 1.0f, -1.0f, 1.0f, 0.0f});
             assertNumericFixture(ring, GpuDensityExpressionSmoke.signumMathFixture(),
                     "signum", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.mapMathFixture(),
