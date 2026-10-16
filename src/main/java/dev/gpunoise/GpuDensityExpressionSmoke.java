@@ -261,7 +261,7 @@ final class GpuDensityExpressionSmoke {
 
     private static void verifyBytecodeFrontend() {
         NormalNoise noise = NormalNoise.create(RandomSource.create(811L), -2, 1.0, 0.5);
-        BytecodeDensity density = new BytecodeDensity(noise, DensityFunctions.constant(0.125),
+        BytecodeDensity density = new BytecodeDensity(noise, new ConstantReferenceDensity(0.125),
                 0.017, 0.03125, 0.4, 1.7);
         GpuDensityBytecodeCompiler.Result compiled = GpuDensityBytecodeCompiler.compile(density);
         if (compiled.expression() == null) {
@@ -533,6 +533,17 @@ final class GpuDensityExpressionSmoke {
                         + point[1] + "," + point[2] + ": CPU=" + expected + ", IR=" + actual);
             }
         }
+    }
+
+    private static final class ConstantReferenceDensity implements DensityFunction.SimpleFunction {
+        private final double value;
+
+        private ConstantReferenceDensity(double value) { this.value = value; }
+        @Override public double compute(FunctionContext context) { return value; }
+        @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
+        @Override public double minValue() { return value; }
+        @Override public double maxValue() { return value; }
+        @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() { return null; }
     }
 
     private static final class BytecodeDensity implements DensityFunction.SimpleFunction {
