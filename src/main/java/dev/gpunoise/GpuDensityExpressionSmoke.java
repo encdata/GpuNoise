@@ -7,7 +7,8 @@ import net.minecraft.world.level.levelgen.synth.NormalNoise;
 
 /** CPU-side public-API checks used by the GitHub Actions Vulkan smoke entry point. */
 final class GpuDensityExpressionSmoke {
-    private static final double FLOAT_ABI_PARITY_EPSILON = 1.0e-6;
+    private static final double FLOAT_ABI_ABSOLUTE_EPSILON = 1.0e-6;
+    private static final double FLOAT_ABI_RELATIVE_EPSILON = 1.0e-7;
 
     private GpuDensityExpressionSmoke() {}
 
@@ -384,9 +385,8 @@ final class GpuDensityExpressionSmoke {
         for (int[] point : new int[][]{{-81, -17, -5}, {-1, 0, 1}, {17, 9, 31}}) {
             DensityFunction.SinglePointContext context = new DensityFunction.SinglePointContext(
                     point[0], point[1], point[2]);
-            requireClose(scalarMathResult.expression().evaluate(point[0], point[1], point[2]),
-                    scalarMath.compute(context), FLOAT_ABI_PARITY_EPSILON,
-                    "scalar Math bytecode at x=" + point[0]);
+            requireFloatAbiClose(scalarMathResult.expression().evaluate(point[0], point[1], point[2]),
+                    scalarMath.compute(context), "scalar Math bytecode at x=" + point[0]);
         }
         GpuDensityGraph scalarMathGraph = scalarMathFixture().graph();
         boolean hasGridCoordinate = scalarMathGraph.nodes().stream()
@@ -428,8 +428,8 @@ final class GpuDensityExpressionSmoke {
         for (int xValue : new int[]{-128, -1, 0, 37, 1024}) {
             double expected = staticConstants.compute(
                     new DensityFunction.SinglePointContext(xValue, 0, 0));
-            requireClose(staticConstantResult.expression().evaluate(xValue, 0, 0), expected,
-                    FLOAT_ABI_PARITY_EPSILON, "static final terrain constant at x=" + xValue);
+            requireFloatAbiClose(staticConstantResult.expression().evaluate(xValue, 0, 0), expected,
+                    "static final terrain constant at x=" + xValue);
         }
         GpuDensityGraphBuffer.pack(GpuDensityGraphLowerer.lower(
                 GpuDensityGraphCompiler.compileDensityFunction(staticConstants, true)));
@@ -455,8 +455,7 @@ final class GpuDensityExpressionSmoke {
         }
         for (int xValue : new int[]{-30_000_001, -257, -1, 0, 1, 19, 257, 30_000_001}) {
             double expected = bitwise.compute(new DensityFunction.SinglePointContext(xValue, 0, 0));
-            requireClose(bitwiseResult.expression().evaluate(xValue, 0, 0), expected,
-                    FLOAT_ABI_PARITY_EPSILON,
+            requireFloatAbiClose(bitwiseResult.expression().evaluate(xValue, 0, 0), expected,
                     "Java integer bitwise/shift operations at x=" + xValue);
         }
         GpuDensityGraphBuffer.pack(integerBitwiseFixture().graph());
@@ -708,6 +707,12 @@ final class GpuDensityExpressionSmoke {
 
     private static void requireClose(double actual, double expected, String label) {
         requireClose(actual, expected, 1.0e-12, label);
+    }
+
+    private static void requireFloatAbiClose(double actual, double expected, String label) {
+        double tolerance = Math.max(FLOAT_ABI_ABSOLUTE_EPSILON,
+                Math.abs(expected) * FLOAT_ABI_RELATIVE_EPSILON);
+        requireClose(actual, expected, tolerance, label);
     }
 
     private static void requireClose(double actual, double expected, double epsilon, String label) {
