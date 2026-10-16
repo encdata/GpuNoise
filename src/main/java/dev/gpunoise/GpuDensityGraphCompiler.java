@@ -68,7 +68,12 @@ final class GpuDensityGraphCompiler {
     private int node(DensityFunction function) {
         if (function == null) throw new IllegalArgumentException("NoiseRouter contains null density function");
         Integer existing = indices.get(function);
-        if (existing != null) return existing;
+        if (existing != null) {
+            if (nodes.get(existing) == null) {
+                throw unsupported(function, "recursive density graph");
+            }
+            return existing;
+        }
         int index = nodes.size();
         indices.put(function, index);
         // Reserve the index before walking children; this also detects recursive graphs.
