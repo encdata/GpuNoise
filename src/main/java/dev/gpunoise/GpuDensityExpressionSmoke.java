@@ -427,7 +427,7 @@ final class GpuDensityExpressionSmoke {
             double expected = staticConstants.compute(
                     new DensityFunction.SinglePointContext(xValue, 0, 0));
             requireClose(staticConstantResult.expression().evaluate(xValue, 0, 0), expected,
-                    "static final terrain constant at x=" + xValue);
+                    1.0e-6, "static final terrain constant at x=" + xValue);
         }
         GpuDensityGraphBuffer.pack(GpuDensityGraphLowerer.lower(
                 GpuDensityGraphCompiler.compileDensityFunction(staticConstants, true)));
