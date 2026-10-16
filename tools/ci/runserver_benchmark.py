@@ -41,6 +41,7 @@ TASK_DONE = re.compile(
     r"Task finished for .*?Processed:\s*([\d,]+) chunks \(([^)]+)%\), "
     r"Total time:\s*(\d+):(\d+):(\d+)"
 )
+TASK_STARTED = re.compile(r"\[Chunky\] Task started in minecraft:overworld")
 GPU_COUNTS = re.compile(
     r"GPU terrain: submitted=(\d+), completed=(\d+), consumed=(\d+), fallback=(\d+)"
 )
@@ -133,34 +134,45 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool) -> tuple[in
         command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1, start_new_session=True,
     )
-    lines: queue.Queue[str | None] = queue.Queue()
+    lines: queue.Queue[tuple[str, float] | None] = queue.Queue()
 
     def collect_output() -> None:
         assert process.stdout is not None
         with log_path.open("w", encoding="utf-8") as log_file:
             for line in process.stdout:
+                observed_at = time.monotonic()
                 print(line, end="", flush=True)
                 log_file.write(line)
                 log_file.flush()
-                lines.put(line)
+                lines.put((line, observed_at))
         lines.put(None)
 
     reader = threading.Thread(target=collect_output, name=f"{mode}-server-log", daemon=True)
     reader.start()
     started = time.monotonic()
+    chunky_started: float | None = None
+    chunky_elapsed: float | None = None
     completed: re.Match[str] | None = None
     gpu_counts: list[tuple[int, int, int, int]] = []
     try:
         while time.monotonic() - started < SERVER_START_TIMEOUT:
             try:
-                line = lines.get(timeout=0.5)
+                event = lines.get(timeout=0.5)
             except queue.Empty:
-                line = ""
-            if line is None:
+                event = ("", time.monotonic())
+            if event is None:
                 break
+            line, observed_at = event
+            if TASK_STARTED.search(line):
+                chunky_started = observed_at
             match = TASK_DONE.search(line)
             if match:
                 completed = match
+                if chunky_started is not None:
+                    # Chunky's summary rounds its duration to whole seconds.
+                    # Time the streamed start and finish records at sub-second
+                    # precision so small CI benchmark areas remain useful.
+                    chunky_elapsed = observed_at - chunky_started
                 break
             counts = GPU_COUNTS.search(line)
             if counts:
@@ -173,11 +185,12 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool) -> tuple[in
 
         count = int(completed.group(1).replace(",", ""))
         percent = float(completed.group(2).rstrip("%"))
-        elapsed_seconds = (
+        reported_elapsed = (
             int(completed.group(3)) * 3600
             + int(completed.group(4)) * 60
             + int(completed.group(5))
         )
+        elapsed_seconds = chunky_elapsed if chunky_elapsed is not None else float(reported_elapsed)
         if percent < 99.99 or count <= 0 or elapsed_seconds <= 0:
             raise RuntimeError(f"Chunky reported an incomplete or unmeasurable run: {completed.group(0)}")
 
@@ -199,7 +212,7 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool) -> tuple[in
         cps = count / elapsed_seconds
         print(
             f"CI_WORLDGEN_BENCHMARK mode={mode} chunks={count} "
-            f"elapsed_seconds={elapsed_seconds} chunks_per_second={cps:.3f}",
+            f"elapsed_seconds={elapsed_seconds:.3f} chunks_per_second={cps:.3f}",
             flush=True,
         )
         return count, cps
