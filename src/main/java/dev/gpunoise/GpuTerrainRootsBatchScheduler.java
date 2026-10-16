@@ -13,6 +13,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongArray;
 
 /** Batches the small NoiseChunk corner grids into one graph dispatch. */
 final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
@@ -44,6 +45,8 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     private final AtomicLong totalQueueWaitNanos = new AtomicLong();
     private final AtomicLong completedDispatches = new AtomicLong();
     private final AtomicLong totalDispatchLatencyNanos = new AtomicLong();
+    private final LatencyHistogram chunkLatency = new LatencyHistogram();
+    private final AtomicLong lastLatencyLogBucket = new AtomicLong();
 
     GpuTerrainRootsBatchScheduler() {
         for (int i = 0; i < 8; i++) metadataPool.add(new DispatchMetadata());
@@ -250,9 +253,11 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
             GpuTerrainRuntime.submitTerrainGridInterpolated(metadata, batch.size(), samplesPerChunk,
                     outputMetadata, blocksPerChunk).whenComplete((values, failure) -> {
                 try {
+                    long completedAt = System.nanoTime();
                     int cornerOffset0 = 0;
                     int blockOffset0 = 0;
                     for (Pending item : batch) {
+                        chunkLatency.record(completedAt - item.enqueuedNanos);
                         if (failure != null) item.future.completeExceptionally(failure);
                         else {
                             item.future.complete(values.slice(cornerOffset0, item.grid.sampleCount(), blockOffset0, blocksPerChunk));
@@ -277,12 +282,55 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     private void recordDispatchLatency(long submittedAt) {
         totalDispatchLatencyNanos.addAndGet(System.nanoTime() - submittedAt);
         long completed = completedDispatches.incrementAndGet();
-        if ((completed & 63L) != 0L) return;
-        GpuNoise.LOGGER.info("GPU terrain roots batching: avgChunksPerDispatch={}, avgSamplesPerDispatch={}, avgQueueWaitMsPerChunk={}, avgSubmitToCompleteMsPerDispatch={}",
-                (double) totalChunksDispatched.get() / dispatchCount.get(),
-                (double) totalSamplesDispatched.get() / dispatchCount.get(),
-                totalQueueWaitNanos.get() / (double) totalChunksDispatched.get() / 1_000_000.0,
-                totalDispatchLatencyNanos.get() / (double) completed / 1_000_000.0);
+        if ((completed & 63L) == 0L) {
+            GpuNoise.LOGGER.info("GPU terrain roots batching: avgChunksPerDispatch={}, avgSamplesPerDispatch={}, avgQueueWaitMsPerChunk={}, avgSubmitToCompleteMsPerDispatch={}",
+                    (double) totalChunksDispatched.get() / dispatchCount.get(),
+                    (double) totalSamplesDispatched.get() / dispatchCount.get(),
+                    totalQueueWaitNanos.get() / (double) totalChunksDispatched.get() / 1_000_000.0,
+                    totalDispatchLatencyNanos.get() / (double) completed / 1_000_000.0);
+        }
+        long latencyCount = chunkLatency.count();
+        long latencyBucket = latencyCount >>> 7;
+        if (latencyBucket > 0L && lastLatencyLogBucket.getAndSet(latencyBucket) != latencyBucket) {
+            GpuNoise.LOGGER.info("GPU terrain roots latency: completedChunks={}, p50BucketMs={}, p95BucketMs={}, p99BucketMs={}",
+                    latencyCount, chunkLatency.percentileMillis(0.50),
+                    chunkLatency.percentileMillis(0.95), chunkLatency.percentileMillis(0.99));
+        }
+    }
+
+    /** Fixed-memory histogram so latency tracking does not allocate per chunk. */
+    private static final class LatencyHistogram {
+        private static final long[] UPPER_BOUNDS_NANOS = {
+                1_000_000L, 2_000_000L, 5_000_000L, 10_000_000L, 20_000_000L,
+                50_000_000L, 100_000_000L, 250_000_000L, 500_000_000L,
+                1_000_000_000L, 2_500_000_000L, 5_000_000_000L, 10_000_000_000L
+        };
+        private final AtomicLongArray buckets = new AtomicLongArray(UPPER_BOUNDS_NANOS.length + 1);
+        private final AtomicLong count = new AtomicLong();
+
+        void record(long elapsedNanos) {
+            int bucket = 0;
+            while (bucket < UPPER_BOUNDS_NANOS.length && elapsedNanos > UPPER_BOUNDS_NANOS[bucket]) bucket++;
+            buckets.incrementAndGet(bucket);
+            count.incrementAndGet();
+        }
+
+        long count() { return count.get(); }
+
+        String percentileMillis(double percentile) {
+            long observations = count.get();
+            if (observations == 0L) return "n/a";
+            long target = (long) Math.ceil(observations * percentile);
+            long seen = 0L;
+            for (int bucket = 0; bucket < buckets.length(); bucket++) {
+                seen += buckets.get(bucket);
+                if (seen >= target) {
+                    return bucket == UPPER_BOUNDS_NANOS.length
+                            ? ">10000" : Long.toString(UPPER_BOUNDS_NANOS[bucket] / 1_000_000L);
+                }
+            }
+            return ">10000";
+        }
     }
 
     private static int blocksPerChunk(GpuTerrainGrid grid) {
