@@ -1,25 +1,43 @@
+# GPU Noise
 
-Installation information
-=======
+GPU Noise translates Minecraft terrain density graphs into a compact
+intermediate representation, compiles the matching compute shaders to SPIR-V,
+and evaluates terrain samples through Vulkan. Mesa Lavapipe is used in CI to
+compile the shaders and exercise the Vulkan path without a physical GPU.
 
-This template repository can be directly cloned to get you started with a new
-mod. Simply create a new repository cloned from this one, by following the
-instructions provided by [GitHub](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template).
+## Custom density functions
 
-Once you have your clone, simply open the repository in the IDE of your choice. The usual recommendation for an IDE is either IntelliJ IDEA or Eclipse.
+Other mods can register an adapter for a custom `DensityFunction` before the
+server terrain graph is compiled. The adapter returns an equivalent graph
+composed from Minecraft density functions that GPU Noise already supports:
 
-If at any point you are missing libraries in your IDE, or you've run into problems you can
-run `gradlew --refresh-dependencies` to refresh the local cache. `gradlew clean` to reset everything 
-{this does not affect your code} and then start the process again.
+```java
+GpuDensityFunctionTranslators.register(MyTerrainDensity.class,
+        MyTerrainDensity::asGpuDensityFunction);
+```
 
-Mapping Names:
-============
-By default, the MDK is configured to use the official mapping names from Mojang for methods and fields 
-in the Minecraft codebase. These names are covered by a specific license. All modders should be aware of this
-license. For the latest license text, refer to the mapping file itself, or the reference copy here:
-https://github.com/NeoForged/NeoForm/blob/main/Mojang.md
+`asGpuDensityFunction` should build the same math as the custom function from
+supported `DensityFunctions` operations. GPU Noise checks the translated graph
+against the original function during terrain graph parity checks. The original
+function remains available for parity and CPU fallback. Registration is exact
+class based; register each custom implementation that needs translation.
 
-Additional Resources: 
-==========
-Community Documentation: https://docs.neoforged.net/  
-NeoForged Discord: https://discord.neoforged.net/
+Adapters describe equivalent density math. GPU Noise does not execute arbitrary
+mod bytecode on Vulkan. If a function has no adapter or uses an unsupported
+operation, the terrain graph fails closed and vanilla CPU terrain generation
+remains enabled.
+
+## Current GPU terrain scope
+
+The current path evaluates the terrain density and aquifer input roots on the
+GPU at Minecraft's cell grid. Minecraft still handles chunk scheduling,
+interpolation, surface rules, carvers, structures, and features. Moving those
+stages to the GPU requires separate semantics-preserving passes; GPU Noise does
+not claim full chunk generation is GPU-only yet.
+
+## CI and benchmarks
+
+GitHub Actions builds the mod, compiles GLSL with `glslc`, runs a Vulkan smoke
+dispatch on Mesa Lavapipe, and starts paired NeoForge dedicated servers with
+C2ME and Chunky for CPU and GPU terrain measurements. The Lavapipe result is a
+correctness and software-overhead check, not a discrete-GPU performance claim.

@@ -99,7 +99,16 @@ final class GpuDensityGraphCompiler {
         boolean tectonicFunction = functionClassName.startsWith(
                 "dev.worldgen.tectonic.worldgen.densityfunction.");
         if (!functionClassName.startsWith("net.minecraft.") && !tectonicFunction) {
-            throw unsupported(function, "custom density function is not GPU-lowerable");
+            DensityFunction translated = GpuDensityFunctionTranslators.translate(function);
+            if (translated == null) {
+                throw unsupported(function, "custom density function has no registered GPU translator");
+            }
+            // Keep the original function in sourceFunctions for parity and
+            // fallback. The marker forwards the GPU value from the adapter's
+            // equivalent built-in density graph.
+            nodes.set(index, new GpuDensityGraph.Node("Marker", new int[]{node(translated)},
+                    new double[0], "GpuDensityFunctionTranslator"));
+            return index;
         }
 
         // Some NeoForge/Minecraft transformations expose Constant as a normal
