@@ -49,6 +49,7 @@ jobs:
         env:
           GPUNOISE_TERRAIN_BATCH_WINDOW_MS: 50
           GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS: 64
+          GPUNOISE_BENCHMARK_FULL_BLOCK_OUTPUT: false
         run: python3 tools/ci/runserver_benchmark.py
 
       - name: Upload mod artifact

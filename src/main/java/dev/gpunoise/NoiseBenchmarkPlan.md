@@ -38,7 +38,11 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   chunk writing; full block output remains a diagnostic option.
 - The C2ME + Chunky CI scenario generates 1,089 chunks in three paired
   repetitions, checks Vulkan smoke/parity, and captures dispatch and chunk
-  latency metrics. CI builds and tests use Mesa Lavapipe.
+  latency metrics. The paired CPS benchmark uses the production cell-grid
+  output mode by default. Full-block GPU materialization can be selected with
+  `GPUNOISE_BENCHMARK_FULL_BLOCK_OUTPUT=true` for diagnostic runs, but its
+  additional output transfer must not be mixed into production throughput
+  comparisons. CI builds and tests use Mesa Lavapipe.
 - Two completed CI runs isolate the batch target change at the same 50 ms
   collection window. Target 32 measured median CPU 43.915 CPS and Lavapipe
   30.336 CPS (paired ratio 0.691), with 14.93 chunks per dispatch. Target 64
@@ -48,7 +52,10 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   improved modestly. Both runs still had p95 chunk latency in the 2.5-second
   histogram bucket. The 64-target run had p50 in the 1-second bucket. These
   results do not meet the throughput or tail-latency goals, and Lavapipe is not
-  a discrete-GPU performance measurement.
+  a discrete-GPU performance measurement. Those runs forced diagnostic
+  full-block output, so they are useful for comparing the scheduler but are
+  not the production cell-grid throughput baseline. The corrected production
+  mode benchmark is pending.
 - The subsequent complete-tile early-dispatch and spatial/layout queue
   partition changes have builds passing on GitHub Actions; their paired
   benchmark runs are still in progress.
@@ -59,6 +66,8 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
 
 1. Keep the paired CPU/GPU C2ME + Chunky workload deterministic and large
    enough to expose steady-state throughput, startup cost, and tail latency.
+   Measure the normal production cell-grid mode; run full-block output as a
+   separate diagnostic because it changes GPU readback volume.
 2. Record the active batch window and target in each log and benchmark result.
 3. Require GPU cache consumption, zero unexpected CPU fallback, graph/grid
    parity, and shader parity-preserving math for accepted comparisons.
@@ -169,10 +178,12 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
 
 ## Immediate next actions
 
-1. Read the GitHub Actions results for complete-tile early dispatch and
-   spatial/layout queue partitioning.
-2. Compare their paired ratios, chunks per dispatch, queue wait,
-   submit-to-completion, and p95/p99 against the 32 and 64 target results.
+1. Read the corrected production cell-grid benchmark results and the GitHub
+   Actions runs for complete-tile early dispatch and spatial/layout queue
+   partitioning.
+2. Compare production-mode paired ratios, chunks per dispatch, queue wait,
+   submit-to-completion, and p95/p99. Keep full-block diagnostic results
+   separate from production-mode results.
 3. If occupancy remains near 16 chunks, improve cross-request coalescing before
    increasing the target again. If the wait/latency tail worsens, lower the
    target or shorten the adaptive fill window.

@@ -46,6 +46,10 @@ if not 1 <= BATCH_WINDOW_MS <= 250:
 BATCH_TARGET_CHUNKS = int(os.environ.get("GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS", "64"))
 if not 1 <= BATCH_TARGET_CHUNKS <= 100:
     raise ValueError("GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS must be between 1 and 100")
+FULL_BLOCK_OUTPUT = os.environ.get("GPUNOISE_BENCHMARK_FULL_BLOCK_OUTPUT", "false").lower()
+if FULL_BLOCK_OUTPUT not in {"true", "false"}:
+    raise ValueError("GPUNOISE_BENCHMARK_FULL_BLOCK_OUTPUT must be true or false")
+FULL_BLOCK_OUTPUT = FULL_BLOCK_OUTPUT == "true"
 TASK_DONE = re.compile(
     r"Task finished for .*?Processed:\s*([\d,]+) chunks \(([^)]+)%\), "
     r"Total time:\s*(\d+):(\d+):(\d+)"
@@ -164,13 +168,14 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
         # booted. A standalone JavaExec has no LoadingModList or mod lifecycle.
         command.append("-Dgpunoise.vulkanSmoke=true")
     if not force_cpu:
-        # Exercise the Vulkan interpolation buffer through NoiseChunk's
-        # authoritative final-density callback; per-chunk samples compare the
-        # GPU materialization with the Java cell-corner interpolation first.
-        command.append("-Dgpunoise.fullBlockOutput=true")
+        # Benchmark the production cell-grid mode by default. Full-block
+        # materialization is an explicit diagnostic because it adds output
+        # transfer work that the normal runtime configuration does not use.
+        if FULL_BLOCK_OUTPUT:
+            command.append("-Dgpunoise.fullBlockOutput=true")
         command.append(f"-Dgpunoise.terrainBatchWindowMs={BATCH_WINDOW_MS}")
         command.append(f"-Dgpunoise.terrainBatchTargetChunks={BATCH_TARGET_CHUNKS}")
-    print(f"Starting {mode} Chunky benchmark: {' '.join(command)}", flush=True)
+    print(f"Starting {mode} Chunky benchmark (full_block_output={FULL_BLOCK_OUTPUT}): {' '.join(command)}", flush=True)
     process = subprocess.Popen(
         command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1, start_new_session=True,
