@@ -587,7 +587,7 @@ final class GpuDensityBytecodeCompiler {
                     && (name.equals("sin") || name.equals("cos"))) {
                 Value input = arguments[0];
                 GpuDensityExpression.Mapping mapping = name.equals("sin")
-                        ? GpuDensityExpression.Mapping.SIN : GpuDensityExpression.Mapping.COS;
+                        ? GpuDensityExpression.Mapping.SIN_FLOAT : GpuDensityExpression.Mapping.COS_FLOAT;
                 int result = builder.map(mapping, input.expression());
                 Double constant = input.constant() == null ? null
                         : (double) (float) (name.equals("sin")
@@ -750,7 +750,8 @@ final class GpuDensityBytecodeCompiler {
                 return;
             }
             boolean javaSignum = (owner.equals("java/lang/Math") || owner.equals("java/lang/StrictMath"))
-                    && name.equals("signum") && descriptor.equals("(D)D");
+                    && name.equals("signum")
+                    && (descriptor.equals("(D)D") || descriptor.equals("(F)F"));
             boolean minecraftSign = owner.equals("net/minecraft/util/Mth")
                     && name.equals("sign") && descriptor.equals("(D)I");
             if ((javaSignum || minecraftSign) && arguments.length == 1) {

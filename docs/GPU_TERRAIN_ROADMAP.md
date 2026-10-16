@@ -102,6 +102,9 @@ parity checks.
   double bounds through compare/select nodes. Minecraft `Mth` float sine and
   cosine, float/double floor and ceiling to saturated Java integers, integer
   absolute value, and wrapping integer square overloads are lowered explicitly.
+  `Mth.sin` and `Mth.cos` use dedicated float-rounded IR mappings, distinct
+  from double `Math` operations; `Math.signum(float)` and
+  `Math.signum(double)` retain their respective input precision.
   Java double division and double/float remainder are represented explicitly;
   integer division and remainder require a compile-time nonzero divisor. Java
   32-bit arithmetic, bitwise AND/OR/XOR, signed/unsigned shifts, and

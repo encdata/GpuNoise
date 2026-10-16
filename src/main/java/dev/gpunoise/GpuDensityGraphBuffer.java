@@ -221,6 +221,8 @@ final class GpuDensityGraphBuffer {
             case "EXP" -> 16;
             case "LOG" -> 17;
             case "TANH" -> 18;
+            case "SIN_FLOAT" -> 19;
+            case "COS_FLOAT" -> 20;
             case "IADD" -> 1;
             case "ISUB" -> 2;
             case "IMUL" -> 3;

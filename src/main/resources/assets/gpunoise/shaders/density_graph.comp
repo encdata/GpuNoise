@@ -251,6 +251,8 @@ double mapValue(double x,uint op){
     if(op==13u)return sqrt(x); if(op==14u)return double(sin(float(x)));
     if(op==15u)return double(cos(float(x))); if(op==16u)return double(exp(float(x)));
     if(op==17u)return double(log(float(x)));
+    if(op==19u)return double(sin(float(x)));
+    if(op==20u)return double(cos(float(x)));
     if(op==18u){
         float value=float(x);
         if(value>10.0)return 1.0;
