@@ -632,8 +632,7 @@ final class GpuDensityBytecodeCompiler {
                 stack.add(Value.value(result, constant));
                 return;
             }
-            if ((owner.equals("java/lang/Math") || owner.equals("java/lang/StrictMath")
-                    || (owner.equals("net/minecraft/util/Mth") && descriptor.equals("(FF)F")))
+            if ((owner.equals("java/lang/Math") || owner.equals("java/lang/StrictMath"))
                     && (descriptor.equals("(DD)D") || descriptor.equals("(FF)F"))
                     && arguments.length == 2
                     && (name.equals("min") || name.equals("max"))) {
