@@ -372,6 +372,8 @@ final class GpuDensityExpressionSmoke {
         }
         GpuDensityGraphBuffer.pack(boundedLoopFixture().graph());
 
+        verifyMinecraftLerpBytecode();
+
         ScalarMathDensity scalarMath = new ScalarMathDensity();
         GpuDensityBytecodeCompiler.Result scalarMathResult = GpuDensityBytecodeCompiler.compile(scalarMath);
         if (scalarMathResult.expression() == null) {
@@ -706,6 +708,24 @@ final class GpuDensityExpressionSmoke {
         }
     }
 
+    private static void verifyMinecraftLerpBytecode() {
+        DensityFunction[] functions = {new Lerp2Density(), new Lerp3Density()};
+        String[] labels = {"Mth.lerp2", "Mth.lerp3"};
+        int[][] points = {{-81, -17, -5}, {-1, 0, 1}, {17, 9, 31}, {127, -32, -64}};
+        for (int index = 0; index < functions.length; index++) {
+            GpuDensityBytecodeCompiler.Result result = GpuDensityBytecodeCompiler.compile(functions[index]);
+            if (result.expression() == null) {
+                throw new AssertionError(labels[index] + " bytecode should compile: " + result.rejection());
+            }
+            for (int[] point : points) {
+                double expected = functions[index].compute(
+                        new DensityFunction.SinglePointContext(point[0], point[1], point[2]));
+                requireClose(result.expression().evaluate(point[0], point[1], point[2]), expected,
+                        labels[index] + " at " + java.util.Arrays.toString(point));
+            }
+        }
+    }
+
     private static void requireOpcode(String name, int expected) {
         int actual = GpuDensityGraphBuffer.operation(name);
         if (actual != expected) {
@@ -740,6 +760,32 @@ final class GpuDensityExpressionSmoke {
         @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
         @Override public double minValue() { return -100.0; }
         @Override public double maxValue() { return 100.0; }
+        @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
+            return DensityFunctions.constant(0.0).codec();
+        }
+    }
+
+    private static final class Lerp2Density implements DensityFunction.SimpleFunction {
+        @Override public double compute(FunctionContext context) {
+            return net.minecraft.util.Mth.lerp2(context.blockX() / 64.0, context.blockY() / 32.0,
+                    -3.0, 1.0, 2.0, -1.0);
+        }
+        @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
+        @Override public double minValue() { return -4.0; }
+        @Override public double maxValue() { return 4.0; }
+        @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
+            return DensityFunctions.constant(0.0).codec();
+        }
+    }
+
+    private static final class Lerp3Density implements DensityFunction.SimpleFunction {
+        @Override public double compute(FunctionContext context) {
+            return net.minecraft.util.Mth.lerp3(context.blockX() / 64.0, context.blockY() / 32.0,
+                    context.blockZ() / 64.0, -2.0, 1.0, 0.5, 3.0, 4.0, -1.5, 2.5, -3.0);
+        }
+        @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
+        @Override public double minValue() { return -8.0; }
+        @Override public double maxValue() { return 8.0; }
         @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
             return DensityFunctions.constant(0.0).codec();
         }
