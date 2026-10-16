@@ -93,8 +93,8 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 long batchStarted = System.nanoTime();
                 long deadline = batchStarted + BATCH_WINDOW_NANOS;
                 long tileDeadline = batchStarted + TILE_COALESCE_NANOS;
-                BatchCandidate candidate = largestNearbyBatch();
-                int compatibleCount = candidate.chunks;
+                BatchCandidate batchCandidate = largestNearbyBatch();
+                int compatibleCount = batchCandidate.chunks;
                 while (System.nanoTime() < deadline && pendingCount() < MAX_CHUNKS
                         && compatibleCount < TARGET_CHUNKS) {
                     long now = System.nanoTime();
@@ -108,10 +108,10 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                             : queue.poll();
                     if (next == null) break;
                     addPending(next);
-                    candidate = largestNearbyBatch();
-                    compatibleCount = candidate.chunks;
+                    batchCandidate = largestNearbyBatch();
+                    compatibleCount = batchCandidate.chunks;
                 }
-                BatchKey batchKey = candidate.key;
+                BatchKey batchKey = batchCandidate.key;
                 ArrayDeque<Pending> region = pendingByRegion.get(batchKey);
                 Pending seed = region.peekFirst();
                 int samplesPerChunk = seed.grid.sampleCount();
@@ -126,22 +126,22 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 // scheduler wakeups.
                 for (long candidateRegion : nearbyRegions(batchKey.region, batchKey.layout)) {
                     BatchKey candidateKey = new BatchKey(candidateRegion, batchKey.layout);
-                    ArrayDeque<Pending> candidate = pendingByRegion.get(candidateKey);
-                    if (candidate == null) continue;
-                    while (!candidate.isEmpty() && batch.size() < maxChunks) {
-                        Pending item = candidate.peekFirst();
+                    ArrayDeque<Pending> candidateQueue = pendingByRegion.get(candidateKey);
+                    if (candidateQueue == null) continue;
+                    while (!candidateQueue.isEmpty() && batch.size() < maxChunks) {
+                        Pending item = candidateQueue.peekFirst();
                         if ((long) input + item.grid.sampleCount() > MAX_INPUT) break;
                         long itemOutputFloats = (long) blocksPerChunk(item.grid)
                                 * GpuTerrainRuntime.terrainBlockOutputRootCount();
                         if (GpuTerrainRuntime.terrainBlockOutputEnabled()
                                 && outputFloats + itemOutputFloats
                                         > PersistentVulkanNormalNoiseEngine.INTERPOLATION_OUTPUT_FLOATS) break;
-                        candidate.removeFirst();
+                        candidateQueue.removeFirst();
                         batch.add(item);
                         input += item.grid.sampleCount();
                         outputFloats += itemOutputFloats;
                     }
-                    if (candidate.isEmpty()) pendingByRegion.remove(candidateKey);
+                    if (candidateQueue.isEmpty()) pendingByRegion.remove(candidateKey);
                     if (batch.size() == maxChunks) break;
                 }
                 dispatchCount.incrementAndGet();
