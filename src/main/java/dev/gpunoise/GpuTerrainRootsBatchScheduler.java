@@ -48,6 +48,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     private final AtomicLong totalQueueWaitNanos = new AtomicLong();
     private final AtomicLong completedDispatches = new AtomicLong();
     private final AtomicLong totalDispatchLatencyNanos = new AtomicLong();
+    private final BatchSizeHistogram batchSizes = new BatchSizeHistogram();
     private final LatencyHistogram chunkLatency = new LatencyHistogram();
     private final AtomicLong lastLatencyLogBucket = new AtomicLong();
     private final AtomicLong lastBatchLogBucket = new AtomicLong();
@@ -137,6 +138,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 dispatchCount.incrementAndGet();
                 totalChunksDispatched.addAndGet(batch.size());
                 totalSamplesDispatched.addAndGet(input);
+                batchSizes.record(batch.size());
                 long queueWaitNanos = 0L;
                 for (Pending item : batch) queueWaitNanos += System.nanoTime() - item.enqueuedNanos;
                 totalQueueWaitNanos.addAndGet(queueWaitNanos);
@@ -308,11 +310,12 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         long completedChunks = chunkLatency.count();
         long batchBucket = completedChunks >>> 8;
         if (batchBucket > 0L && lastBatchLogBucket.getAndSet(batchBucket) != batchBucket) {
-            GpuNoise.LOGGER.info("GPU terrain roots batching: avgChunksPerDispatch={}, avgSamplesPerDispatch={}, avgQueueWaitMsPerChunk={}, avgSubmitToCompleteMsPerDispatch={}",
+            GpuNoise.LOGGER.info("GPU terrain roots batching: avgChunksPerDispatch={}, avgSamplesPerDispatch={}, avgQueueWaitMsPerChunk={}, avgSubmitToCompleteMsPerDispatch={}, batchSizes={}",
                     (double) totalChunksDispatched.get() / dispatchCount.get(),
                     (double) totalSamplesDispatched.get() / dispatchCount.get(),
                     totalQueueWaitNanos.get() / (double) totalChunksDispatched.get() / 1_000_000.0,
-                    totalDispatchLatencyNanos.get() / (double) completed / 1_000_000.0);
+                    totalDispatchLatencyNanos.get() / (double) completed / 1_000_000.0,
+                    batchSizes.describe());
         }
         long latencyCount = completedChunks;
         long latencyBucket = latencyCount >>> 7;
@@ -323,7 +326,23 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         }
     }
 
-    /** Fixed-memory histogram so latency tracking does not allocate per chunk. */
+    /** Fixed-memory histogram of chunks per Vulkan dispatch. */
+    private static final class BatchSizeHistogram {
+        private final AtomicLongArray buckets = new AtomicLongArray(5);
+
+        void record(int chunks) {
+            int bucket = chunks < 16 ? 0 : chunks < 32 ? 1 : chunks < 64 ? 2 : chunks < 96 ? 3 : 4;
+            buckets.incrementAndGet(bucket);
+        }
+
+        String describe() {
+            return "lt16:" + buckets.get(0) + ",16to31:" + buckets.get(1)
+                    + ",32to63:" + buckets.get(2) + ",64to95:" + buckets.get(3)
+                    + ",96plus:" + buckets.get(4);
+        }
+    }
+
+    /** Fixed-memory per-chunk latency histogram; no objects are allocated per observation. */
     private static final class LatencyHistogram {
         private static final long[] UPPER_BOUNDS_NANOS = {
                 1_000_000L, 2_000_000L, 5_000_000L, 10_000_000L, 20_000_000L,

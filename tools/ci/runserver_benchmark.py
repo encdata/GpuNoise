@@ -67,6 +67,10 @@ GPU_BATCHING = re.compile(
     r"GPU terrain roots batching: avgChunksPerDispatch=([\d.]+), "
     r"avgSamplesPerDispatch=([\d.]+),"
 )
+GPU_BATCH_SIZES = re.compile(
+    r"GPU terrain roots batching: .*batchSizes=lt16:(\d+),16to31:(\d+),"
+    r"32to63:(\d+),64to95:(\d+),96plus:(\d+)"
+)
 GPU_GRAPH_PROFILE = re.compile(
     r"GPU terrain graph profile: completedDispatches=(\d+), "
     r"avgCpuPrepareMs=([\d.]+), avgSubmitToFenceMs=([\d.]+), "
@@ -282,6 +286,15 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
             print(
                 f"CI_GPU_BATCHING mode={mode} avg_chunks_per_dispatch={batch_samples[-1][0]} "
                 f"avg_samples_per_dispatch={batch_samples[-1][1]}", flush=True,
+            )
+            batch_size_samples = GPU_BATCH_SIZES.findall(run_log)
+            if not batch_size_samples:
+                raise RuntimeError("GPU dispatch batch-size distribution was not recorded")
+            latest_sizes = batch_size_samples[-1]
+            print(
+                f"CI_GPU_BATCH_SIZES mode={mode} lt16={latest_sizes[0]} "
+                f"16to31={latest_sizes[1]} 32to63={latest_sizes[2]} "
+                f"64to95={latest_sizes[3]} 96plus={latest_sizes[4]}", flush=True,
             )
             profile_samples = GPU_GRAPH_PROFILE.findall(run_log)
             if not profile_samples:

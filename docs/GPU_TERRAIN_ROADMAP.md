@@ -347,9 +347,10 @@ window. It no longer dispatches early after a single 25-chunk prefetch tile.
 This is a measured experiment, not a throughput claim:
 CI must check CPS and chunk tail latency. The Vulkan profile now reports CPU
 preparation/upload/command-recording time, submit-to-fence time, and readback
-time independently, alongside batch fill and per-chunk latency. Submit-to-fence
-includes the asynchronous fence polling interval. Lavapipe remains a CPU Vulkan
-backend and cannot establish discrete-GPU speedup.
+time independently, alongside batch-size distribution, batch fill, and
+per-chunk latency. Submit-to-fence includes the asynchronous fence polling
+interval. Lavapipe remains a CPU Vulkan backend and cannot establish
+discrete-GPU speedup.
 
 The optional fused chunk scheduler now coalesces requests for at most one
 millisecond, retains incompatible FIFO requests without racing queue producers,
