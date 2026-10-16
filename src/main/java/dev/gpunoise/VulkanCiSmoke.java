@@ -211,7 +211,17 @@ public final class VulkanCiSmoke {
                     new GpuAquiferSubstance.Input(-0.25, 0.3, 30,
                             30, 30, 30, 10, 11, 12,
                             GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
-                            GpuAquiferSubstance.OTHER, 0, false, false, 407)
+                            GpuAquiferSubstance.OTHER, 0, false, false, 407),
+                    // Nearest/third is the deciding pressure pair.
+                    new GpuAquiferSubstance.Input(-0.5, 0.0, 30,
+                            30, 30, 30, 1, 2, 3,
+                            GpuAquiferSubstance.WATER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.LAVA, 0, false, false, 408),
+                    // Second/third is the deciding pressure pair.
+                    new GpuAquiferSubstance.Input(-0.5, 0.0, 30,
+                            30, 30, 30, 1, 2, 3,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.WATER,
+                            GpuAquiferSubstance.LAVA, 0, false, false, 409)
             };
             var substanceFuture = ring.submitAquiferSubstance(
                     GpuAquiferSubstance.pack(substanceCases), substanceCases.length);
