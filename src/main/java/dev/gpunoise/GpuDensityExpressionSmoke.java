@@ -757,6 +757,7 @@ final class GpuDensityExpressionSmoke {
                     + Math.min(x * 0.02, z * 0.01) + Math.max(x * -0.015, z * 0.025)
                     + Math.min(floatX * 0.125F, Math.max(floatZ * -0.25F, -2.5F)) * 0.1
                     + Math.abs(floatZ * -0.03125F) * 0.05
+                    + net.minecraft.util.Mth.square(floatX * 0.0078125F) * 0.125
                     + Math.sqrt(Math.abs(x)) + Math.sin(x * 0.05)
                     + Math.cos(z * 0.05) + Math.log(Math.exp(0.25))
                     + Math.atan2(z, x) * 0.05

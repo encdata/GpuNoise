@@ -641,11 +641,19 @@ final class GpuDensityBytecodeCompiler {
                 return;
             }
             if (owner.equals("net/minecraft/util/Mth") && name.equals("square") && arguments.length == 1) {
-                if (!descriptor.equals("(D)D")) reject("only double-precision Mth.square is supported");
                 Value input = arguments[0];
-                int result = builder.map(GpuDensityExpression.Mapping.SQUARE, input.expression());
-                stack.add(Value.value(result, input.constant() == null ? null
-                        : input.constant() * input.constant()));
+                if (descriptor.equals("(D)D")) {
+                    int result = builder.map(GpuDensityExpression.Mapping.SQUARE, input.expression());
+                    stack.add(Value.value(result, input.constant() == null ? null
+                            : input.constant() * input.constant()));
+                } else if (descriptor.equals("(F)F")) {
+                    int result = builder.floatOperation("FMUL", input.expression(), input.expression());
+                    Double constant = input.constant() == null ? null
+                            : (double) ((float) input.constant() * (float) input.constant());
+                    stack.add(Value.value(result, constant));
+                } else {
+                    reject("unsupported Mth.square overload " + descriptor);
+                }
                 return;
             }
             if ((owner.equals("java/lang/Math") || owner.equals("java/lang/StrictMath"))
