@@ -4,6 +4,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import net.minecraft.util.RandomSource;
 
 /** Headless Vulkan smoke test for CI's Mesa Lavapipe device. */
 public final class VulkanCiSmoke {
@@ -143,6 +144,28 @@ public final class VulkanCiSmoke {
                             queries[q][2] + ((i * 13) % 31) - 15};
                 }
             }
+            net.minecraft.world.level.levelgen.PositionalRandomFactory positionalRandom =
+                    RandomSource.create(0x4750554e4f495345L).forkPositional();
+            int[] negativeQuery = {-14, -1, -17};
+            int[][] plannedCenters = GpuAquiferNearestThree.centersForQuery(
+                    positionalRandom, negativeQuery);
+            int[][] expectedCenters = new int[GpuAquiferNearestThree.CANDIDATES][3];
+            int baseX = Math.floorDiv(negativeQuery[0] - 5, 16);
+            int baseY = Math.floorDiv(negativeQuery[1] + 1, 12);
+            int baseZ = Math.floorDiv(negativeQuery[2] - 5, 16);
+            int plannedIndex = 0;
+            for (int gx = 0; gx <= 1; gx++) {
+                for (int gy = -1; gy <= 1; gy++) {
+                    for (int gz = 0; gz <= 1; gz++) {
+                        RandomSource random = positionalRandom.at(baseX + gx, baseY + gy, baseZ + gz);
+                        expectedCenters[plannedIndex++] = new int[]{(baseX + gx) * 16 + random.nextInt(10),
+                                (baseY + gy) * 12 + random.nextInt(9),
+                                (baseZ + gz) * 16 + random.nextInt(10)};
+                    }
+                }
+            }
+            if (!java.util.Arrays.deepEquals(plannedCenters, expectedCenters))
+                throw new IllegalStateException("Aquifer positional-random neighborhood mismatch");
             // Four equal-distance centers pin the precise tie order in the
             // three nearest slots, including vanilla's inclusive third test.
             centers[0][0] = new int[]{queries[0][0] + 1, queries[0][1], queries[0][2]};

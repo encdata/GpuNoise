@@ -33,6 +33,12 @@ public final class GpuAquiferNearestThree {
         return packed.flip();
     }
 
+    static ByteBuffer pack(PositionalRandomFactory factory, int[][] queries) {
+        int[][][] centers = new int[queries.length][CANDIDATES][];
+        for (int i = 0; i < queries.length; i++) centers[i] = centersForQuery(factory, queries[i]);
+        return pack(queries, centers);
+    }
+
     /** Recreates the 2x3x2 positional-random neighborhood used by vanilla. */
     static int[][] centersForQuery(PositionalRandomFactory factory, int[] query) {
         if (query.length != 3) throw new IllegalArgumentException("aquifer query must be xyz");
