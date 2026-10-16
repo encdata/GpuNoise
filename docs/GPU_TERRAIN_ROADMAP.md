@@ -129,5 +129,14 @@ The mod currently has a graph evaluator for density and aquifer roots, a cell
 grid path, optional per-block density interpolation, and a new adapter that
 translates custom density functions into supported Minecraft density graphs.
 The GPU still does not choose final solid, air, fluid, or surface block states.
-Those are the next major terrain-generation passes, and the benchmark remains
-unmeasured until the Lavapipe Vulkan buffer path completes its smoke dispatch.
+Those remain the next major terrain-generation passes.
+
+The first paired C2ME/Chunky CI run completed 289 chunks on each path: CPU
+36.125 CPS and Mesa Lavapipe 26.273 CPS (0.727x CPU), with 319 GPU caches
+consumed and no fallbacks. This is a coarse historical baseline from commit
+`b50cba6`; Chunky reported only whole-second task durations. Later multi-cell
+interpolation checks exposed axis and lattice-order bugs, so this measurement
+does not validate the current shader. CI is rerunning that parity gate now.
+Lavapipe validates Vulkan behavior and overhead; physical-GPU performance
+still needs separate measurements. The CI benchmark now measures Chunky's
+streamed task start and finish at sub-second precision.
