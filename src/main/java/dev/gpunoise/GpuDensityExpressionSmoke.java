@@ -489,8 +489,15 @@ final class GpuDensityExpressionSmoke {
         }
         requireClose(divisionOverflowResult.expression().evaluate(0, 0, 0), Integer.MIN_VALUE,
                 "Java integer division MIN_VALUE / -1");
-        if (GpuDensityBytecodeCompiler.compile(new DynamicIntegerDivisionDensity()).expression() != null) {
+        GpuDensityBytecodeCompiler.Result dynamicDivision =
+                GpuDensityBytecodeCompiler.compile(new DynamicIntegerDivisionDensity());
+        if (dynamicDivision.expression() != null) {
             throw new AssertionError("integer division by a dynamic divisor must remain on the Java path");
+        }
+        if (!dynamicDivision.rejection().contains("DynamicIntegerDivisionDensity.compute")
+                || !dynamicDivision.rejection().contains("bytecode instruction")) {
+            throw new AssertionError("bytecode fallback diagnostics must identify the source method and instruction: "
+                    + dynamicDivision.rejection());
         }
         GpuDensityGraphBuffer.pack(integerDivisionOverflowFixture().graph());
         FloorDivisionDensity floorDivision = new FloorDivisionDensity();

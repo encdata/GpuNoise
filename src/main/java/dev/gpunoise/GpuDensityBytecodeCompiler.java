@@ -181,97 +181,103 @@ final class GpuDensityBytecodeCompiler {
             stack = pathStack;
             locals = pathLocals;
             for (int pc = start; pc < instructions.length; pc++) {
-                if (--remainingInstructions < 0) reject("control-flow expansion exceeds 50,000 bytecode steps");
                 AbstractInsnNode instruction = instructions[pc];
                 int type = instruction.getType();
                 if (type == AbstractInsnNode.LABEL || type == AbstractInsnNode.LINE
                         || type == AbstractInsnNode.FRAME) continue;
-                if (instruction instanceof InsnNode insn) {
-                    if (insn.getOpcode() == Opcodes.DCMPL || insn.getOpcode() == Opcodes.DCMPG
-                            || insn.getOpcode() == Opcodes.FCMPL || insn.getOpcode() == Opcodes.FCMPG) {
-                        Value right = popValue("floating comparison"), left = popValue("floating comparison");
-                        String mode = (insn.getOpcode() == Opcodes.DCMPL || insn.getOpcode() == Opcodes.FCMPL)
-                                ? "DCMPL" : "DCMPG";
-                        stack.add(Value.comparison(left.expression(), right.expression(), mode));
-                        continue;
-                    }
-                    if (execute(insn.getOpcode())) return finish();
-                } else if (instruction instanceof VarInsnNode variable) {
-                    variable(variable);
-                } else if (instruction instanceof IincInsnNode increment) {
-                    increment(increment);
-                } else if (instruction instanceof FieldInsnNode field) {
-                    field(field);
-                } else if (instruction instanceof MethodInsnNode call) {
-                    invoke(call);
-                } else if (instruction instanceof LdcInsnNode constant) {
-                    ldc(constant.cst);
-                } else if (instruction instanceof IntInsnNode constant) {
-                    if (constant.getOpcode() != Opcodes.BIPUSH && constant.getOpcode() != Opcodes.SIPUSH)
-                        reject("unsupported integer operand instruction " + opcodeName(constant.getOpcode()));
-                    pushIntegerConstant(constant.operand);
-                } else if (instruction instanceof JumpInsnNode jump) {
-                    Integer target = labels.get(jump.label);
-                    if (target == null) reject("jump target is missing from the method instruction stream");
-                    if (jump.getOpcode() == Opcodes.GOTO) {
-                        if (target <= pc) {
-                            if (!insideStaticLoop(pc)) reject("backward branch or loop is not supported");
-                            int iterations = loopIterations.merge(pc, 1, Integer::sum);
-                            if (iterations > MAX_STATIC_LOOP_ITERATIONS)
-                                reject("statically bounded loop exceeds 64 iterations");
+                try {
+                    if (--remainingInstructions < 0) reject("control-flow expansion exceeds 50,000 bytecode steps");
+                    if (instruction instanceof InsnNode insn) {
+                        if (insn.getOpcode() == Opcodes.DCMPL || insn.getOpcode() == Opcodes.DCMPG
+                                || insn.getOpcode() == Opcodes.FCMPL || insn.getOpcode() == Opcodes.FCMPG) {
+                            Value right = popValue("floating comparison"), left = popValue("floating comparison");
+                            String mode = (insn.getOpcode() == Opcodes.DCMPL || insn.getOpcode() == Opcodes.FCMPL)
+                                    ? "DCMPL" : "DCMPG";
+                            stack.add(Value.comparison(left.expression(), right.expression(), mode));
+                            continue;
                         }
-                        return executePath(target, new ArrayList<>(stack), new HashMap<>(locals));
-                    }
-                    String relation = branchRelation(jump.getOpcode());
-                    if (relation == null) reject("unsupported conditional branch " + opcodeName(jump.getOpcode()));
-                    int condition = branchCondition(jump.getOpcode(), relation);
-                    Double knownCondition = builder.constantValue(condition);
-                    if (target <= pc && knownCondition == null)
-                        reject("loop condition is not statically bounded by constants");
-                    if (knownCondition != null) {
-                        if (knownCondition != 0.0 && target <= pc) {
-                            int iterations = loopIterations.merge(pc, 1, Integer::sum);
-                            if (iterations > MAX_STATIC_LOOP_ITERATIONS)
-                                reject("statically bounded loop exceeds 64 iterations");
-                        } else if (knownCondition == 0.0 && target <= pc) {
-                            loopIterations.remove(pc);
+                        if (execute(insn.getOpcode())) return finish();
+                    } else if (instruction instanceof VarInsnNode variable) {
+                        variable(variable);
+                    } else if (instruction instanceof IincInsnNode increment) {
+                        increment(increment);
+                    } else if (instruction instanceof FieldInsnNode field) {
+                        field(field);
+                    } else if (instruction instanceof MethodInsnNode call) {
+                        invoke(call);
+                    } else if (instruction instanceof LdcInsnNode constant) {
+                        ldc(constant.cst);
+                    } else if (instruction instanceof IntInsnNode constant) {
+                        if (constant.getOpcode() != Opcodes.BIPUSH && constant.getOpcode() != Opcodes.SIPUSH)
+                            reject("unsupported integer operand instruction " + opcodeName(constant.getOpcode()));
+                        pushIntegerConstant(constant.operand);
+                    } else if (instruction instanceof JumpInsnNode jump) {
+                        Integer target = labels.get(jump.label);
+                        if (target == null) reject("jump target is missing from the method instruction stream");
+                        if (jump.getOpcode() == Opcodes.GOTO) {
+                            if (target <= pc) {
+                                if (!insideStaticLoop(pc)) reject("backward branch or loop is not supported");
+                                int iterations = loopIterations.merge(pc, 1, Integer::sum);
+                                if (iterations > MAX_STATIC_LOOP_ITERATIONS)
+                                    reject("statically bounded loop exceeds 64 iterations");
+                            }
+                            return executePath(target, new ArrayList<>(stack), new HashMap<>(locals));
                         }
-                        if (knownCondition != 0.0) pc = target - 1;
-                        continue;
+                        String relation = branchRelation(jump.getOpcode());
+                        if (relation == null) reject("unsupported conditional branch " + opcodeName(jump.getOpcode()));
+                        int condition = branchCondition(jump.getOpcode(), relation);
+                        Double knownCondition = builder.constantValue(condition);
+                        if (target <= pc && knownCondition == null)
+                            reject("loop condition is not statically bounded by constants");
+                        if (knownCondition != null) {
+                            if (knownCondition != 0.0 && target <= pc) {
+                                int iterations = loopIterations.merge(pc, 1, Integer::sum);
+                                if (iterations > MAX_STATIC_LOOP_ITERATIONS)
+                                    reject("statically bounded loop exceeds 64 iterations");
+                            } else if (knownCondition == 0.0 && target <= pc) {
+                                loopIterations.remove(pc);
+                            }
+                            if (knownCondition != 0.0) pc = target - 1;
+                            continue;
+                        }
+                        if (target <= pc) reject("backward conditional branch is not supported");
+                        if (insideStaticLoop(pc))
+                            reject("dynamic conditional branches inside a static loop are not supported");
+                        if (++branchForks > 128) reject("conditional expansion exceeds 128 branch points");
+                        List<Value> branchStack = new ArrayList<>(stack);
+                        Map<Integer, Value> branchLocals = new HashMap<>(locals);
+                        Map<Integer, Integer> loopSnapshot = new HashMap<>(loopIterations);
+                        Value whenJumpTaken = executePath(target,
+                                new ArrayList<>(branchStack), new HashMap<>(branchLocals));
+                        loopIterations = new HashMap<>(loopSnapshot);
+                        Value whenFallThrough = executePath(pc + 1,
+                                new ArrayList<>(branchStack), new HashMap<>(branchLocals));
+                        loopIterations = loopSnapshot;
+                        if (whenJumpTaken.kind() != Kind.VALUE || whenFallThrough.kind() != Kind.VALUE)
+                            reject("conditional branch returned a nonnumeric value");
+                        int merged = builder.select(condition, whenJumpTaken.expression(), whenFallThrough.expression());
+                        return Value.value(merged, null);
+                    } else if (instruction instanceof TableSwitchInsnNode tableSwitch) {
+                        if (insideStaticLoop(pc)) reject("switches inside a static loop are not supported");
+                        int count = tableSwitch.labels.size();
+                        if (count > 64) reject("table switch exceeds the 64-case compiler limit");
+                        int[] keys = new int[count];
+                        for (int i = 0; i < count; i++) keys[i] = tableSwitch.min + i;
+                        return switchBranch(pc, tableSwitch.dflt, tableSwitch.labels, keys);
+                    } else if (instruction instanceof LookupSwitchInsnNode lookupSwitch) {
+                        if (insideStaticLoop(pc)) reject("switches inside a static loop are not supported");
+                        int count = lookupSwitch.labels.size();
+                        if (count > 64) reject("lookup switch exceeds the 64-case compiler limit");
+                        int[] keys = new int[count];
+                        for (int i = 0; i < count; i++) keys[i] = lookupSwitch.keys.get(i);
+                        return switchBranch(pc, lookupSwitch.dflt, lookupSwitch.labels, keys);
+                    } else {
+                        reject("control flow or unsupported instruction " + instruction.getClass().getSimpleName());
                     }
-                    if (target <= pc) reject("backward conditional branch is not supported");
-                    if (insideStaticLoop(pc))
-                        reject("dynamic conditional branches inside a static loop are not supported");
-                    if (++branchForks > 128) reject("conditional expansion exceeds 128 branch points");
-                    List<Value> branchStack = new ArrayList<>(stack);
-                    Map<Integer, Value> branchLocals = new HashMap<>(locals);
-                    Map<Integer, Integer> loopSnapshot = new HashMap<>(loopIterations);
-                    Value whenJumpTaken = executePath(target,
-                            new ArrayList<>(branchStack), new HashMap<>(branchLocals));
-                    loopIterations = new HashMap<>(loopSnapshot);
-                    Value whenFallThrough = executePath(pc + 1,
-                            new ArrayList<>(branchStack), new HashMap<>(branchLocals));
-                    loopIterations = loopSnapshot;
-                    if (whenJumpTaken.kind() != Kind.VALUE || whenFallThrough.kind() != Kind.VALUE)
-                        reject("conditional branch returned a nonnumeric value");
-                    int merged = builder.select(condition, whenJumpTaken.expression(), whenFallThrough.expression());
-                    return Value.value(merged, null);
-                } else if (instruction instanceof TableSwitchInsnNode tableSwitch) {
-                    if (insideStaticLoop(pc)) reject("switches inside a static loop are not supported");
-                    int count = tableSwitch.labels.size();
-                    if (count > 64) reject("table switch exceeds the 64-case compiler limit");
-                    int[] keys = new int[count];
-                    for (int i = 0; i < count; i++) keys[i] = tableSwitch.min + i;
-                    return switchBranch(pc, tableSwitch.dflt, tableSwitch.labels, keys);
-                } else if (instruction instanceof LookupSwitchInsnNode lookupSwitch) {
-                    if (insideStaticLoop(pc)) reject("switches inside a static loop are not supported");
-                    int count = lookupSwitch.labels.size();
-                    if (count > 64) reject("lookup switch exceeds the 64-case compiler limit");
-                    int[] keys = new int[count];
-                    for (int i = 0; i < count; i++) keys[i] = lookupSwitch.keys.get(i);
-                    return switchBranch(pc, lookupSwitch.dflt, lookupSwitch.labels, keys);
-                } else {
-                    reject("control flow or unsupported instruction " + instruction.getClass().getSimpleName());
+                } catch (UnsupportedBytecode failure) {
+                    String location = function.getClass().getName() + "." + method.name + method.desc
+                            + " at bytecode instruction " + pc + " (" + instructionLocation(instruction) + ")";
+                    throw new UnsupportedBytecode(location + ": " + failure.getMessage(), failure);
                 }
             }
             reject("method has no supported return instruction");
@@ -1140,6 +1146,14 @@ final class GpuDensityBytecodeCompiler {
 
     private static void reject(String reason) { throw new UnsupportedBytecode(reason); }
 
+    private static String instructionLocation(AbstractInsnNode instruction) {
+        if (instruction instanceof MethodInsnNode call)
+            return "call " + call.owner.replace('/', '.') + "." + call.name + call.desc;
+        if (instruction instanceof FieldInsnNode field)
+            return "field " + field.owner.replace('/', '.') + "." + field.name + field.desc;
+        return instruction.getClass().getSimpleName() + "/opcode-" + instruction.getOpcode();
+    }
+
     private static String opcodeName(int opcode) {
         if (opcode == Opcodes.GOTO) return "GOTO";
         if (opcode >= Opcodes.IFEQ && opcode <= Opcodes.IF_ACMPNE) return "conditional branch";
@@ -1150,5 +1164,6 @@ final class GpuDensityBytecodeCompiler {
 
     private static final class UnsupportedBytecode extends RuntimeException {
         UnsupportedBytecode(String message) { super(message); }
+        UnsupportedBytecode(String message, Throwable cause) { super(message, cause); }
     }
 }
