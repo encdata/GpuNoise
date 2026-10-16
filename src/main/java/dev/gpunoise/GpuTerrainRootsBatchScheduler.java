@@ -90,7 +90,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 BatchCandidate batchCandidate = largestNearbyBatch();
                 int compatibleCount = batchCandidate.chunks;
                 while (System.nanoTime() < deadline && pendingCount() < MAX_CHUNKS
-                        && compatibleCount < TARGET_CHUNKS) {
+                        && compatibleCount < Math.min(TARGET_CHUNKS, batchCandidate.capacity)) {
                     long now = System.nanoTime();
                     long remaining = deadline - now;
                     Pending next = remaining > 0
@@ -105,7 +105,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 ArrayDeque<Pending> region = pendingByRegion.get(batchKey);
                 Pending seed = region.peekFirst();
                 int samplesPerChunk = seed.grid.sampleCount();
-                int maxChunks = maxChunksPerDispatch(seed.grid);
+                int maxChunks = batchCandidate.capacity;
                 List<Pending> batch = new ArrayList<>(maxChunks);
                 int input = 0;
                 long outputFloats = 0;
@@ -208,7 +208,8 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
             }
         }
         if (bestKey == null) throw new IllegalStateException("terrain batch map is unexpectedly empty");
-        return new BatchCandidate(bestKey, bestCount);
+        Pending seed = pendingByRegion.get(bestKey).peekFirst();
+        return new BatchCandidate(bestKey, bestCount, maxChunksPerDispatch(seed.grid));
     }
 
     private List<Long> nearbyRegions(long center, GridLayout layout) {
@@ -380,7 +381,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
 
     private record BatchKey(long region, GridLayout layout) {}
 
-    private record BatchCandidate(BatchKey key, int chunks) {}
+    private record BatchCandidate(BatchKey key, int chunks, int capacity) {}
 
     private record GridLayout(int gridX, int gridY, int gridZ, int cellWidth, int cellHeight) {
         static GridLayout of(GpuTerrainGrid grid) {

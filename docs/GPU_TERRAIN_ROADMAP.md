@@ -341,8 +341,10 @@ until each asynchronous Vulkan submission completes. This removes per-dispatch
 native metadata allocation without letting an in-flight submission observe
 overwritten records. To amortize host-to-device submission overhead, the
 current experiment targets 96 compatible chunks (within a 100-chunk ceiling)
-and collects for at most 50 ms; it no longer dispatches early after a single
-25-chunk prefetch tile. This is a measured experiment, not a throughput claim:
+and collects for at most 50 ms; the target is reduced to the selected grid's
+actual buffer capacity so impossible batch sizes do not consume the full
+window. It no longer dispatches early after a single 25-chunk prefetch tile.
+This is a measured experiment, not a throughput claim:
 CI must check CPS and chunk tail latency. The Vulkan profile now reports CPU
 preparation/upload/command-recording time, submit-to-fence time, and readback
 time independently, alongside batch fill and per-chunk latency. Submit-to-fence
