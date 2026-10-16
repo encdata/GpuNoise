@@ -577,7 +577,8 @@ final class GpuDensityBytecodeCompiler {
 
         private void mathCall(String owner, String name, String descriptor, Value[] arguments) {
             if ((owner.equals("java/lang/Math") || owner.equals("java/lang/StrictMath"))
-                    && descriptor.equals("(DD)D") && arguments.length == 2
+                    && (descriptor.equals("(DD)D") || descriptor.equals("(FF)F"))
+                    && arguments.length == 2
                     && (name.equals("min") || name.equals("max"))) {
                 stack.add(mathBinary(name.equals("min") ? GpuDensityExpression.Operation.MIN
                         : GpuDensityExpression.Operation.MAX, arguments[0], arguments[1]));
@@ -630,7 +631,8 @@ final class GpuDensityBytecodeCompiler {
                 }
             }
             if ((owner.equals("java/lang/Math") || owner.equals("java/lang/StrictMath")
-                    || owner.equals("net/minecraft/util/Mth")) && descriptor.equals("(D)D")
+                    || owner.equals("net/minecraft/util/Mth"))
+                    && (descriptor.equals("(D)D") || descriptor.equals("(F)F"))
                     && arguments.length == 1
                     && name.equals("abs")) {
                 int result = builder.map(GpuDensityExpression.Mapping.ABS, arguments[0].expression());

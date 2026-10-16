@@ -54,12 +54,20 @@ public final class VulkanCiSmoke {
 
             GpuDensityExpressionSmoke.VulkanBranchFixture floatingFixture =
                     GpuDensityExpressionSmoke.floatingConditionalFixture();
-            float[] floatingBranchResults = ring.submitGraphRoots(floatingFixture.graph(), x, y, z)
+            // Keep noise-branch parity independent from the separate large
+            // integer-coordinate fixtures above. This frontend currently
+            // feeds NormalNoise through float coordinates, so values near
+            // 2^24 test coordinate precision rather than branch lowering.
+            float[] floatingX = {-4096.0f, -64.0f, 0.0f, 128.0f};
+            float[] floatingY = {-320.0f, -64.0f, 0.0f, 320.0f};
+            float[] floatingZ = {4096.0f, 64.0f, 0.0f, -128.0f};
+            float[] floatingBranchResults = ring.submitGraphRoots(
+                    floatingFixture.graph(), floatingX, floatingY, floatingZ)
                     .get(60, TimeUnit.SECONDS);
-            for (int sample = 0; sample < x.length; sample++) {
+            for (int sample = 0; sample < floatingX.length; sample++) {
                 double expected = floatingFixture.javaFunction().compute(
                         new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(
-                                (int) x[sample], (int) y[sample], (int) z[sample]));
+                                (int) floatingX[sample], (int) floatingY[sample], (int) floatingZ[sample]));
                 if (Math.abs(floatingBranchResults[sample] - expected) > 0.005) {
                     throw new IllegalStateException("Floating conditional Java bytecode mismatch at sample "
                             + sample + ": expected " + expected + ", got " + floatingBranchResults[sample]);

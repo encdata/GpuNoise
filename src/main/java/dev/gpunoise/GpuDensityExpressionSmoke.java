@@ -751,8 +751,12 @@ final class GpuDensityExpressionSmoke {
             double x = context.blockX();
             double y = context.blockY();
             double z = context.blockZ();
+            float floatX = (float) x;
+            float floatZ = (float) z;
             return Math.floor(y * 0.25) + Math.ceil(x * 0.1)
                     + Math.min(x * 0.02, z * 0.01) + Math.max(x * -0.015, z * 0.025)
+                    + Math.min(floatX * 0.125F, Math.max(floatZ * -0.25F, -2.5F)) * 0.1
+                    + Math.abs(floatZ * -0.03125F) * 0.05
                     + Math.sqrt(Math.abs(x)) + Math.sin(x * 0.05)
                     + Math.cos(z * 0.05) + Math.log(Math.exp(0.25))
                     + Math.atan2(z, x) * 0.05

@@ -302,3 +302,16 @@ validates each request against input/output capacities before enqueueing, and
 returns its host slab even when asynchronous result handling fails. Its
 periodic batch-fill and latency counters will show whether this path is
 dispatch-bound or request-arrival-bound; CI results are still pending.
+
+## Known precision boundary
+
+The current point-sample and terrain-grid shaders pass world coordinates into
+`NormalNoise` as 32-bit floats. A Lavapipe differential sample at coordinates
+near 2^24 diverged from Java's double-coordinate noise result by about 0.018,
+even though the Java bytecode branch lowering was correct. The branch smoke now
+uses ordinary-sized world coordinates so it can validate branch semantics
+independently. Large-coordinate noise parity remains an open correctness item:
+either carry coordinates and octave transforms in double precision through
+noise wrapping, or detect an unsafe range and keep that chunk on the Java path.
+Do not treat ordinary-coordinate smoke success as proof of parity near the
+world border.
