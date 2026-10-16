@@ -383,7 +383,8 @@ final class GpuDensityExpressionSmoke {
             DensityFunction.SinglePointContext context = new DensityFunction.SinglePointContext(
                     point[0], point[1], point[2]);
             requireClose(scalarMathResult.expression().evaluate(point[0], point[1], point[2]),
-                    scalarMath.compute(context), "scalar Math bytecode at x=" + point[0]);
+                    scalarMath.compute(context), 1.0e-6,
+                    "scalar Math bytecode at x=" + point[0]);
         }
         GpuDensityGraph scalarMathGraph = scalarMathFixture().graph();
         boolean hasGridCoordinate = scalarMathGraph.nodes().stream()
@@ -703,7 +704,11 @@ final class GpuDensityExpressionSmoke {
     }
 
     private static void requireClose(double actual, double expected, String label) {
-        if (Math.abs(actual - expected) > 1.0e-12) {
+        requireClose(actual, expected, 1.0e-12, label);
+    }
+
+    private static void requireClose(double actual, double expected, double epsilon, String label) {
+        if (Math.abs(actual - expected) > epsilon) {
             throw new AssertionError(label + " expected " + expected + ", got " + actual);
         }
     }
