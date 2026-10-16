@@ -118,6 +118,28 @@ final class GpuDensityBytecodeCompiler {
                 || internalName.startsWith("org/lwjgl/"));
     }
 
+    private static boolean isDensityHierarchyOwner(Class<?> densityType, String internalName) {
+        for (Class<?> current = densityType;
+                current != null && current != DensityFunction.class;
+                current = current.getSuperclass()) {
+            if (current.getName().startsWith("net.minecraft.")) continue;
+            if (Type.getInternalName(current).equals(internalName)) return true;
+            for (Class<?> implemented : current.getInterfaces()) {
+                if (isDensityHierarchyInterface(implemented, internalName)) return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isDensityHierarchyInterface(Class<?> type, String internalName) {
+        if (type.getName().startsWith("net.minecraft.")) return false;
+        if (Type.getInternalName(type).equals(internalName)) return true;
+        for (Class<?> parent : type.getInterfaces()) {
+            if (isDensityHierarchyInterface(parent, internalName)) return true;
+        }
+        return false;
+    }
+
     private static String failureSummary(Exception failure) {
         String message = failure.getMessage();
         return failure.getClass().getSimpleName()
@@ -659,9 +681,11 @@ final class GpuDensityBytecodeCompiler {
             }
 
             boolean sameClass = owner.equals(this.owner.name);
+            boolean densityHierarchyHelper = receiver != null && receiver.kind() == Kind.THIS
+                    && isDensityHierarchyOwner(function.getClass(), owner);
             boolean externalStaticHelper = call.getOpcode() == Opcodes.INVOKESTATIC
                     && !sameClass && isInlineableHelperOwner(owner);
-            if (sameClass || externalStaticHelper) {
+            if (sameClass || densityHierarchyHelper || externalStaticHelper) {
                 ClassNode helperOwner = sameClass ? this.owner : readClassNode(function.getClass(), owner);
                 MethodNode target = findMethod(helperOwner, name, call.desc);
                 if (target != null) {

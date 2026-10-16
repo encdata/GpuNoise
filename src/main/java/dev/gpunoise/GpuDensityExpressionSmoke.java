@@ -1132,18 +1132,20 @@ final class GpuDensityExpressionSmoke {
         }
     }
 
-    private abstract static class SharedTerrainDensity extends NumericSmokeDensity {
+    private abstract static class TerrainShapeBase extends NumericSmokeDensity {
         private final double horizontalScale = 0.03125;
         private final double verticalScale = 0.125;
 
-        @Override public double compute(FunctionContext context) {
-            return shape(context.blockX(), context.blockY(), context.blockZ());
-        }
-
-        private double shape(int x, int y, int z) {
+        protected final double shape(int x, int y, int z) {
             double ridge = Math.abs(x - z) * horizontalScale;
             double elevation = y * verticalScale;
             return ridge + (y > 0 ? elevation * 0.01 : -elevation * 0.02);
+        }
+    }
+
+    private abstract static class SharedTerrainDensity extends TerrainShapeBase {
+        @Override public double compute(FunctionContext context) {
+            return shape(context.blockX(), context.blockY(), context.blockZ());
         }
     }
 
