@@ -900,6 +900,26 @@ final class GpuDensityBytecodeCompiler {
                     return;
                 }
             }
+            if (owner.equals("net/minecraft/util/Mth") && arguments.length == 3
+                    && descriptor.equals("(FII)I")
+                    && (name.equals("lerpInt") || name.equals("lerpDiscrete"))) {
+                Value difference = integerMath(arguments[2], arguments[1], "ISUB");
+                if (name.equals("lerpDiscrete")) {
+                    difference = integerMath(difference, Value.value(builder.constant(1.0), 1.0), "ISUB");
+                }
+                Value differenceFloat = Value.value(builder.cast("I2F", difference.expression()), null);
+                Value scaled = floatMathBinary("FMUL", arguments[0], differenceFloat);
+                int floored = builder.cast("F2I",
+                        builder.map(GpuDensityExpression.Mapping.FLOOR, scaled.expression()));
+                Value result = integerMath(arguments[1], Value.value(floored, null), "IADD");
+                if (name.equals("lerpDiscrete")) {
+                    int positive = builder.compare("GT", arguments[0].expression(), builder.constant(0.0));
+                    int increment = builder.select(positive, builder.constant(1.0), builder.constant(0.0));
+                    result = integerMath(result, Value.value(increment, null), "IADD");
+                }
+                stack.add(result);
+                return;
+            }
             if (owner.equals("net/minecraft/util/Mth") && descriptor.equals("(D)D")
                     && arguments.length == 1 && name.equals("smoothstep")) {
                 Value x = arguments[0];

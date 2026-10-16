@@ -40,6 +40,9 @@ SERVER_START_TIMEOUT = 900
 SHUTDOWN_TIMEOUT = 90
 CHUNKY_RADIUS = 256
 BENCHMARK_REPETITIONS = 3
+BATCH_WINDOW_MS = int(os.environ.get("GPUNOISE_TERRAIN_BATCH_WINDOW_MS", "50"))
+if not 1 <= BATCH_WINDOW_MS <= 250:
+    raise ValueError("GPUNOISE_TERRAIN_BATCH_WINDOW_MS must be between 1 and 250")
 TASK_DONE = re.compile(
     r"Task finished for .*?Processed:\s*([\d,]+) chunks \(([^)]+)%\), "
     r"Total time:\s*(\d+):(\d+):(\d+)"
@@ -152,6 +155,7 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
         # authoritative final-density callback; per-chunk samples compare the
         # GPU materialization with the Java cell-corner interpolation first.
         command.append("-Dgpunoise.fullBlockOutput=true")
+        command.append(f"-Dgpunoise.terrainBatchWindowMs={BATCH_WINDOW_MS}")
     print(f"Starting {mode} Chunky benchmark: {' '.join(command)}", flush=True)
     process = subprocess.Popen(
         command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

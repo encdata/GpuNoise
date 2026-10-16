@@ -117,6 +117,11 @@ parity checks.
   Double 2D/3D `Mth.length` and `lengthSquared`, plus float 3D
   `lengthSquared`, lower to fused graph arithmetic and retain sequential JVM
   rounding for the float overload.
+  `lerpInt` and `lerpDiscrete` preserve their wrapped integer subtraction,
+  float multiplication and floor, and positive-delta selection semantics.
+  The terrain roots queue's batch window is now configurable from 1–250 ms;
+  CI benchmarks use 50 ms and report both average batch fill and dispatch
+  latency so queue coalescing can be tuned against actual GPU CPS.
   `Math.signum(float)` and
   `Math.signum(double)` retain their respective input precision.
   Minecraft's indexed sine table is generated once and uploaded to persistent

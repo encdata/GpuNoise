@@ -107,6 +107,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new VectorLengthMathDensity());
     }
 
+    static VulkanBranchFixture integerInterpolationMathFixture() {
+        return graphFixture(new IntegerInterpolationMathDensity());
+    }
+
     static VulkanBranchFixture minecraftMathOverloadsFixture() {
         return graphFixture(new MinecraftMathOverloadsDensity());
     }
@@ -487,6 +491,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new TriangleWaveMathDensity(), "Mth triangle wave");
         verifyStandaloneMath(new AngleMotionMathDensity(), "Mth angle motion functions");
         verifyStandaloneMath(new VectorLengthMathDensity(), "Mth vector length functions");
+        verifyStandaloneMath(new IntegerInterpolationMathDensity(), "Mth integer interpolation functions");
         verifyStandaloneMath(new MinecraftMathOverloadsDensity(), "Mth float and integer overloads");
         verifyStandaloneMath(new DynamicClampDensity(), "dynamic Mth.clamp overloads");
 
@@ -1061,6 +1066,14 @@ final class GpuDensityExpressionSmoke {
                     + net.minecraft.util.Mth.length(dx, dy, dz) * 0.01
                     + net.minecraft.util.Mth.lengthSquared(dx, dy) * 0.001
                     + net.minecraft.util.Mth.lengthSquared(dx, dy, dz) * 0.001;
+        }
+    }
+
+    private static final class IntegerInterpolationMathDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            float delta = context.blockX() * 0.00390625F;
+            return net.minecraft.util.Mth.lerpInt(delta, -300_001, 280_003) * 0.001
+                    + net.minecraft.util.Mth.lerpDiscrete(delta, -23, 37) * 0.01;
         }
     }
 

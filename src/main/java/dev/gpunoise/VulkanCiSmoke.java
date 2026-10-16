@@ -140,6 +140,8 @@ public final class VulkanCiSmoke {
             assertNumericFixture(ring, GpuDensityExpressionSmoke.vectorLengthMathFixture(),
                     "Mth vector length zero vector", new float[]{0.0f},
                     new float[]{0.0f}, new float[]{0.0f});
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.integerInterpolationMathFixture(),
+                    "Mth integer interpolation functions", mathX, mathY, mathZ);
             GpuDensityExpressionSmoke.VulkanBranchFixture minecraftMathFixture =
                     GpuDensityExpressionSmoke.minecraftMathOverloadsFixture();
             float[] overloadX = {-2_147_483_648.0f, -46_341.0f, 0.0f, 46_341.0f, 2_147_483_520.0f};
