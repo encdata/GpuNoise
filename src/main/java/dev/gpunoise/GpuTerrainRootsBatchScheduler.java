@@ -20,14 +20,9 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     /** Spatial batch footprint requested for terrain generation. */
     private static final int BATCH_SIZE_CHUNKS = 10;
     private static final int MAX_CHUNKS = 100;
-    /** One prefetched area is already a useful dispatch and should not wait for another tile. */
-    private static final int PREFETCH_TILE_CHUNKS = (GpuTerrainAreaRegistry.RADIUS * 2 + 1)
-            * (GpuTerrainAreaRegistry.RADIUS * 2 + 1);
-    /** Briefly collect adjacent tiles, then dispatch a complete prefetch tile even below target. */
-    private static final long TILE_COALESCE_NANOS = TimeUnit.MILLISECONDS.toNanos(10L);
-    /** Aim for a useful transfer/dispatch size when nearby requests are ready. */
+    /** Amortize CPU/GPU submission overhead while keeping a hard dispatch bound. */
     private static final int TARGET_CHUNKS = (int) Math.max(1L,
-            Math.min(MAX_CHUNKS, Long.getLong("gpunoise.terrainBatchTargetChunks", 64L)));
+            Math.min(MAX_CHUNKS, Long.getLong("gpunoise.terrainBatchTargetChunks", 96L)));
     private static final int MAX_INPUT = PersistentVulkanNormalNoiseEngine.CAPACITY;
     // Give C2ME enough time to enqueue the rest of the local 10x10 area. The
     // deadline is still bounded, so an isolated request is dispatched
@@ -92,17 +87,12 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 }
                 long batchStarted = System.nanoTime();
                 long deadline = batchStarted + BATCH_WINDOW_NANOS;
-                long tileDeadline = batchStarted + TILE_COALESCE_NANOS;
                 BatchCandidate batchCandidate = largestNearbyBatch();
                 int compatibleCount = batchCandidate.chunks;
                 while (System.nanoTime() < deadline && pendingCount() < MAX_CHUNKS
                         && compatibleCount < TARGET_CHUNKS) {
                     long now = System.nanoTime();
-                    if (compatibleCount >= PREFETCH_TILE_CHUNKS && now >= tileDeadline) break;
                     long remaining = deadline - now;
-                    if (compatibleCount >= PREFETCH_TILE_CHUNKS) {
-                        remaining = Math.min(remaining, tileDeadline - now);
-                    }
                     Pending next = remaining > 0
                             ? queue.poll(remaining, TimeUnit.NANOSECONDS)
                             : queue.poll();

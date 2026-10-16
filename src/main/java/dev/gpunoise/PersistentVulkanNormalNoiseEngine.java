@@ -61,8 +61,11 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private int inFlightSamples;
     private int inFlightRoots;
     private long inFlightFenceSubmittedNanos;
+    private long inFlightGraphPreparationNanos;
     private long completedGraphFenceSamples;
     private long totalGraphFenceNanos;
+    private long totalGraphPreparationNanos;
+    private long totalGraphReadbackNanos;
 
     PersistentVulkanNormalNoiseEngine(GpuDevice expected) throws Exception {
         Configuration.STACK_SIZE.set(64 * 1_048_576);
@@ -316,6 +319,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
         int rootCount = graph.routerRoots().length;
         if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16) throw new IllegalArgumentException("density graph exceeds GPU capacity");
+        long preparationStarted = System.nanoTime();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
             ByteBuffer coords = stack.malloc(sampleCount * 16).order(ByteOrder.nativeOrder());
@@ -350,6 +354,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                         .pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit async graph roots");
             }
             inFlightFenceSubmittedNanos = System.nanoTime();
+            inFlightGraphPreparationNanos = inFlightFenceSubmittedNanos - preparationStarted;
             inFlightSamples = sampleCount;
             inFlightRoots = rootCount;
             inFlightGraphRoots = new CompletableFuture<>();
@@ -376,6 +381,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
         int rootCount = graph.routerRoots().length;
         if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16) throw new IllegalArgumentException("density graph exceeds GPU capacity");
+        long preparationStarted = System.nanoTime();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
             put(graphCoordinates, metadata, stack);
@@ -407,6 +413,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                         .pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit grid roots");
             }
             inFlightFenceSubmittedNanos = System.nanoTime();
+            inFlightGraphPreparationNanos = inFlightFenceSubmittedNanos - preparationStarted;
             inFlightSamples = sampleCount; inFlightRoots = rootCount;
             inFlightGraphRoots = new CompletableFuture<>();
             return inFlightGraphRoots;
@@ -421,8 +428,10 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             check(status, "poll graph-roots fence");
             long fenceDuration = System.nanoTime() - inFlightFenceSubmittedNanos;
-            recordGraphFenceDuration(fenceDuration);
+            long readbackStarted = System.nanoTime();
             float[] output = readResults(inFlightSamples, inFlightRoots, stack);
+            recordGraphFenceDuration(inFlightGraphPreparationNanos, fenceDuration,
+                    System.nanoTime() - readbackStarted);
             check(vkResetFences(device, fence), "reset async graph-roots fence");
             inFlightGraphRoots = null;
             future.complete(output);
@@ -432,12 +441,16 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         }
     }
 
-    private void recordGraphFenceDuration(long durationNanos) {
-        totalGraphFenceNanos += durationNanos;
+    private void recordGraphFenceDuration(long preparationNanos, long fenceNanos, long readbackNanos) {
+        totalGraphPreparationNanos += preparationNanos;
+        totalGraphFenceNanos += fenceNanos;
+        totalGraphReadbackNanos += readbackNanos;
         long completed = ++completedGraphFenceSamples;
         if ((completed & 7L) == 0L) {
-            GpuNoise.LOGGER.info("GPU terrain graph fence: completedDispatches={}, avgSubmitToFenceMs={}",
-                    completed, totalGraphFenceNanos / (double) completed / 1_000_000.0);
+            GpuNoise.LOGGER.info("GPU terrain graph profile: completedDispatches={}, avgCpuPrepareMs={}, avgSubmitToFenceMs={}, avgReadbackMs={}",
+                    completed, totalGraphPreparationNanos / (double) completed / 1_000_000.0,
+                    totalGraphFenceNanos / (double) completed / 1_000_000.0,
+                    totalGraphReadbackNanos / (double) completed / 1_000_000.0);
         }
     }
 

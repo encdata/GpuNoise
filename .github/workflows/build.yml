@@ -48,7 +48,7 @@ jobs:
       - name: Run C2ME Chunky CPU and GPU worldgen benchmark
         env:
           GPUNOISE_TERRAIN_BATCH_WINDOW_MS: 50
-          GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS: 64
+          GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS: 96
           GPUNOISE_BENCHMARK_FULL_BLOCK_OUTPUT: false
         run: python3 tools/ci/runserver_benchmark.py
 

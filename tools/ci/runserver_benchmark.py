@@ -43,7 +43,7 @@ BENCHMARK_REPETITIONS = 3
 BATCH_WINDOW_MS = int(os.environ.get("GPUNOISE_TERRAIN_BATCH_WINDOW_MS", "50"))
 if not 1 <= BATCH_WINDOW_MS <= 250:
     raise ValueError("GPUNOISE_TERRAIN_BATCH_WINDOW_MS must be between 1 and 250")
-BATCH_TARGET_CHUNKS = int(os.environ.get("GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS", "64"))
+BATCH_TARGET_CHUNKS = int(os.environ.get("GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS", "96"))
 if not 1 <= BATCH_TARGET_CHUNKS <= 100:
     raise ValueError("GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS must be between 1 and 100")
 FULL_BLOCK_OUTPUT = os.environ.get("GPUNOISE_BENCHMARK_FULL_BLOCK_OUTPUT", "false").lower()
@@ -67,9 +67,10 @@ GPU_BATCHING = re.compile(
     r"GPU terrain roots batching: avgChunksPerDispatch=([\d.]+), "
     r"avgSamplesPerDispatch=([\d.]+),"
 )
-GPU_GRAPH_FENCE = re.compile(
-    r"GPU terrain graph fence: completedDispatches=(\d+), "
-    r"avgSubmitToFenceMs=([\d.]+)"
+GPU_GRAPH_PROFILE = re.compile(
+    r"GPU terrain graph profile: completedDispatches=(\d+), "
+    r"avgCpuPrepareMs=([\d.]+), avgSubmitToFenceMs=([\d.]+), "
+    r"avgReadbackMs=([\d.]+)"
 )
 GPU_SHADER_VARIANT = re.compile(r"GPU density shader variant: registers=(\d+), fastMath=(true|false)")
 GPU_CHUNK_LATENCY = re.compile(
@@ -282,13 +283,15 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
                 f"CI_GPU_BATCHING mode={mode} avg_chunks_per_dispatch={batch_samples[-1][0]} "
                 f"avg_samples_per_dispatch={batch_samples[-1][1]}", flush=True,
             )
-            fence_samples = GPU_GRAPH_FENCE.findall(run_log)
-            if not fence_samples:
-                raise RuntimeError("GPU submit-to-fence timing was not recorded")
-            latest_fence = fence_samples[-1]
+            profile_samples = GPU_GRAPH_PROFILE.findall(run_log)
+            if not profile_samples:
+                raise RuntimeError("GPU terrain CPU preparation, submit-to-fence, and readback profile was not recorded")
+            latest_profile = profile_samples[-1]
             print(
-                f"CI_GPU_FENCE mode={mode} dispatches={latest_fence[0]} "
-                f"avg_submit_to_fence_ms={latest_fence[1]}", flush=True,
+                f"CI_GPU_PROFILE mode={mode} dispatches={latest_profile[0]} "
+                f"avg_cpu_prepare_ms={latest_profile[1]} "
+                f"avg_submit_to_fence_ms={latest_profile[2]} "
+                f"avg_readback_ms={latest_profile[3]}", flush=True,
             )
             batch_window = GPU_BATCH_WINDOW.search(run_log)
             if (batch_window is None or int(batch_window.group(1)) != BATCH_WINDOW_MS

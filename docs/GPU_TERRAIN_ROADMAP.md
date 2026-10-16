@@ -339,11 +339,15 @@ measure aquifer decision integration or final block selection.
 The terrain roots batcher now reuses a bounded pool of direct metadata buffers
 until each asynchronous Vulkan submission completes. This removes per-dispatch
 native metadata allocation without letting an in-flight submission observe
-overwritten records. Periodic batch telemetry now includes enqueue-to-dispatch
-wait per chunk, average batch fill, and submit-to-completion latency. The next
-CI run must establish whether the allocation reduction changes end-to-end
-throughput; Lavapipe is
-still only a CPU Vulkan backend and cannot establish discrete-GPU speedup.
+overwritten records. To amortize host-to-device submission overhead, the
+current experiment targets 96 compatible chunks (within a 100-chunk ceiling)
+and collects for at most 50 ms; it no longer dispatches early after a single
+25-chunk prefetch tile. This is a measured experiment, not a throughput claim:
+CI must check CPS and chunk tail latency. The Vulkan profile now reports CPU
+preparation/upload/command-recording time, submit-to-fence time, and readback
+time independently, alongside batch fill and per-chunk latency. Submit-to-fence
+includes the asynchronous fence polling interval. Lavapipe remains a CPU Vulkan
+backend and cannot establish discrete-GPU speedup.
 
 The optional fused chunk scheduler now coalesces requests for at most one
 millisecond, retains incompatible FIFO requests without racing queue producers,
