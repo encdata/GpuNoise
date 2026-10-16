@@ -38,8 +38,10 @@ import org.objectweb.asm.tree.VarInsnNode;
  * <p>This is deliberately a bytecode compiler rather than a class-name
  * heuristic. It only accepts methods whose complete instruction stream can
  * be represented by the IR. Forward conditionals become GPU compare/select
- * nodes. Loops, mutable fields, unknown calls, or unsupported values reject
- * the whole method so the original Java function remains authoritative.</p>
+ * nodes. Calls into custom helper/value classes are recursively inlined;
+ * field loads are captured only from final fields, and any side effect,
+ * unknown call, or unsupported value rejects the whole method so the original
+ * Java function remains authoritative.</p>
  */
 final class GpuDensityBytecodeCompiler {
     private static final String CONTEXT_DESC =
@@ -226,6 +228,18 @@ final class GpuDensityBytecodeCompiler {
                 || internalName.startsWith("jdk/") || internalName.startsWith("sun/")
                 || internalName.startsWith("net/minecraft/")
                 || internalName.startsWith("org/lwjgl/"));
+    }
+
+    /**
+     * Mod densities often keep helper/config objects as final fields without
+     * declaring them as records. They can be inspected safely because method
+     * calls still require custom bytecode that can be completely inlined, and
+     * every field read independently passes readField's final-field check.
+     */
+    private static boolean isInlineableHelperValue(Object value) {
+        if (value == null) return false;
+        Class<?> type = value.getClass();
+        return !type.isEnum() && isInlineableHelperOwner(Type.getInternalName(type));
     }
 
     private static boolean isDensityHierarchyOwner(Class<?> densityType, String internalName) {
@@ -695,7 +709,7 @@ final class GpuDensityBytecodeCompiler {
                 stack.add(Value.density(density));
             } else if (fieldValue != null && fieldValue.getClass().isArray()) {
                 stack.add(Value.array(fieldValue));
-            } else if (fieldValue != null && fieldValue.getClass().isRecord()) {
+            } else if (isInlineableHelperValue(fieldValue)) {
                 stack.add(Value.object(fieldValue));
             } else {
                 reject("field " + instruction.name + " has unsupported runtime type "

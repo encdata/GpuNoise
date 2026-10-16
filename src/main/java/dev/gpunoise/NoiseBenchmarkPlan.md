@@ -29,8 +29,9 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
 - `GpuDensityBytecodeCompiler` translates a conservative, side-effect-free
   subset of custom `compute(FunctionContext): double` bytecode into the shared
   graph IR. Supported methods include bounded statically-unrolled loops,
-  helper calls, inherited/default methods, immutable record configuration,
-  arithmetic, comparisons, and branch selection. Unsupported behavior must
+  helper calls, inherited/default methods, record and final-field helper
+  objects, arithmetic, comparisons, and branch selection. Helper bytecode is
+  still inlined and each field load must be final. Unsupported behavior must
   remain on the Java path with a recorded reason; never approximate silently.
 - The graph lowerer removes unreachable nodes, orders dependencies, and reuses
   registers. Vulkan evaluates the terrain router roots on the cell lattice.
@@ -139,7 +140,8 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
    supported operations, parity expectations, and failure behavior.
 2. Expand the bytecode frontend by semantic families, not class-name guesses:
    numeric conversions, integer overflow, floating-point edge cases, helper
-   dispatch, arrays/records, static configuration, and supported control flow.
+   dispatch, arrays/record and final-field helper objects, static
+   configuration, and supported control flow.
 3. Add mod-shaped fixtures for common terrain patterns and report accepted
    graph nodes or a precise rejection reason for every fixture.
 4. Support helper calls only when their bytecode and object reads can be
