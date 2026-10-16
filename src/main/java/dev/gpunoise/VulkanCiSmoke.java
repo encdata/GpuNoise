@@ -13,6 +13,9 @@ public final class VulkanCiSmoke {
     private VulkanCiSmoke() {}
 
     public static void main(String[] args) throws Exception {
+        // The compiler fixtures instantiate DensityFunction implementations;
+        // initialize vanilla registries before their interfaces are loaded.
+        net.minecraft.server.Bootstrap.bootStrap();
         GpuDensityExpressionSmoke.verify();
         verifyTranslatorRegistry();
         GpuDevice device = GpuProbe.findPreferredDevice(GpuNoiseConfig.GpuVendorPreference.AUTO);
