@@ -43,7 +43,7 @@ void main(){
     vec3 t=vec3(x%blocksPerCellX,y%blocksPerCellY,z%blocksPerCellX)
         /vec3(float(blocksPerCellX),float(blocksPerCellY),float(blocksPerCellX));
     uint gridX=cellsX+1u, gridZ=cellsZ+1u;
-    uint cellSample=cornerOffset+((cellY*gridZ+cellZ)*gridX+cellX);
+    uint cellSample=cornerOffset+((cellY*gridX+cellX)*gridZ+cellZ);
     uint strideX=gridZ*rootStride;
     uint strideY=gridX*gridZ*rootStride;
     uint strideZ=rootStride;
