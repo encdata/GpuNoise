@@ -272,7 +272,7 @@ tasks.register('compileGpuShaders') {
     doLast {
         shaderSources.eachWithIndex { source, index ->
             def output = shaderOutputs[index]
-            ant.exec(executable: compiler, failonerror: true) {
+            ant.exec(executable: compiler, failonerror: true, logError: true) {
                 arg(value: '-O')
                 arg(value: '-I')
                 arg(value: shaderDir.absolutePath)
@@ -281,7 +281,7 @@ tasks.register('compileGpuShaders') {
                 arg(value: source.absolutePath)
             }
         }
-        ant.exec(executable: compiler, failonerror: true) {
+        ant.exec(executable: compiler, failonerror: true, logError: true) {
             arg(value: '-O')
             arg(value: '-DGRID_INPUT')
             arg(value: '-o')
@@ -289,14 +289,14 @@ tasks.register('compileGpuShaders') {
             arg(value: shaderDir.path + '/density_graph.comp')
         }
         [32, 64, 128, 256].each { registerCount ->
-            ant.exec(executable: compiler, failonerror: true) {
+            ant.exec(executable: compiler, failonerror: true, logError: true) {
                 arg(value: '-O')
                 arg(value: "-DREGISTER_COUNT=${registerCount}")
                 arg(value: '-o')
                 arg(value: shaderDir.path + "/density_graph_${registerCount}.comp.spv")
                 arg(value: shaderDir.path + '/density_graph.comp')
             }
-            ant.exec(executable: compiler, failonerror: true) {
+            ant.exec(executable: compiler, failonerror: true, logError: true) {
                 arg(value: '-O')
                 arg(value: '-DGRID_INPUT')
                 arg(value: "-DREGISTER_COUNT=${registerCount}")
