@@ -238,8 +238,8 @@ public final class GpuDensityExpression {
                         case SQRT -> Math.sqrt(input);
                         case SIN -> Math.sin(input);
                         case COS -> Math.cos(input);
-                        case SIN_FLOAT -> (double) (float) Math.sin((float) input);
-                        case COS_FLOAT -> (double) (float) Math.cos((float) input);
+                        case SIN_FLOAT -> (double) GpuDensityGraphBuffer.mthSin((float) input);
+                        case COS_FLOAT -> (double) GpuDensityGraphBuffer.mthCos((float) input);
                         case EXP -> Math.exp(input);
                         case LOG -> Math.log(input);
                         case TANH -> Math.tanh(input);
@@ -590,8 +590,8 @@ public final class GpuDensityExpression {
                 case SQRT -> Math.sqrt(input);
                 case SIN -> Math.sin(input);
                 case COS -> Math.cos(input);
-                case SIN_FLOAT -> (double) (float) Math.sin((float) input);
-                case COS_FLOAT -> (double) (float) Math.cos((float) input);
+                case SIN_FLOAT -> (double) GpuDensityGraphBuffer.mthSin((float) input);
+                case COS_FLOAT -> (double) GpuDensityGraphBuffer.mthCos((float) input);
                 case EXP -> Math.exp(input);
                 case LOG -> Math.log(input);
                 case TANH -> Math.tanh(input);

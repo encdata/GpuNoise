@@ -590,9 +590,9 @@ final class GpuDensityBytecodeCompiler {
                         ? GpuDensityExpression.Mapping.SIN_FLOAT : GpuDensityExpression.Mapping.COS_FLOAT;
                 int result = builder.map(mapping, input.expression());
                 Double constant = input.constant() == null ? null
-                        : (double) (float) (name.equals("sin")
-                                ? Math.sin((float) (double) input.constant())
-                                : Math.cos((float) (double) input.constant()));
+                        : (double) (name.equals("sin")
+                                ? GpuDensityGraphBuffer.mthSin(input.constant().floatValue())
+                                : GpuDensityGraphBuffer.mthCos(input.constant().floatValue()));
                 stack.add(Value.value(result, constant));
                 return;
             }

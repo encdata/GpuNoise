@@ -10,6 +10,9 @@ import net.minecraft.world.level.levelgen.synth.NormalNoise;
 final class GpuDensityGraphBuffer {
     static final int NODE_BYTES = 48;
     static final int MAX_SHADER_REGISTERS = 256;
+    private static final int MTH_SIN_TABLE_SIZE = 65_536;
+    private static final float[] MTH_SIN_TABLE = createMthSinTable();
+    private static final ByteBuffer MTH_SIN_TABLE_BYTES = createMthSinTableBytes();
     record Packed(ByteBuffer nodes, ByteBuffer permutations, ByteBuffer octaves,
                   ByteBuffer samplerMetadata, ByteBuffer splinePoints, ByteBuffer blendedMetadata,
                   int nodeCount, int samplerCount, int blendedCount) {}
@@ -23,6 +26,33 @@ final class GpuDensityGraphBuffer {
     );
 
     private GpuDensityGraphBuffer() {}
+
+    static float mthSin(float value) {
+        return MTH_SIN_TABLE[(int) (value * 10430.378F) & (MTH_SIN_TABLE_SIZE - 1)];
+    }
+
+    static float mthCos(float value) {
+        return MTH_SIN_TABLE[(int) (value * 10430.378F + 16384.0F) & (MTH_SIN_TABLE_SIZE - 1)];
+    }
+
+    static ByteBuffer mthSinTableBytes() {
+        return MTH_SIN_TABLE_BYTES.asReadOnlyBuffer().order(ByteOrder.nativeOrder());
+    }
+
+    private static float[] createMthSinTable() {
+        float[] values = new float[MTH_SIN_TABLE_SIZE];
+        for (int index = 0; index < values.length; index++) {
+            values[index] = (float) Math.sin((double) index * Math.PI * 2.0 / values.length);
+        }
+        return values;
+    }
+
+    private static ByteBuffer createMthSinTableBytes() {
+        ByteBuffer bytes = ByteBuffer.allocateDirect(MTH_SIN_TABLE_SIZE * Float.BYTES)
+                .order(ByteOrder.nativeOrder());
+        for (float value : MTH_SIN_TABLE) bytes.putFloat(value);
+        return (ByteBuffer) bytes.flip();
+    }
 
     static Packed pack(GpuDensityGraph graph) {
         if (graph.registerCount() > MAX_SHADER_REGISTERS) {

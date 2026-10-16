@@ -105,6 +105,9 @@ parity checks.
   `Mth.sin` and `Mth.cos` use dedicated float-rounded IR mappings, distinct
   from double `Math` operations; `Math.signum(float)` and
   `Math.signum(double)` retain their respective input precision.
+  Minecraft's indexed sine table is generated once and uploaded to persistent
+  graph storage, preserving vanilla's angle quantization without per-dispatch
+  table transfers.
   GPU min/max nodes follow Java NaN propagation and signed-zero ordering rather
   than GLSL's implementation-defined NaN selection behavior.
   Java double division and double/float remainder are represented explicitly;

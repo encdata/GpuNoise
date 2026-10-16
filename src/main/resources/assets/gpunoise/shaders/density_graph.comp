@@ -37,6 +37,7 @@ struct BlendedInfo {
 layout(std430,set=0,binding=7) readonly buffer BlendedMetadata { BlendedInfo blended[]; };
 layout(std430,set=0,binding=8) readonly buffer BlendInputs { vec2 blendInputs[]; };
 layout(std430,set=0,binding=9) readonly buffer Roots { uint rootNodes[]; };
+layout(std430,set=0,binding=10) readonly buffer MthSinTable { float mthSinValues[]; };
 layout(push_constant) uniform Parameters { uint count; uint nodeCount; uint rootCount; uint reserved; };
 
 const vec3 G[16]=vec3[16](vec3(1,1,0),vec3(-1,1,0),vec3(1,-1,0),vec3(-1,-1,0),vec3(1,0,1),vec3(-1,0,1),vec3(1,0,-1),vec3(-1,0,-1),vec3(0,1,1),vec3(0,-1,1),vec3(0,1,-1),vec3(0,-1,-1),vec3(1,1,0),vec3(0,-1,1),vec3(-1,1,0),vec3(0,-1,-1));
@@ -263,8 +264,8 @@ double mapValue(double x,uint op){
     if(op==13u)return sqrt(x); if(op==14u)return double(sin(float(x)));
     if(op==15u)return double(cos(float(x))); if(op==16u)return double(exp(float(x)));
     if(op==17u)return double(log(float(x)));
-    if(op==19u)return double(sin(float(x)));
-    if(op==20u)return double(cos(float(x)));
+    if(op==19u)return double(mthSinValues[uint(int(float(x)*10430.378)&65535)]);
+    if(op==20u)return double(mthSinValues[uint(int(float(x)*10430.378+16384.0)&65535)]);
     if(op==18u){
         float value=float(x);
         if(value>10.0)return 1.0;
