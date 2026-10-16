@@ -197,12 +197,8 @@ final class GpuDensityExpressionSmoke {
         GpuDensityExpression.Builder coordinateBuilder = new GpuDensityExpression.Builder();
         GpuDensityExpression coordinateOnly = coordinateBuilder.build(
                 coordinateBuilder.coordinate(GpuDensityExpression.Coordinate.X));
-        if (coordinateOnly.unsupportedOperation(GpuDensityExpression.Backend.TERRAIN_GRID) == null) {
-            throw new AssertionError("terrain-grid capability checks must reject coordinate IR opcodes");
-        }
-        if (!"GpuCoordinate".equals(coordinateOnly.unsupportedOperation(
-                GpuDensityExpression.Backend.TERRAIN_GRID))) {
-            throw new AssertionError("terrain-grid diagnostics should name the unsupported expression node");
+        if (coordinateOnly.unsupportedOperation(GpuDensityExpression.Backend.TERRAIN_GRID) != null) {
+            throw new AssertionError("terrain-grid lowering should support coordinate IR nodes");
         }
         if (coordinateOnly.unsupportedOperation(GpuDensityExpression.Backend.POINT_SAMPLE) != null) {
             throw new AssertionError("point-sample shader should support coordinate expression nodes");
