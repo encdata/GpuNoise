@@ -148,7 +148,7 @@ final class GpuDensityBytecodeCompiler {
             }
             for (int i = 0; i < instructions.length; i++) {
                 if (instructions[i] instanceof JumpInsnNode jump
-                        && branchRelation(jump.getOpcode()) != null) {
+                        && (jump.getOpcode() == Opcodes.GOTO || branchRelation(jump.getOpcode()) != null)) {
                     Integer target = labels.get(jump.label);
                     if (target != null && target <= i) loopRegions.add(new LoopRegion(target, i));
                 }
@@ -214,7 +214,12 @@ final class GpuDensityBytecodeCompiler {
                     Integer target = labels.get(jump.label);
                     if (target == null) reject("jump target is missing from the method instruction stream");
                     if (jump.getOpcode() == Opcodes.GOTO) {
-                        if (target <= pc) reject("backward branch or loop is not supported");
+                        if (target <= pc) {
+                            if (!insideStaticLoop(pc)) reject("backward branch or loop is not supported");
+                            int iterations = loopIterations.merge(pc, 1, Integer::sum);
+                            if (iterations > MAX_STATIC_LOOP_ITERATIONS)
+                                reject("statically bounded loop exceeds 64 iterations");
+                        }
                         return executePath(target, new ArrayList<>(stack), new HashMap<>(locals));
                     }
                     String relation = branchRelation(jump.getOpcode());
