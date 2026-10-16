@@ -41,7 +41,7 @@ public final class VulkanCiSmoke {
             metadata.putInt(-16).putInt(-8).putInt(32)
                     .putInt(2).putInt(2).putInt(2).putInt(1).putInt(1).flip();
             System.out.println("Vulkan CI smoke: dispatching terrain grid shader");
-            float[] gridResults = ring.submitGraphRootsGrid(metadata, 1, 8)
+            float[] gridResults = ring.submitGraphRootsGrid(graph, metadata, 1, 8)
                     .get(60, TimeUnit.SECONDS);
             System.out.println("Vulkan CI smoke: terrain grid shader completed");
             assertConstantResults("terrain grid shader", gridResults, 8);

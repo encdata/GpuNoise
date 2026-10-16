@@ -298,6 +298,11 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
 
     synchronized CompletableFuture<float[]> submitGraphRootsGridAsync(ByteBuffer metadata, int chunkCount,
                                                                         int samplesPerChunk) throws Exception {
+        return submitGraphRootsGridAsync(GpuTerrainRuntime.currentTerrainGraph(), metadata, chunkCount, samplesPerChunk);
+    }
+
+    synchronized CompletableFuture<float[]> submitGraphRootsGridAsync(GpuDensityGraph graph, ByteBuffer metadata,
+                                                                        int chunkCount, int samplesPerChunk) throws Exception {
         if (inFlightGraphRoots != null) throw new IllegalStateException("graph-roots slot is still in flight");
         if (chunkCount <= 0 || samplesPerChunk <= 0 || (long) chunkCount * samplesPerChunk > CAPACITY
                 || metadata.capacity() < chunkCount * 32L
@@ -306,7 +311,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         }
         metadata = metadata.duplicate().clear();
         metadata.limit(chunkCount * 32);
-        GpuDensityGraph graph = GpuTerrainRuntime.currentTerrainGraph();
+        if (graph == null) throw new IllegalStateException("GPU terrain graph is not installed");
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
         int rootCount = graph.routerRoots().length;
         if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16) throw new IllegalArgumentException("density graph exceeds GPU capacity");

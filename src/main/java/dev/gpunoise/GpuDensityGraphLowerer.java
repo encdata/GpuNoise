@@ -16,6 +16,7 @@ final class GpuDensityGraphLowerer {
     private GpuDensityGraphLowerer() {}
 
     static GpuDensityGraph lower(GpuDensityGraph graph) {
+        validateGraphShape(graph);
         for (GpuDensityGraph.Node node : graph.nodes()) {
             if (!SUPPORTED.contains(node.opcode())) {
                 throw new IllegalArgumentException("GPU graph opcode not lowered: " + node.opcode());
@@ -25,17 +26,21 @@ final class GpuDensityGraphLowerer {
         // the IR into child-before-parent order before uploading it; the shader
         // is intentionally iterative and must never read an uncomputed node.
         int[] order = new int[graph.nodes().size()];
-        boolean[] visited = new boolean[order.length];
-        int[] count = {0};
-        for (int root : graph.routerRoots()) visit(root, graph.nodes(), visited, order, count);
+        byte[] state = new byte[order.length]; // 0 = unseen, 1 = active, 2 = complete
+        int count = topologicalOrder(graph, state, order);
+        if (count > PersistentVulkanNormalNoiseEngine.GRAPH_NODE_CAPACITY) {
+            throw new IllegalArgumentException("GPU density graph has " + count
+                    + " reachable nodes; Vulkan capacity is " + PersistentVulkanNormalNoiseEngine.GRAPH_NODE_CAPACITY);
+        }
         // Keep only nodes reachable from the selected roots. This is important
         // for terrain-only graphs: unrelated climate and vein branches should
         // not execute for every terrain sample.
         int[] remap = new int[order.length];
-        for (int i = 0; i < order.length; i++) remap[order[i]] = i;
-        List<GpuDensityGraph.Node> nodes = new ArrayList<>(order.length);
-        List<net.minecraft.world.level.levelgen.DensityFunction> sourceFunctions = new ArrayList<>(order.length);
-        for (int old : order) {
+        for (int i = 0; i < count; i++) remap[order[i]] = i;
+        List<GpuDensityGraph.Node> nodes = new ArrayList<>(count);
+        List<net.minecraft.world.level.levelgen.DensityFunction> sourceFunctions = new ArrayList<>(count);
+        for (int ordered = 0; ordered < count; ordered++) {
+            int old = order[ordered];
             GpuDensityGraph.Node node = graph.nodes().get(old);
             int[] children = node.children();
             for (int i = 0; i < children.length; i++) if (children[i] >= 0) children[i] = remap[children[i]];
@@ -46,9 +51,9 @@ final class GpuDensityGraphLowerer {
         for (int i = 0; i < roots.length; i++) roots[i] = remap[roots[i]];
         List<GpuDensityGraph.Spline> splines = new ArrayList<>(graph.splines().size());
         for (GpuDensityGraph.Spline spline : graph.splines()) {
-            if (!visited[spline.coordinateNode()]) continue;
+            if (state[spline.coordinateNode()] != 2) continue;
             boolean valuesVisited = true;
-            for (int value : spline.valueNodes()) if (!visited[value]) valuesVisited = false;
+            for (int value : spline.valueNodes()) if (state[value] != 2) valuesVisited = false;
             if (!valuesVisited) continue;
             int[] values = spline.valueNodes();
             for (int i = 0; i < values.length; i++) values[i] = remap[values[i]];
@@ -102,10 +107,72 @@ final class GpuDensityGraphLowerer {
         return slots;
     }
 
-    private static void visit(int index, List<GpuDensityGraph.Node> nodes, boolean[] visited, int[] order, int[] count) {
-        if (index < 0 || visited[index]) return;
-        visited[index] = true;
-        for (int child : nodes.get(index).children()) visit(child, nodes, visited, order, count);
-        order[count[0]++] = index;
+    private static void validateGraphShape(GpuDensityGraph graph) {
+        List<GpuDensityGraph.Node> nodes = graph.nodes();
+        if (nodes.isEmpty()) throw new IllegalArgumentException("GPU density graph has no nodes");
+        if (graph.sourceFunctions().size() != nodes.size()) {
+            throw new IllegalArgumentException("GPU density graph source-function table has "
+                    + graph.sourceFunctions().size() + " entries for " + nodes.size() + " nodes");
+        }
+        for (int root : graph.routerRoots()) requireNodeIndex(root, nodes.size(), "router root");
+        for (int index = 0; index < nodes.size(); index++) {
+            for (int child : nodes.get(index).children()) {
+                requireNodeIndex(child, nodes.size(), "child of node " + index);
+            }
+        }
+        for (int splineIndex = 0; splineIndex < graph.splines().size(); splineIndex++) {
+            GpuDensityGraph.Spline spline = graph.splines().get(splineIndex);
+            requireNodeIndex(spline.coordinateNode(), nodes.size(), "coordinate of spline " + splineIndex);
+            int points = spline.locations().length;
+            if (points == 0 || points > 64 || spline.derivatives().length != points
+                    || spline.valueNodes().length != points) {
+                throw new IllegalArgumentException("GPU spline " + splineIndex
+                        + " has inconsistent arrays or exceeds the 64-point shader limit");
+            }
+            for (int value : spline.valueNodes()) requireNodeIndex(value, nodes.size(), "value of spline " + splineIndex);
+        }
+    }
+
+    private static void requireNodeIndex(int index, int count, String role) {
+        if (index < 0 || index >= count) {
+            throw new IllegalArgumentException("GPU density graph has invalid " + role + " index " + index
+                    + " (node count " + count + ")");
+        }
+    }
+
+    /** Iterative DFS avoids JVM stack exhaustion on large graphs supplied by mods. */
+    private static int topologicalOrder(GpuDensityGraph graph, byte[] state, int[] order) {
+        List<GpuDensityGraph.Node> nodes = graph.nodes();
+        int[] nodeStack = new int[nodes.size()];
+        int[] childStack = new int[nodes.size()];
+        int count = 0;
+        for (int root : graph.routerRoots()) {
+            if (state[root] == 2) continue;
+            int depth = 0;
+            nodeStack[depth] = root;
+            childStack[depth] = 0;
+            state[root] = 1;
+            while (depth >= 0) {
+                int nodeIndex = nodeStack[depth];
+                int[] children = nodes.get(nodeIndex).children();
+                if (childStack[depth] < children.length) {
+                    int child = children[childStack[depth]++];
+                    if (state[child] == 1) {
+                        throw new IllegalArgumentException("GPU density graph contains a dependency cycle at node " + child);
+                    }
+                    if (state[child] == 0) {
+                        depth++;
+                        nodeStack[depth] = child;
+                        childStack[depth] = 0;
+                        state[child] = 1;
+                    }
+                } else {
+                    state[nodeIndex] = 2;
+                    order[count++] = nodeIndex;
+                    depth--;
+                }
+            }
+        }
+        return count;
     }
 }

@@ -65,8 +65,15 @@ final class VulkanSubmissionRing implements AutoCloseable {
     }
 
     CompletableFuture<float[]> submitGraphRootsGrid(ByteBuffer metadata, int chunkCount, int samplesPerChunk) {
+        return submitGraphRootsGrid(GpuTerrainRuntime.currentTerrainGraph(), metadata, chunkCount, samplesPerChunk);
+    }
+
+    CompletableFuture<float[]> submitGraphRootsGrid(GpuDensityGraph graph, ByteBuffer metadata,
+                                                      int chunkCount, int samplesPerChunk) {
+        if (graph == null) return CompletableFuture.failedFuture(
+                new IllegalStateException("GPU terrain graph is not installed"));
         CompletableFuture<float[]> future = new CompletableFuture<>();
-        pendingGraphGrids.add(new GraphRootsGridRequest(metadata, chunkCount, samplesPerChunk, future));
+        pendingGraphGrids.add(new GraphRootsGridRequest(graph, metadata, chunkCount, samplesPerChunk, future));
         drainGraphRoots();
         return future;
     }
@@ -80,7 +87,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 GraphRootsGridRequest grid = pendingGraphGrids.poll();
                 if (grid == null) return;
                 try {
-                    slot.submitGraphRootsGridAsync(grid.metadata, grid.chunkCount, grid.samplesPerChunk)
+                    slot.submitGraphRootsGridAsync(grid.graph, grid.metadata, grid.chunkCount, grid.samplesPerChunk)
                             .whenComplete((values, failure) -> {
                                 if (failure != null) grid.future.completeExceptionally(failure);
                                 else grid.future.complete(values);
@@ -170,6 +177,6 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     private record GraphRootsRequest(GpuDensityGraph graph, float[] x, float[] y, float[] z,
                                      int sampleCount, CompletableFuture<float[]> future) {}
-    private record GraphRootsGridRequest(ByteBuffer metadata, int chunkCount, int samplesPerChunk,
+    private record GraphRootsGridRequest(GpuDensityGraph graph, ByteBuffer metadata, int chunkCount, int samplesPerChunk,
                                          CompletableFuture<float[]> future) {}
 }
