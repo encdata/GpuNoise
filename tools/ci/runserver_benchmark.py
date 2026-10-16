@@ -36,7 +36,8 @@ MODS = {
     ),
 }
 RCON_PASSWORD = "gpunoise-ci-only"
-SERVER_START_TIMEOUT = 3600
+SERVER_START_TIMEOUT = 300
+CHUNKY_RUN_TIMEOUT = 3600
 SHUTDOWN_TIMEOUT = 90
 CHUNKY_RADIUS_BLOCKS = int(os.environ.get("GPUNOISE_CHUNKY_RADIUS_BLOCKS", "1600"))
 MIN_CHUNKY_RADIUS_BLOCKS = 100 * 16
@@ -214,9 +215,18 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
     completed: re.Match[str] | None = None
     gpu_counts: list[tuple[int, int, int, int]] = []
     try:
-        while time.monotonic() - started < SERVER_START_TIMEOUT:
+        while True:
+            now = time.monotonic()
+            if chunky_started is None:
+                if now - started >= SERVER_START_TIMEOUT:
+                    raise TimeoutError(f"{mode} server did not start Chunky within {SERVER_START_TIMEOUT}s")
+                remaining = SERVER_START_TIMEOUT - (now - started)
+            else:
+                if now - chunky_started >= CHUNKY_RUN_TIMEOUT:
+                    raise TimeoutError(f"{mode} Chunky pregen did not finish within {CHUNKY_RUN_TIMEOUT}s")
+                remaining = CHUNKY_RUN_TIMEOUT - (now - chunky_started)
             try:
-                event = lines.get(timeout=0.5)
+                event = lines.get(timeout=min(0.5, remaining))
             except queue.Empty:
                 event = ("", time.monotonic())
             if event is None:
@@ -251,7 +261,7 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
                     f"{mode} runServer exited with status {process.returncode} before Chunky completed:\n"
                     f"{crash_context(log_path)}"
                 )
-            raise TimeoutError(f"{mode} server did not complete Chunky within {SERVER_START_TIMEOUT}s")
+            raise TimeoutError(f"{mode} server stopped before Chunky completed")
 
         count = int(completed.group(1).replace(",", ""))
         percent = float(completed.group(2).rstrip("%"))
