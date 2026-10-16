@@ -188,7 +188,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
             int cellsZ = g.gridZ() - 1;
             outputMetadata.putInt(cornerOffset).putInt(blockOffset * outputRoots)
                     .putInt(cellsX).putInt(cellsY).putInt(cellsZ)
-                    .putInt(g.cellWidth()).putInt(0).putInt(0);
+                    .putInt(g.cellWidth()).putInt(g.cellHeight()).putInt(0);
             cornerOffset += g.sampleCount();
             blockOffset += blocksPerChunk;
         }

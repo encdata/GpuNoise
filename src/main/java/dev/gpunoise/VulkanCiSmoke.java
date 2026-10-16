@@ -58,16 +58,26 @@ public final class VulkanCiSmoke {
                 }
             }
             ByteBuffer interpolationMetadata = GpuInterpolationBatch.metadata(
-                    1, 1, 1, 1, 2, 8, 8);
+                    1, 1, 1, 1, 2, 2, 8, 8);
             System.out.println("Vulkan CI smoke: dispatching block interpolation shader");
             float[] blockResults = ring.submitInterpolation(corners, interpolationMetadata, 1, 8)
                     .get(60, TimeUnit.SECONDS);
             System.out.println("Vulkan CI smoke: block interpolation shader completed");
             assertInterpolatedResults(blockResults);
+
+            // Minecraft terrain cells use different vertical and horizontal
+            // sizes; verify four Y steps against the same two X/Z steps.
+            ByteBuffer anisotropicMetadata = GpuInterpolationBatch.metadata(
+                    1, 1, 1, 1, 2, 4, 8, 16);
+            System.out.println("Vulkan CI smoke: dispatching anisotropic terrain interpolation");
+            float[] anisotropicResults = ring.submitInterpolation(corners, anisotropicMetadata, 1, 16)
+                    .get(60, TimeUnit.SECONDS);
+            System.out.println("Vulkan CI smoke: anisotropic terrain interpolation completed");
+            assertAnisotropicInterpolationResults(anisotropicResults);
         }
 
         System.out.println("Vulkan CI smoke passed on " + device.name()
-                + ": coordinate and terrain grid shaders passed; block interpolation preserved the axis-coded test field.");
+                + ": coordinate and terrain grids passed; interpolation preserved axis-coded values for isotropic and anisotropic cells.");
     }
 
     private static void assertConstantResults(String label, float[] values, int expectedCount) {
@@ -95,6 +105,23 @@ public final class VulkanCiSmoke {
             float expected = x * 0.125f + y * 0.5f + z;
             if (Math.abs(values[index] - expected) > 1.0e-6f) {
                 throw new IllegalStateException("block interpolation axis mismatch at sample " + index
+                        + ": expected " + expected + ", got " + values[index]);
+            }
+        }
+    }
+
+    private static void assertAnisotropicInterpolationResults(float[] values) {
+        if (values.length != 16) {
+            throw new IllegalStateException("anisotropic interpolation shader returned " + values.length
+                    + " values; expected 16");
+        }
+        for (int index = 0; index < values.length; index++) {
+            int x = index & 1;
+            int z = (index >> 1) & 1;
+            int y = index >> 2;
+            float expected = x * 0.125f + y * 0.25f + z;
+            if (Math.abs(values[index] - expected) > 1.0e-6f) {
+                throw new IllegalStateException("anisotropic interpolation spacing mismatch at sample " + index
                         + ": expected " + expected + ", got " + values[index]);
             }
         }

@@ -6,7 +6,7 @@ layout(local_size_x = 64) in;
 layout(std430,set=0,binding=0) readonly buffer Corners { float corners[]; };
 layout(std430,set=0,binding=1) writeonly buffer Blocks { float blocks[]; };
 // Per chunk: corner offset, block offset, cellsX, cellsY, cellsZ,
-// blocksPerCell, reserved, reserved.
+// blocksPerCellX, blocksPerCellY, reserved. Horizontal X/Z spacing is shared.
 layout(std430,set=0,binding=2) readonly buffer Chunks { uint metadata[]; };
 layout(push_constant) uniform Parameters {
     uint chunkCount;
@@ -30,16 +30,18 @@ void main(){
     uint cornerOffset=metadata[base+0u];
     uint blockOffset=metadata[base+1u];
     uint cellsX=metadata[base+2u], cellsY=metadata[base+3u], cellsZ=metadata[base+4u];
-    uint blocksPerCell=metadata[base+5u];
-    uint blocksX=cellsX*blocksPerCell;
-    uint blocksZ=cellsZ*blocksPerCell;
+    uint blocksPerCellX=metadata[base+5u];
+    uint blocksPerCellY=metadata[base+6u];
+    uint blocksX=cellsX*blocksPerCellX;
+    uint blocksZ=cellsZ*blocksPerCellX;
     uint perLayer=blocksX*blocksZ;
     uint y=index/perLayer;
     uint rem=index%perLayer;
     uint z=rem/blocksX;
     uint x=rem%blocksX;
-    uint cellX=x/blocksPerCell, cellY=y/blocksPerCell, cellZ=z/blocksPerCell;
-    vec3 t=vec3(x%blocksPerCell,y%blocksPerCell,z%blocksPerCell)/float(blocksPerCell);
+    uint cellX=x/blocksPerCellX, cellY=y/blocksPerCellY, cellZ=z/blocksPerCellX;
+    vec3 t=vec3(x%blocksPerCellX,y%blocksPerCellY,z%blocksPerCellX)
+        /vec3(float(blocksPerCellX),float(blocksPerCellY),float(blocksPerCellX));
     uint cell=cornerOffset+((cellY*cellsZ+cellZ)*cellsX+cellX)*8u;
     for(uint root=0u;root<outputStride;root++) {
         float value=lerp3(corners[cell*rootStride+root],corners[(cell+1u)*rootStride+root],
