@@ -110,6 +110,8 @@ parity checks.
   table transfers.
   GPU min/max nodes follow Java NaN propagation and signed-zero ordering rather
   than GLSL's implementation-defined NaN selection behavior.
+  The bytecode frontend accepts Minecraft's float `Mth.min`/`Mth.max`
+  overloads and lowers them through those same Java-semantic GPU nodes.
   Java double division and double/float remainder are represented explicitly;
   integer division and remainder require a compile-time nonzero divisor. Java
   32-bit arithmetic, bitwise AND/OR/XOR, signed/unsigned shifts, and

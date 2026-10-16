@@ -100,6 +100,8 @@ public final class VulkanCiSmoke {
                     new float[]{0.0f, 1.0f, 0.0f, 1.0f, 2.0f, 3.0f});
             assertNumericFixture(ring, GpuDensityExpressionSmoke.floatMathFixture(),
                     "float Math and Mth.square", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.minecraftFloatMinMaxFixture(),
+                    "Mth float min/max overloads", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.dynamicClampFixture(),
                     "dynamic double/float Mth.clamp", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.transcendentalMathFixture(),

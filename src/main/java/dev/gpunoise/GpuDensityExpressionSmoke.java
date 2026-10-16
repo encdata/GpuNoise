@@ -55,6 +55,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new FloatMathDensity());
     }
 
+    static VulkanBranchFixture minecraftFloatMinMaxFixture() {
+        return graphFixture(new MinecraftFloatMinMaxDensity());
+    }
+
     static VulkanBranchFixture dynamicClampFixture() {
         return graphFixture(new DynamicClampDensity());
     }
@@ -455,6 +459,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new DoubleMinMaxDensity(), "double Math.min/max");
         verifyStandaloneMath(new MinMaxEdgeDensity(), "Math.min/max NaN and signed zero");
         verifyStandaloneMath(new FloatMathDensity(), "float Math overloads and Mth.square");
+        verifyStandaloneMath(new MinecraftFloatMinMaxDensity(), "Mth float min/max overloads");
         verifyStandaloneMath(new TranscendentalMathDensity(), "transcendental Math");
         verifyStandaloneMath(new PowerMathDensity(), "pow");
         verifyStandaloneMath(new Atan2MathDensity(), "atan2");
@@ -903,6 +908,15 @@ final class GpuDensityExpressionSmoke {
             return Math.min(x * 0.125F, Math.max(z * -0.25F, -2.5F)) * 0.1
                     + Math.abs(z * -0.03125F) * 0.05
                     + net.minecraft.util.Mth.square(x * 0.0078125F) * 0.125;
+        }
+    }
+
+    private static final class MinecraftFloatMinMaxDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            float x = context.blockX() * 0.125F;
+            float z = context.blockZ() * -0.25F;
+            return net.minecraft.util.Mth.min(x, z) * 0.1F
+                    + net.minecraft.util.Mth.max(x, z) * 0.05F;
         }
     }
 
