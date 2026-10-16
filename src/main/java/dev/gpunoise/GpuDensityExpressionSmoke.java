@@ -47,6 +47,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new DoubleMinMaxDensity());
     }
 
+    static VulkanBranchFixture minMaxEdgeFixture() {
+        return graphFixture(new MinMaxEdgeDensity());
+    }
+
     static VulkanBranchFixture floatMathFixture() {
         return graphFixture(new FloatMathDensity());
     }
@@ -449,6 +453,7 @@ final class GpuDensityExpressionSmoke {
         GpuDensityGraphBuffer.pack(scalarMathGraph);
 
         verifyStandaloneMath(new DoubleMinMaxDensity(), "double Math.min/max");
+        verifyStandaloneMath(new MinMaxEdgeDensity(), "Math.min/max NaN and signed zero");
         verifyStandaloneMath(new FloatMathDensity(), "float Math overloads and Mth.square");
         verifyStandaloneMath(new TranscendentalMathDensity(), "transcendental Math");
         verifyStandaloneMath(new PowerMathDensity(), "pow");
@@ -874,6 +879,21 @@ final class GpuDensityExpressionSmoke {
         @Override public double compute(FunctionContext context) {
             double x = context.blockX(), z = context.blockZ();
             return Math.min(x * 0.02, z * 0.01) + Math.max(x * -0.015, z * 0.025);
+        }
+    }
+
+    private static final class MinMaxEdgeDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            double xZero = context.blockX() * -0.0;
+            double yZero = context.blockY() * -0.0;
+            double nan = (double) context.blockX() / (double) context.blockY();
+            return switch (context.blockZ()) {
+                case 0 -> Math.min(xZero, yZero);
+                case 1 -> Math.max(xZero, yZero);
+                case 2 -> Math.min(nan, xZero);
+                case 3 -> Math.max(yZero, nan);
+                default -> Math.min(xZero, yZero);
+            };
         }
     }
 

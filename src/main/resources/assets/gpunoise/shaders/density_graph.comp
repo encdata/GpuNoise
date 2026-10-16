@@ -151,6 +151,18 @@ double javaNumericCast(uint operation,double value){
     return value;
 }
 bool negativeDouble(double value){return (unpackDouble2x32(value).y&0x80000000u)!=0u;}
+double javaMin(double x,double y){
+    if(isnan(x))return x;
+    if(isnan(y))return y;
+    if(x==0.0&&y==0.0)return negativeDouble(x)||negativeDouble(y)?-0.0:0.0;
+    return x<y?x:y;
+}
+double javaMax(double x,double y){
+    if(isnan(x))return x;
+    if(isnan(y))return y;
+    if(x==0.0&&y==0.0)return negativeDouble(x)&&negativeDouble(y)?-0.0:0.0;
+    return x>y?x:y;
+}
 double javaAtan2(double y,double x){
     const double pi=3.1415926535897932384626433832795;
     bool negativeY=negativeDouble(y),negativeX=negativeDouble(x);
@@ -342,7 +354,7 @@ void main(){
         else if(op==13u){v=blendedNoise64(p,uint(n.params.x));}
         else if(op==14u){double t=clamp((pExact.y-double(n.params.x))/(double(n.params.y)-double(n.params.x)),0.0,1.0);v=mix(double(n.params.z),double(n.params.w),t);}
         else if(op==20u){v=n.meta.x==0u?pExact.x:(n.meta.x==1u?pExact.y:pExact.z);}
-        else if(op==21u){double x=values[n.ids.y],y=values[n.ids.z];if(n.meta.x==1u)v=x+y;else if(n.meta.x==2u)v=x-y;else if(n.meta.x==3u)v=x*y;else if(n.meta.x==4u)v=x/y;else if(n.meta.x==5u)v=min(x,y);else if(n.meta.x==7u)v=javaRemainder(x,y);else if(n.meta.x==8u)v=javaAtan2(x,y);else if(n.meta.x==9u)v=javaPow(x,y);else v=max(x,y);}
+        else if(op==21u){double x=values[n.ids.y],y=values[n.ids.z];if(n.meta.x==1u)v=x+y;else if(n.meta.x==2u)v=x-y;else if(n.meta.x==3u)v=x*y;else if(n.meta.x==4u)v=x/y;else if(n.meta.x==5u)v=javaMin(x,y);else if(n.meta.x==7u)v=javaRemainder(x,y);else if(n.meta.x==8u)v=javaAtan2(x,y);else if(n.meta.x==9u)v=javaPow(x,y);else v=javaMax(x,y);}
         else if(op==22u)v=compareValues(values[n.ids.y],values[n.ids.z],n.meta.x)?1.0:0.0;
         else if(op==23u)v=values[n.ids.y]!=0.0?values[n.ids.z]:values[n.ids.w];
         else if(op==24u)v=javaIntOperation(n.meta.x,values[n.ids.y],n.meta.x==6u?0.0:values[n.ids.z]);

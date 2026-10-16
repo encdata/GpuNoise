@@ -93,6 +93,11 @@ public final class VulkanCiSmoke {
             float[] mathZ = {-5.0f, 1.0f, 0.0f, 31.0f, -64.0f};
             assertNumericFixture(ring, GpuDensityExpressionSmoke.doubleMinMaxFixture(),
                     "double Math.min/max", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.minMaxEdgeFixture(),
+                    "Math.min/max NaN and signed zero",
+                    new float[]{1.0f, 1.0f, 1.0f, -1.0f, 0.0f, 0.0f},
+                    new float[]{-1.0f, -1.0f, 1.0f, -1.0f, 0.0f, 0.0f},
+                    new float[]{0.0f, 1.0f, 0.0f, 1.0f, 2.0f, 3.0f});
             assertNumericFixture(ring, GpuDensityExpressionSmoke.floatMathFixture(),
                     "float Math and Mth.square", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.dynamicClampFixture(),
@@ -553,7 +558,13 @@ public final class VulkanCiSmoke {
             double expected = fixture.javaFunction().compute(
                     new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(
                             (int) x[sample], (int) y[sample], (int) z[sample]));
-            if (Math.abs(actual[sample] - expected) > 0.005) {
+            boolean mismatch = Double.isNaN(expected) ? !Float.isNaN(actual[sample])
+                    : Double.isInfinite(expected) ? actual[sample] != (float) expected
+                    : expected == 0.0 ? actual[sample] != 0.0f
+                            || (Double.doubleToRawLongBits(expected) < 0)
+                                    != (Float.floatToRawIntBits(actual[sample]) < 0)
+                    : Math.abs(actual[sample] - expected) > 0.005;
+            if (mismatch) {
                 throw new IllegalStateException(label + " Vulkan mismatch at sample " + sample
                         + ": expected " + expected + ", got " + actual[sample]);
             }
