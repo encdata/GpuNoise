@@ -5,6 +5,7 @@ import java.nio.ByteOrder;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import net.minecraft.server.Bootstrap;
 import net.minecraft.world.level.levelgen.DensityFunctions;
 
 /** Headless Vulkan smoke test for CI's Mesa Lavapipe device. */
@@ -14,6 +15,9 @@ public final class VulkanCiSmoke {
     private VulkanCiSmoke() {}
 
     public static void main(String[] args) throws Exception {
+        // DensityFunctions references built-in registries during class
+        // initialization, so initialize Minecraft before constructing a graph.
+        Bootstrap.bootStrap();
         GpuDevice device = GpuProbe.findPreferredDevice(GpuNoiseConfig.GpuVendorPreference.AUTO);
         if (device == null) throw new IllegalStateException("No Vulkan compute device found");
         if (!VulkanComputeProbe.verify(device)) {
