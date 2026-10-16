@@ -142,7 +142,9 @@ The corrected shader passed the multi-cell Vulkan smoke and two precise paired
 289-chunk runs. The latest measured 49.829 CPU CPS and 39.603 Lavapipe CPS
 (0.795x CPU), with 318 GPU caches consumed and no fallbacks. The prior run
 measured 32.468 CPU CPS and 20.943 Lavapipe CPS (0.645x CPU). This spread shows
-the small area is too noisy for tuning, so the CI benchmark is increasing to
-1,089 chunks. Lavapipe validates Vulkan behavior and overhead; physical-GPU
-performance still needs separate measurements. CI now measures Chunky's
-streamed task start and finish at sub-second precision.
+the small area is too noisy for tuning. CI has now completed a 1,089-chunk
+paired run: CPU 34.903 CPS, Lavapipe 22.927 CPS (0.657x CPU), 1,214 caches
+consumed, and no fallbacks. The multi-cell shader smoke passed on the same
+commit. Lavapipe validates Vulkan behavior and overhead; physical-GPU
+performance still needs separate measurements. CI times Chunky's streamed
+task start and finish at sub-second precision.
