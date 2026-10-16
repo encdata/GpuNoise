@@ -51,6 +51,9 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   Each report includes call totals and average nanoseconds, alongside whole
   fill latency percentiles, to show whether hot-path lookup and write overhead
   offsets the GPU's grid-evaluation work.
+- Hot-path nanosecond timing is sampled once per 64 lookups per worker thread;
+  successful operations are still counted on every call. Sampling prevents
+  diagnostic timing overhead from being added to every density evaluation.
 - Each chunk cache snapshots the installed graph's immutable root-support mask
   once at construction. Per-block and per-aquifer lookups then test a local
   integer bit instead of repeatedly loading the global volatile graph reference

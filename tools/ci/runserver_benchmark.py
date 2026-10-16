@@ -94,9 +94,11 @@ GPU_CHUNK_LATENCY = re.compile(
 GPU_HOT_PATH_PROFILE = re.compile(
     r"GPU terrain profile: fills=(\d+), observedCps=([\d.]+), avgFillMs=([\d.]+), "
     r"p50FillMs=([\d.]+), p95FillMs=([\d.]+), p99FillMs=([\d.]+), "
-    r"finalDensityCalls=(\d+) avgNs=([\d.]+), initialDensityCalls=(\d+) avgNs=([\d.]+), "
-    r"climateCalls=(\d+) avgNs=([\d.]+), aquiferCalls=(\d+) avgNs=([\d.]+), "
-    r"blockWrites=(\d+) avgNs=([\d.]+)"
+    r"finalDensityCalls=(\d+) sampled=(\d+) avgNs=([\d.]+), "
+    r"initialDensityCalls=(\d+) sampled=(\d+) avgNs=([\d.]+), "
+    r"climateCalls=(\d+) sampled=(\d+) avgNs=([\d.]+), "
+    r"aquiferCalls=(\d+) sampled=(\d+) avgNs=([\d.]+), "
+    r"blockWrites=(\d+) sampled=(\d+) avgNs=([\d.]+)"
 )
 
 
@@ -344,11 +346,11 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
             print(
                 f"CI_GPU_HOT_PATH_PROFILE mode={mode} fills={latest_hot_path[0]} "
                 f"observed_cps={latest_hot_path[1]} avg_fill_ms={latest_hot_path[2]} "
-                f"final_density_calls={latest_hot_path[6]} final_density_avg_ns={latest_hot_path[7]} "
-                f"initial_density_calls={latest_hot_path[8]} initial_density_avg_ns={latest_hot_path[9]} "
-                f"climate_calls={latest_hot_path[10]} climate_avg_ns={latest_hot_path[11]} "
-                f"aquifer_calls={latest_hot_path[12]} aquifer_avg_ns={latest_hot_path[13]} "
-                f"block_writes={latest_hot_path[14]} block_write_avg_ns={latest_hot_path[15]}",
+                f"final_density_calls={latest_hot_path[6]} sampled={latest_hot_path[7]} avg_ns={latest_hot_path[8]} "
+                f"initial_density_calls={latest_hot_path[9]} sampled={latest_hot_path[10]} avg_ns={latest_hot_path[11]} "
+                f"climate_calls={latest_hot_path[12]} sampled={latest_hot_path[13]} avg_ns={latest_hot_path[14]} "
+                f"aquifer_calls={latest_hot_path[15]} sampled={latest_hot_path[16]} avg_ns={latest_hot_path[17]} "
+                f"block_writes={latest_hot_path[18]} sampled={latest_hot_path[19]} avg_ns={latest_hot_path[20]}",
                 flush=True,
             )
             batch_window = GPU_BATCH_WINDOW.search(run_log)
