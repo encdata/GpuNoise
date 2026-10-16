@@ -56,4 +56,5 @@ jobs:
           path: |
             build/libs/*.jar
             build/reports/ci/*.log
-          if-no-files-found: error
+            hs_err_pid*.log
+          if-no-files-found: warn
