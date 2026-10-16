@@ -197,10 +197,26 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
 
     private int largestNearbyCount() {
         long center = largestRegion();
+        ArrayDeque<Pending> seedRegion = pendingByRegion.get(center);
+        Pending seed = seedRegion == null ? null : seedRegion.peekFirst();
+        return seed == null ? 0 : nearbyCompatibleCount(center, seed.grid,
+                maxChunksPerDispatch(seed.grid));
+    }
+
+    private int nearbyCompatibleCount(long center, GpuTerrainGrid layout, int capacity) {
         int count = 0;
-        for (long region : nearbyRegions(center)) {
-            ArrayDeque<Pending> pending = pendingByRegion.get(region);
-            if (pending != null) count += pending.size();
+        int centerX = (int) (center >> 32);
+        int centerZ = (int) center;
+        for (Map.Entry<Long, ArrayDeque<Pending>> entry : pendingByRegion.entrySet()) {
+            int regionX = (int) (entry.getKey() >> 32);
+            int regionZ = (int) entry.getKey().longValue();
+            if (Math.abs(regionX - centerX) > 1 || Math.abs(regionZ - centerZ) > 1) continue;
+            ArrayDeque<Pending> candidates = entry.getValue();
+            for (Pending candidate : candidates) {
+                if (!sameLayout(layout, candidate.grid) || count == capacity) break;
+                count++;
+            }
+            if (count == capacity) break;
         }
         return count;
     }
