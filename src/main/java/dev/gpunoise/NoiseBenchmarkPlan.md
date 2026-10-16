@@ -33,6 +33,11 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   objects, arithmetic, comparisons, and branch selection. Helper bytecode is
   still inlined and each field load must be final. Unsupported behavior must
   remain on the Java path with a recorded reason; never approximate silently.
+- Terrain roots now compile transactionally as independent outputs. A custom
+  function that cannot be translated marks only the roots that depend on it
+  for vanilla fallback; supported sibling roots retain their GPU graph and
+  parity checks. This preserves correct Java behavior while expanding useful
+  GPU coverage in mixed terrain modpacks.
 - The graph lowerer removes unreachable nodes, orders dependencies, and reuses
   registers. Vulkan evaluates the terrain router roots on the cell lattice.
   Java still owns interpolation, aquifer orchestration, biome selection, and

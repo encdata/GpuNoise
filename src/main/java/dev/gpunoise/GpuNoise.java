@@ -167,6 +167,16 @@ public final class GpuNoise {
 
             try {
                 GpuDensityGraph terrainGraph = GpuDensityGraphLowerer.lower(GpuDensityGraphCompiler.compileTerrain(router));
+                String[] terrainRootNames = {"finalDensity", "initialDensity", "barrier", "floodedness",
+                        "spread", "lava", "erosion", "depth", "temperature", "vegetation",
+                        "continents", "ridges"};
+                String[] rootRejections = terrainGraph.unsupportedRouterRootReasons();
+                for (int root = 0; root < rootRejections.length; root++) {
+                    if (rootRejections[root] != null) {
+                        LOGGER.warn("GPU terrain root '{}' remains on vanilla Java: {}",
+                                terrainRootNames[root], rootRejections[root]);
+                    }
+                }
                 LOGGER.info("GPU terrain runtime graph: {} nodes, {} required terrain/aquifer roots.",
                         terrainGraph.nodes().size(), terrainGraph.routerRoots().length);
                 VulkanBootstrapThread.callUnchecked(() -> {

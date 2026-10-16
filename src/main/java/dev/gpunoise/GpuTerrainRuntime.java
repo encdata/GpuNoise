@@ -98,7 +98,14 @@ public final class GpuTerrainRuntime {
     /** Enables cell-grid input substitution only after graph parity passes. */
     public static boolean terrainInputsAvailable() {
         return !Boolean.getBoolean("gpunoise.forceCpuTerrain")
-                && device != null && terrainGraph != null && graphParity;
+                && device != null && terrainGraph != null && graphParity
+                && terrainGraph.supportedRouterRootMask() != 0;
+    }
+
+    /** Whether the installed terrain graph can supply this router root on the GPU. */
+    public static boolean supportsTerrainRoot(int root) {
+        GpuDensityGraph graph = terrainGraph;
+        return graph != null && graph.supportsRouterRoot(root);
     }
 
     /**
@@ -341,7 +348,7 @@ public final class GpuTerrainRuntime {
         VulkanSubmissionRing ring = terrainRing;
         if (ring == null || terrainGraph == null) return java.util.concurrent.CompletableFuture.failedStage(
                 new IllegalStateException("GPU terrain graph provider is not installed"));
-        if (!FULL_BLOCK_OUTPUT) {
+        if (!terrainBlockOutputEnabled()) {
             return ring.submitGraphRootsGrid(gridMetadata, chunkCount, samplesPerChunk)
                     .thenApply(values -> new GpuTerrainBatchResult(
                             new GpuTerrainRootsResult(values, 0, values.length,
@@ -353,7 +360,7 @@ public final class GpuTerrainRuntime {
     }
 
     static boolean terrainBlockOutputEnabled() {
-        return FULL_BLOCK_OUTPUT;
+        return FULL_BLOCK_OUTPUT && supportsTerrainRoot(GpuTerrainRoots.FINAL_DENSITY);
     }
 
     static GpuDensityGraph currentTerrainGraph() {
@@ -533,10 +540,13 @@ public final class GpuTerrainRuntime {
             y[i] = -64.0f + (i / 32 % 16) * 24.0f;
             z[i] = (i / 512) * 8.0f;
         }
+        int supportedRoots = 0;
         try {
             float[] gpu = current.submitGraphRoots(graph, x, y, z);
             float worst = 0.0f;
             for (int root = 0; root < cpu.length; root++) {
+                if (!graph.supportsRouterRoot(root)) continue;
+                supportedRoots++;
                 float rootWorst = 0.0f;
                 for (int i = 0; i < count; i++) {
                     double expected = cpu[root].compute(new DensityFunction.SinglePointContext((int) x[i], (int) y[i], (int) z[i]));
@@ -545,9 +555,10 @@ public final class GpuTerrainRuntime {
                 worst = Math.max(worst, rootWorst);
                 GpuNoise.LOGGER.info("GPU compact terrain root {} parity: maxError={}", root, rootWorst);
             }
-            graphParity = worst < GRAPH_PARITY_EPSILON;
-            GpuNoise.LOGGER.info("GPU compact terrain graph parity: {} samples, worstMaxError={}, parity={}",
-                    count, worst, graphParity);
+            graphParity = supportedRoots > 0 && worst < GRAPH_PARITY_EPSILON;
+            GpuNoise.LOGGER.info("GPU compact terrain graph parity: {} samples, {}/{} roots verified, "
+                            + "worstMaxError={}, parity={}",
+                    count, supportedRoots, cpu.length, worst, graphParity);
         } catch (Throwable failure) {
             graphParity = false;
             GpuNoise.LOGGER.warn("GPU compact terrain graph parity dispatch failed", failure);
@@ -578,6 +589,7 @@ public final class GpuTerrainRuntime {
             };
             float worst = 0.0f;
             int worstRoot = -1, worstX = 0, worstY = 0, worstZ = 0;
+            int supportedRoots = Integer.bitCount(graph.supportedRouterRootMask());
             for (int gy = 0; gy < grid.gridY(); gy++) {
                 for (int gx = 0; gx < grid.gridX(); gx++) {
                     for (int gz = 0; gz < grid.gridZ(); gz++) {
@@ -586,6 +598,7 @@ public final class GpuTerrainRuntime {
                         int y = grid.minY() + gy * cellHeight;
                         int z = grid.minZ() + gz * cellWidth;
                         for (int root = 0; root < cpu.length; root++) {
+                            if (!graph.supportsRouterRoot(root)) continue;
                             float error = Math.abs(values.valueAt(sample, root)
                                     - (float) cpu[root].compute(new DensityFunction.SinglePointContext(x, y, z)));
                             if (error > worst) {
@@ -599,9 +612,11 @@ public final class GpuTerrainRuntime {
                     }
                 }
             }
-            graphParity = graphParity && worst < GRAPH_PARITY_EPSILON;
-            GpuNoise.LOGGER.info("GPU terrain grid parity: {} samples, worstMaxError={}, root={}, at ({},{},{}), parity={}",
-                    grid.sampleCount(), worst, worstRoot, worstX, worstY, worstZ, graphParity);
+            graphParity = graphParity && supportedRoots > 0 && worst < GRAPH_PARITY_EPSILON;
+            GpuNoise.LOGGER.info("GPU terrain grid parity: {} samples, {}/{} roots verified, "
+                            + "worstMaxError={}, root={}, at ({},{},{}), parity={}",
+                    grid.sampleCount(), supportedRoots, cpu.length, worst, worstRoot,
+                    worstX, worstY, worstZ, graphParity);
         } catch (Throwable failure) {
             graphParity = false;
             GpuNoise.LOGGER.warn("GPU terrain grid parity dispatch failed; terrain remains CPU-owned.", failure);

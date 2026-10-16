@@ -162,7 +162,8 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
                 gpunoise$markGpuUse(cache);
                 return gpunoise$zeroBeardifier ? gpu : gpu + beardifier.compute(context);
             }
-            if (cache.contains(context.blockX(), context.blockY(), context.blockZ())) {
+            if (cache.supportsRoot(GpuTerrainRoots.FINAL_DENSITY)
+                    && cache.contains(context.blockX(), context.blockY(), context.blockZ())) {
                 throw new IllegalStateException("Authoritative GPU density cache returned NaN at "
                         + context.blockX() + "," + context.blockY() + "," + context.blockZ());
             }

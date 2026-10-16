@@ -79,7 +79,9 @@ final class GpuDensityGraphLowerer {
             for (int value = 0; value < values.length; value++) values[value] = slots[values[value]];
             registerSplines.add(new GpuDensityGraph.Spline(slots[spline.coordinateNode()], spline.locations(), spline.derivatives(), values));
         }
-        return new GpuDensityGraph(registerNodes, roots, graph.noises(), registerSplines, graph.blended(), sourceFunctions, registerCount);
+        return new GpuDensityGraph(registerNodes, roots, graph.noises(), registerSplines, graph.blended(),
+                sourceFunctions, registerCount, graph.supportedRouterRootMask(),
+                graph.unsupportedRouterRootReasons());
     }
 
     private static int[] allocateRegisters(List<GpuDensityGraph.Node> nodes, int[] roots) {

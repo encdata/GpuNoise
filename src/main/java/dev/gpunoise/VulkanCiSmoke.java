@@ -154,6 +154,8 @@ public final class VulkanCiSmoke {
                     "immutable terrain record configuration", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.finalFieldConfigurationFixture(),
                     "final-field terrain helper object", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.mixedTerrainRootFixture(),
+                    "supported terrain root beside CPU fallback root", mathX, mathY, mathZ);
             GpuDensityExpressionSmoke.VulkanBranchFixture minecraftMathFixture =
                     GpuDensityExpressionSmoke.minecraftMathOverloadsFixture();
             float[] overloadX = {-2_147_483_648.0f, -46_341.0f, 0.0f, 46_341.0f, 2_147_483_520.0f};
@@ -590,21 +592,30 @@ public final class VulkanCiSmoke {
             GpuDensityExpressionSmoke.VulkanBranchFixture fixture, String label,
             float[] x, float[] y, float[] z) throws Exception {
         float[] actual = ring.submitGraphRoots(fixture.graph(), x, y, z).get(60, TimeUnit.SECONDS);
-        for (int sample = 0; sample < actual.length; sample++) {
+        int rootCount = fixture.graph().routerRoots().length;
+        if (rootCount == 0 || !fixture.graph().supportsRouterRoot(0)) {
+            throw new IllegalStateException(label + " has no supported GPU root at output zero");
+        }
+        if (actual.length != x.length * rootCount) {
+            throw new IllegalStateException(label + " returned " + actual.length
+                    + " values for " + x.length + " samples and " + rootCount + " roots");
+        }
+        for (int sample = 0; sample < x.length; sample++) {
             double expected = fixture.javaFunction().compute(
                     new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(
                             (int) x[sample], (int) y[sample], (int) z[sample]));
             float expectedGpuValue = (float) expected;
-            boolean mismatch = Double.isNaN(expected) ? !Float.isNaN(actual[sample])
-                    : Double.isInfinite(expected) ? actual[sample] != expectedGpuValue
-                    : expectedGpuValue == 0.0f ? actual[sample] != 0.0f
+            float actualValue = actual[sample * rootCount];
+            boolean mismatch = Double.isNaN(expected) ? !Float.isNaN(actualValue)
+                    : Double.isInfinite(expected) ? actualValue != expectedGpuValue
+                    : expectedGpuValue == 0.0f ? actualValue != 0.0f
                             || (Double.doubleToRawLongBits(expected) < 0)
-                                    != (Float.floatToRawIntBits(actual[sample]) < 0)
-                    : Math.abs(actual[sample] - expectedGpuValue)
+                                    != (Float.floatToRawIntBits(actualValue) < 0)
+                    : Math.abs(actualValue - expectedGpuValue)
                             > Math.max(0.005f, Math.ulp(expectedGpuValue) * 1.01f);
             if (mismatch) {
                 throw new IllegalStateException(label + " Vulkan mismatch at sample " + sample
-                        + ": expected " + expected + ", got " + actual[sample]);
+                        + ": expected " + expected + ", got " + actualValue);
             }
         }
     }

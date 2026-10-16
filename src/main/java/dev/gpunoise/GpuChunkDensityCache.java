@@ -170,6 +170,7 @@ public final class GpuChunkDensityCache {
 
     /** CPU trilinear interpolation over the same cell grid used by NoiseChunk. */
     public double density(DensityFunction.FunctionContext context) {
+        if (!GpuTerrainRuntime.supportsTerrainRoot(GpuTerrainRoots.FINAL_DENSITY)) return Double.NaN;
         int rx = context.blockX() - minX;
         int ry = context.blockY() - minY;
         int rz = context.blockZ() - minZ;
@@ -212,6 +213,7 @@ public final class GpuChunkDensityCache {
 
     /** Hot path used by NoiseChunk's final-density graph redirect. */
     public double finalDensity(int x, int y, int z) {
+        if (!GpuTerrainRuntime.supportsTerrainRoot(GpuTerrainRoots.FINAL_DENSITY)) return Double.NaN;
         int rx = x - minX;
         int ry = y - minY;
         int rz = z - minZ;
@@ -258,6 +260,7 @@ public final class GpuChunkDensityCache {
     }
 
     public double initialDensity(int x, int y, int z) {
+        if (!GpuTerrainRuntime.supportsTerrainRoot(GpuTerrainRoots.INITIAL_DENSITY)) return Double.NaN;
         if (exact != null) return exact.valueAt(GpuTerrainRoots.INITIAL_DENSITY, x, y, z);
         double block = sampleBlockRoot(x - minX, y - minY, z - minZ, GpuTerrainRoots.INITIAL_DENSITY);
         return Double.isNaN(block) ? sampleRoot(x - minX, y - minY, z - minZ, GpuTerrainRoots.INITIAL_DENSITY) : block;
@@ -268,6 +271,9 @@ public final class GpuChunkDensityCache {
         if (exact != null) return exact.contains(x, y, z);
         return rx >= 0 && rz >= 0 && ry >= 0 && rx <= 16 && rz <= 16
                 && ry <= maxRelativeY;
+    }
+    public boolean supportsRoot(int root) {
+        return GpuTerrainRuntime.supportsTerrainRoot(root);
     }
     public double aquiferFloodedness(int x, int y, int z) {
         return rootDensity(x, y, z, GpuTerrainRoots.FLOODEDNESS);
@@ -290,6 +296,7 @@ public final class GpuChunkDensityCache {
 
     /** Exact graph-root value at a NoiseChunk cell corner. */
     public double cornerDensity(int x, int y, int z) {
+        if (!GpuTerrainRuntime.supportsTerrainRoot(GpuTerrainRoots.FINAL_DENSITY)) return Double.NaN;
         int rx = x - minX, ry = y - minY, rz = z - minZ;
         if (exact != null) return exact.valueAt(GpuTerrainRoots.FINAL_DENSITY, x, y, z);
         GpuTerrainRootsResult corners = readyRoots;
@@ -301,6 +308,7 @@ public final class GpuChunkDensityCache {
     }
 
     private double rootDensity(int x, int y, int z, int root) {
+        if (!GpuTerrainRuntime.supportsTerrainRoot(root)) return Double.NaN;
         if (exact != null) return exact.valueAt(root, x, y, z);
         double block = sampleBlockRoot(x - minX, y - minY, z - minZ, root);
         return Double.isNaN(block) ? sampleRoot(x - minX, y - minY, z - minZ, root) : block;
@@ -316,6 +324,7 @@ public final class GpuChunkDensityCache {
     }
 
     private double sampleRoot(int rx, int ry, int rz, int root) {
+        if (!GpuTerrainRuntime.supportsTerrainRoot(root)) return Double.NaN;
         GpuTerrainRootsResult values = readyRoots;
         // The upper and east/south boundaries are real NoiseChunk samples:
         // preliminary surface lookup evaluates at minY + height, and the

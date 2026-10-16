@@ -2,6 +2,7 @@ package dev.gpunoise;
 
 import java.lang.reflect.RecordComponent;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -34,6 +35,32 @@ final class GpuDensityGraphCompiler {
 
     private GpuDensityGraphCompiler() {}
 
+    private record Checkpoint(int nodeCount, int noiseCount, int splineCount, int blendedCount,
+                              int sourceCount, Map<DensityFunction, Integer> indices,
+                              Map<NormalNoise, Integer> noiseIndices) {}
+
+    private Checkpoint checkpoint() {
+        return new Checkpoint(nodes.size(), noises.size(), splines.size(), blended.size(),
+                sourceFunctions.size(), new IdentityHashMap<>(indices), new IdentityHashMap<>(noiseIndices));
+    }
+
+    private void rollback(Checkpoint checkpoint) {
+        truncate(nodes, checkpoint.nodeCount());
+        truncate(noises, checkpoint.noiseCount());
+        truncate(splines, checkpoint.splineCount());
+        truncate(blended, checkpoint.blendedCount());
+        truncate(sourceFunctions, checkpoint.sourceCount());
+        indices.clear();
+        indices.putAll(checkpoint.indices());
+        noiseIndices.clear();
+        noiseIndices.putAll(checkpoint.noiseIndices());
+        compilationDepth = 0;
+    }
+
+    private static void truncate(List<?> values, int size) {
+        values.subList(size, values.size()).clear();
+    }
+
     static GpuDensityGraph compile(NoiseRouter router) {
         GpuDensityFunctionTranslators.freezeRegistrations();
         GpuDensityGraphCompiler compiler = new GpuDensityGraphCompiler();
@@ -50,25 +77,53 @@ final class GpuDensityGraphCompiler {
     }
 
     static GpuDensityGraph compileTerrain(NoiseRouter router) {
+        // Keep every density input used by NoiseChunk and NoiseBasedAquifer
+        // in the same GPU dispatch. The order is part of GpuChunkDensityCache.
+        return compileTerrainRoots(new DensityFunction[]{router.finalDensity(),
+                router.initialDensityWithoutJaggedness(), router.barrierNoise(),
+                router.fluidLevelFloodednessNoise(), router.fluidLevelSpreadNoise(), router.lavaNoise(),
+                router.erosion(), router.depth(), router.temperature(), router.vegetation(),
+                router.continents(), router.ridges()});
+    }
+
+    /** Compiles terrain roots transactionally so one modded root cannot poison its siblings. */
+    static GpuDensityGraph compileTerrainRoots(DensityFunction[] terrainRoots) {
+        if (terrainRoots == null || terrainRoots.length == 0 || terrainRoots.length > Integer.SIZE - 1) {
+            throw new IllegalArgumentException("terrain root list must contain between 1 and 31 functions");
+        }
+        for (int root = 0; root < terrainRoots.length; root++) {
+            if (terrainRoots[root] == null) {
+                throw new IllegalArgumentException("terrain root " + root + " is null");
+            }
+        }
         GpuDensityFunctionTranslators.freezeRegistrations();
         GpuDensityGraphCompiler compiler = new GpuDensityGraphCompiler();
         compiler.terrainGridMode = true;
-        // Keep every density input used by NoiseChunk and NoiseBasedAquifer
-        // in the same GPU dispatch. The order is part of GpuChunkDensityCache.
-        int[] roots = {compiler.node(router.finalDensity()),
-                compiler.node(router.initialDensityWithoutJaggedness()),
-                compiler.node(router.barrierNoise()),
-                compiler.node(router.fluidLevelFloodednessNoise()),
-                compiler.node(router.fluidLevelSpreadNoise()),
-                compiler.node(router.lavaNoise()),
-                compiler.node(router.erosion()),
-                compiler.node(router.depth()),
-                compiler.node(router.temperature()),
-                compiler.node(router.vegetation()),
-                compiler.node(router.continents()),
-                compiler.node(router.ridges())};
+        int[] roots = new int[terrainRoots.length];
+        String[] rejections = new String[terrainRoots.length];
+        int supportedMask = 0;
+        for (int root = 0; root < terrainRoots.length; root++) {
+            DensityFunction function = terrainRoots[root];
+            Checkpoint checkpoint = compiler.checkpoint();
+            try {
+                roots[root] = compiler.node(function);
+                supportedMask |= 1 << root;
+            } catch (RuntimeException unsupported) {
+                compiler.rollback(checkpoint);
+                rejections[root] = unsupported.getMessage() == null
+                        ? unsupported.getClass().getSimpleName() : unsupported.getMessage();
+                roots[root] = compiler.nodes.size();
+                compiler.nodes.add(new GpuDensityGraph.Node("Constant", new int[0], new double[]{0.0},
+                        "UnsupportedTerrainRoot"));
+                compiler.sourceFunctions.add(function);
+            }
+        }
+        if (supportedMask == 0) {
+            throw new IllegalStateException("GPU terrain compiler could not translate any terrain roots: "
+                    + Arrays.toString(rejections));
+        }
         return new GpuDensityGraph(compiler.nodes, roots, compiler.noises, compiler.splines,
-                compiler.blended, compiler.sourceFunctions);
+                compiler.blended, compiler.sourceFunctions, supportedMask, rejections);
     }
 
     /**

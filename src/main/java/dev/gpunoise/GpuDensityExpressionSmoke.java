@@ -135,6 +135,18 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new FinalFieldConfigurationDensity());
     }
 
+    static VulkanBranchFixture mixedTerrainRootFixture() {
+        DensityFunction supported = new FinalFieldConfigurationDensity();
+        DensityFunction fallback = new UnsupportedTerrainDensity();
+        GpuDensityGraph graph = GpuDensityGraphLowerer.lower(GpuDensityGraphCompiler.compileTerrainRoots(
+                new DensityFunction[]{supported, fallback}));
+        if (!graph.supportsRouterRoot(0) || graph.supportsRouterRoot(1)
+                || graph.unsupportedRouterRootReasons()[1] == null) {
+            throw new AssertionError("unsupported custom terrain root should be isolated from its GPU sibling");
+        }
+        return new VulkanBranchFixture(graph, supported);
+    }
+
     static VulkanBranchFixture minecraftMathOverloadsFixture() {
         return graphFixture(new MinecraftMathOverloadsDensity());
     }
@@ -421,10 +433,12 @@ final class GpuDensityExpressionSmoke {
             DensityFunction.SinglePointContext context = new DensityFunction.SinglePointContext(
                     point[0], point[1], point[2]);
             requireClose(objectConfigured.expression().evaluate(point[0], point[1], point[2]),
-                    objectConfiguration.compute(context), "final-field helper object at x=" + point[0]);
+                    objectConfiguration.compute(context), 1.0e-7,
+                    "final-field helper object at x=" + point[0]);
         }
         GpuDensityGraphBuffer.pack(GpuDensityGraphLowerer.lower(
                 GpuDensityGraphCompiler.compileDensityFunction(objectConfiguration, true)));
+        mixedTerrainRootFixture();
 
         BranchedDensity branchedDensity = new BranchedDensity();
         GpuDensityBytecodeCompiler.Result branched = GpuDensityBytecodeCompiler.compile(branchedDensity);
@@ -1222,6 +1236,12 @@ final class GpuDensityExpressionSmoke {
 
         @Override public double compute(FunctionContext context) {
             return parameters.terrainContribution(context.blockX(), context.blockY());
+        }
+    }
+
+    private static final class UnsupportedTerrainDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            return Math.random() + context.blockY();
         }
     }
 
