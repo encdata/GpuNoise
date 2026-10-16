@@ -23,7 +23,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     // Give C2ME enough time to enqueue the rest of the local 10x10 area. The
     // deadline is still bounded, so an isolated request is dispatched
     // promptly instead of waiting for neighbors that may never arrive.
-    private static final long BATCH_WINDOW_NANOS = 20_000_000L;
+    private static final long BATCH_WINDOW_NANOS = 60_000_000L;
     private final BlockingQueue<Pending> queue = new ArrayBlockingQueue<>(256);
     private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "GPU terrain roots batcher");
@@ -112,7 +112,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 dispatchCount.incrementAndGet();
                 totalChunksDispatched.addAndGet(batch.size());
                 totalSamplesDispatched.addAndGet(input);
-                if ((dispatchCount.get() & 7L) == 0L) {
+                if ((dispatchCount.get() & 63L) == 0L) {
                     GpuNoise.LOGGER.info("GPU terrain roots batching: avgChunksPerDispatch={}, avgSamplesPerDispatch={}",
                             (double) totalChunksDispatched.get() / dispatchCount.get(),
                             (double) totalSamplesDispatched.get() / dispatchCount.get());

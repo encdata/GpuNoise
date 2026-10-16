@@ -148,3 +148,10 @@ consumed, and no fallbacks. The multi-cell shader smoke passed on the same
 commit. Lavapipe validates Vulkan behavior and overhead; physical-GPU
 performance still needs separate measurements. CI times Chunky's streamed
 task start and finish at sub-second precision.
+
+The first adaptive-capacity run completed 1,089 chunks at 42.533 CPU CPS and
+32.510 Lavapipe CPS (0.764x CPU), with zero fallbacks. Despite raising the
+dispatch ceiling to 100 chunks and bounding it by output-buffer capacity, the
+scheduler averaged only 1.82 chunks per dispatch. Queue arrival timing, rather
+than Vulkan buffer capacity, is currently preventing large batches; the
+coalescing window is being increased from 20 ms to 60 ms for the next CI run.
