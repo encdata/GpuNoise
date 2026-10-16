@@ -1,10 +1,16 @@
 name: Build
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -21,5 +27,26 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Install GLSL compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes glslc mesa-vulkan-drivers vulkan-tools
+
+      - name: Verify Mesa Lavapipe is available
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        run: |
+          vulkaninfo --summary | tee /tmp/vulkan-summary.txt
+          grep -Eqi 'llvmpipe|lavapipe' /tmp/vulkan-summary.txt
+
       - name: Build with Gradle
-        run: ./gradlew build
+        run: ./gradlew --no-daemon build vulkanSmoke
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+
+      - name: Upload mod artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpunoise-${{ github.sha }}
+          path: build/libs/*.jar
+          if-no-files-found: error

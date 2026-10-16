@@ -245,7 +245,12 @@ tasks.withType(ProcessResources).configureEach {
 tasks.register('compileGpuShaders') {
     notCompatibleWithConfigurationCache('Invokes the external Vulkan shader compiler.')
     def shaderDir = file('src/main/resources/assets/gpunoise/shaders')
-    def compiler = file('C:/VulkanSDK/1.4.350.0/Bin/glslc.exe')
+    // Prefer an explicit Gradle property, then GLSLC, then glslc from PATH.
+    // This keeps shader compilation portable across developer machines and CI.
+    def compiler = providers.gradleProperty('gpunoise.glslc')
+            .orElse(providers.environmentVariable('GLSLC'))
+            .orElse('glslc')
+            .get()
     def shaderSources = fileTree(shaderDir).matching { include '**/*.comp'; exclude 'density_graph_grid.comp' }.files
     def shaderOutputs = shaderSources.collect { file(it.path + '.spv') } + file(shaderDir.path + '/density_graph_grid.comp.spv')
     inputs.files(shaderSources)
@@ -253,7 +258,7 @@ tasks.register('compileGpuShaders') {
     doLast {
         shaderSources.eachWithIndex { source, index ->
             def output = shaderOutputs[index]
-            ant.exec(executable: compiler.absolutePath, failonerror: true) {
+            ant.exec(executable: compiler, failonerror: true) {
                 arg(value: '-O')
                 arg(value: '-I')
                 arg(value: shaderDir.absolutePath)
@@ -262,7 +267,7 @@ tasks.register('compileGpuShaders') {
                 arg(value: source.absolutePath)
             }
         }
-        ant.exec(executable: compiler.absolutePath, failonerror: true) {
+        ant.exec(executable: compiler, failonerror: true) {
             arg(value: '-O')
             arg(value: '-DGRID_INPUT')
             arg(value: '-o')
@@ -270,14 +275,14 @@ tasks.register('compileGpuShaders') {
             arg(value: shaderDir.path + '/density_graph.comp')
         }
         [32, 64, 128, 256].each { registerCount ->
-            ant.exec(executable: compiler.absolutePath, failonerror: true) {
+            ant.exec(executable: compiler, failonerror: true) {
                 arg(value: '-O')
                 arg(value: "-DREGISTER_COUNT=${registerCount}")
                 arg(value: '-o')
                 arg(value: shaderDir.path + "/density_graph_${registerCount}.comp.spv")
                 arg(value: shaderDir.path + '/density_graph.comp')
             }
-            ant.exec(executable: compiler.absolutePath, failonerror: true) {
+            ant.exec(executable: compiler, failonerror: true) {
                 arg(value: '-O')
                 arg(value: '-DGRID_INPUT')
                 arg(value: "-DREGISTER_COUNT=${registerCount}")
@@ -287,6 +292,16 @@ tasks.register('compileGpuShaders') {
             }
         }
     }
+}
+
+// Runs the production graph shaders against a headless Vulkan device. CI uses
+// Mesa Lavapipe, so this validates dispatch and readback without a physical GPU.
+tasks.register('vulkanSmoke', JavaExec) {
+    group = 'verification'
+    description = 'Executes the density graph and terrain grid shaders on Vulkan.'
+    dependsOn(tasks.named('classes'), tasks.named('compileGpuShaders'))
+    classpath = sourceSets.main.runtimeClasspath + configurations.lwjglNatives
+    mainClass = 'dev.gpunoise.VulkanCiSmoke'
 }
 
 // Example configuration to allow publishing using the maven-publish plugin
