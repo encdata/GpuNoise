@@ -152,6 +152,8 @@ public final class VulkanCiSmoke {
                     "default interface terrain compute implementation", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.recordConfigurationFixture(),
                     "immutable terrain record configuration", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.finalFieldConfigurationFixture(),
+                    "final-field terrain helper object", mathX, mathY, mathZ);
             GpuDensityExpressionSmoke.VulkanBranchFixture minecraftMathFixture =
                     GpuDensityExpressionSmoke.minecraftMathOverloadsFixture();
             float[] overloadX = {-2_147_483_648.0f, -46_341.0f, 0.0f, 46_341.0f, 2_147_483_520.0f};

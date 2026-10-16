@@ -131,6 +131,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new RecordConfigurationDensity());
     }
 
+    static VulkanBranchFixture finalFieldConfigurationFixture() {
+        return graphFixture(new FinalFieldConfigurationDensity());
+    }
+
     static VulkanBranchFixture minecraftMathOverloadsFixture() {
         return graphFixture(new MinecraftMathOverloadsDensity());
     }
@@ -404,6 +408,23 @@ final class GpuDensityExpressionSmoke {
                 != packed.nodeCount() * GpuDensityGraphBuffer.NODE_BYTES) {
             throw new AssertionError("lowered custom density graph did not produce a complete GPU node buffer");
         }
+
+        FinalFieldConfigurationDensity objectConfiguration = new FinalFieldConfigurationDensity();
+        GpuDensityBytecodeCompiler.Result objectConfigured =
+                GpuDensityBytecodeCompiler.compile(objectConfiguration);
+        if (objectConfigured.expression() == null) {
+            throw new AssertionError("final-field helper object bytecode should compile: "
+                    + objectConfigured.rejection());
+        }
+        int[][] helperPoints = {{-193, -64, -117}, {-1, 0, 1}, {37, 91, -248}, {256, 319, 128}};
+        for (int[] point : helperPoints) {
+            DensityFunction.SinglePointContext context = new DensityFunction.SinglePointContext(
+                    point[0], point[1], point[2]);
+            requireClose(objectConfigured.expression().evaluate(point[0], point[1], point[2]),
+                    objectConfiguration.compute(context), "final-field helper object at x=" + point[0]);
+        }
+        GpuDensityGraphBuffer.pack(GpuDensityGraphLowerer.lower(
+                GpuDensityGraphCompiler.compileDensityFunction(objectConfiguration, true)));
 
         BranchedDensity branchedDensity = new BranchedDensity();
         GpuDensityBytecodeCompiler.Result branched = GpuDensityBytecodeCompiler.compile(branchedDensity);
@@ -1179,6 +1200,30 @@ final class GpuDensityExpressionSmoke {
     private static final class DefaultInterfaceDensity implements DefaultInterfaceTerrainDensity {}
 
     private record TerrainShapeParameters(double horizontalScale, double verticalScale) {}
+
+    private static final class TerrainShapeParametersObject {
+        private final double horizontalScale;
+        private final double verticalScale;
+
+        private TerrainShapeParametersObject(double horizontalScale, double verticalScale) {
+            this.horizontalScale = horizontalScale;
+            this.verticalScale = verticalScale;
+        }
+
+        private double terrainContribution(double x, int y) {
+            double elevation = y * verticalScale;
+            return Math.sin(x * horizontalScale) * 0.25 + Math.abs(elevation) * 0.01;
+        }
+    }
+
+    private static final class FinalFieldConfigurationDensity extends NumericSmokeDensity {
+        private final TerrainShapeParametersObject parameters =
+                new TerrainShapeParametersObject(0.03125, 0.125);
+
+        @Override public double compute(FunctionContext context) {
+            return parameters.terrainContribution(context.blockX(), context.blockY());
+        }
+    }
 
     private static final class RecordConfigurationDensity extends NumericSmokeDensity {
         private final TerrainShapeParameters parameters = new TerrainShapeParameters(0.03125, 0.125);
