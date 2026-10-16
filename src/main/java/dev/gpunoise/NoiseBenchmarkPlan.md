@@ -57,8 +57,14 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   not the production cell-grid throughput baseline. The corrected production
   mode benchmark is pending.
 - The subsequent complete-tile early-dispatch and spatial/layout queue
-  partition changes have builds passing on GitHub Actions; their paired
-  benchmark runs are still in progress.
+  partition changes also completed a paired diagnostic run: median CPU
+  throughput was 41.724 CPS and Lavapipe was 30.508 CPS (paired ratio 0.733).
+  The three repetitions averaged 14.39, 14.93, and 15.22 chunks per dispatch;
+  p95 remained in the 2.5-second bucket, and queue wait was about 35-39 ms per
+  chunk. These results used full-block diagnostic output. They show that the
+  early-tile and layout partition changes did not yet fill 64-chunk batches or
+  remove the latency tail. A corrected production cell-grid benchmark and the
+  fullest-cluster candidate-selection benchmark are running.
 
 ## Work passes
 
@@ -178,9 +184,8 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
 
 ## Immediate next actions
 
-1. Read the corrected production cell-grid benchmark results and the GitHub
-   Actions runs for complete-tile early dispatch and spatial/layout queue
-   partitioning.
+1. Read the corrected production cell-grid benchmark and fullest-cluster
+   candidate-selection results from GitHub Actions.
 2. Compare production-mode paired ratios, chunks per dispatch, queue wait,
    submit-to-completion, and p95/p99. Keep full-block diagnostic results
    separate from production-mode results.
