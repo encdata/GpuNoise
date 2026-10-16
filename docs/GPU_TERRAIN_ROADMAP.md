@@ -109,6 +109,8 @@ parity checks.
   `Mth.frac(float)`, float/double `positiveModulo`, and `wrapDegrees` lower
   with Java remainder and their original float rounding points, covering
   common angular and periodic terrain transforms.
+  `Mth.triangleWave(float,float)` lowers as explicit rounded JVM float
+  operations and has an isolated dynamic-period parity fixture.
   `Math.signum(float)` and
   `Math.signum(double)` retain their respective input precision.
   Minecraft's indexed sine table is generated once and uploaded to persistent

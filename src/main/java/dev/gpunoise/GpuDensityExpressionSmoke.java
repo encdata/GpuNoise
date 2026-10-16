@@ -95,6 +95,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new ModuloAndAngleMathDensity());
     }
 
+    static VulkanBranchFixture triangleWaveMathFixture() {
+        return graphFixture(new TriangleWaveMathDensity());
+    }
+
     static VulkanBranchFixture minecraftMathOverloadsFixture() {
         return graphFixture(new MinecraftMathOverloadsDensity());
     }
@@ -472,6 +476,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new InterpolationMathDensity(), "Mth interpolation functions");
         verifyStandaloneMath(new FloatInterpolationMathDensity(), "Mth float interpolation functions");
         verifyStandaloneMath(new ModuloAndAngleMathDensity(), "Mth modulo and angle functions");
+        verifyStandaloneMath(new TriangleWaveMathDensity(), "Mth triangle wave");
         verifyStandaloneMath(new MinecraftMathOverloadsDensity(), "Mth float and integer overloads");
         verifyStandaloneMath(new DynamicClampDensity(), "dynamic Mth.clamp overloads");
 
@@ -1005,6 +1010,15 @@ final class GpuDensityExpressionSmoke {
                     + net.minecraft.util.Mth.positiveModulo(z, 31.0) * 0.001
                     + net.minecraft.util.Mth.wrapDegrees(x) * 0.0001F
                     + net.minecraft.util.Mth.wrapDegrees(z) * 0.0001;
+        }
+    }
+
+    private static final class TriangleWaveMathDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            float x = context.blockX() * 0.25F;
+            float period = 5.25F + Math.abs(context.blockY() * 0.125F);
+            return net.minecraft.util.Mth.triangleWave(x, period) * 0.25F
+                    + net.minecraft.util.Mth.triangleWave(context.blockZ() * -0.5F, 8.0F) * 0.125F;
         }
     }
 

@@ -817,6 +817,20 @@ final class GpuDensityBytecodeCompiler {
                 stack.add(wrapDegreesValue(arguments[0], descriptor.equals("(F)F")));
                 return;
             }
+            if (owner.equals("net/minecraft/util/Mth") && arguments.length == 2
+                    && descriptor.equals("(FF)F") && name.equals("triangleWave")) {
+                Value input = arguments[0], period = arguments[1];
+                Value remainder = floatMathBinary("FREM", input, period);
+                Value halfPeriod = floatMathBinary("FMUL", period,
+                        Value.value(builder.constant(0.5), 0.5));
+                Value centered = floatMathBinary("FSUB", remainder, halfPeriod);
+                int absolute = builder.map(GpuDensityExpression.Mapping.ABS, centered.expression());
+                Value quarterPeriod = floatMathBinary("FMUL", period,
+                        Value.value(builder.constant(0.25), 0.25));
+                Value triangle = floatMathBinary("FSUB", Value.value(absolute, null), quarterPeriod);
+                stack.add(floatMathBinary("FDIV", triangle, quarterPeriod));
+                return;
+            }
             if (owner.equals("net/minecraft/util/Mth") && descriptor.equals("(D)D")
                     && arguments.length == 1 && name.equals("smoothstep")) {
                 Value x = arguments[0];
