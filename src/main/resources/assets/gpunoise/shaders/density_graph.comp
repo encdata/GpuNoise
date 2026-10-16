@@ -256,10 +256,38 @@ float spaghettiRarity(float x, uint mapper){
     if(mapper==1u){if(x < -0.75) return 0.5; if(x < -0.5) return 0.75; if(x < 0.5) return 1.0; return x < 0.75 ? 2.0 : 3.0;}
     if(x < -0.5) return 0.75; if(x < 0.0) return 1.0; return x < 0.5 ? 1.5 : 2.0;
 }
+double graphAdd(double x, double y){
+#ifdef FAST_MATH
+    return double(float(x)+float(y));
+#else
+    return x+y;
+#endif
+}
+double graphSubtract(double x, double y){
+#ifdef FAST_MATH
+    return double(float(x)-float(y));
+#else
+    return x-y;
+#endif
+}
+double graphMultiply(double x, double y){
+#ifdef FAST_MATH
+    return double(float(x)*float(y));
+#else
+    return x*y;
+#endif
+}
+double graphDivide(double x, double y){
+#ifdef FAST_MATH
+    return double(float(x)/float(y));
+#else
+    return x/y;
+#endif
+}
 double mapValue(double x,uint op){
-    if(op==5u)return abs(x); if(op==6u)return x*x; if(op==7u)return x*x*x;
-    if(op==8u)return x>0?x:x*.5; if(op==9u)return x>0?x:x*.25;
-    if(op==10u){double v=clamp(x,-1.0,1.0);return v*.5-v*v*v/24.;}
+    if(op==5u)return abs(x); if(op==6u)return graphMultiply(x,x); if(op==7u)return graphMultiply(graphMultiply(x,x),x);
+    if(op==8u)return x>0?x:graphMultiply(x,.5); if(op==9u)return x>0?x:graphMultiply(x,.25);
+    if(op==10u){double v=clamp(x,-1.0,1.0);return graphSubtract(graphMultiply(v,.5),graphDivide(graphMultiply(graphMultiply(v,v),v),24.));}
     if(op==11u)return floor(x); if(op==12u)return ceil(x);
     if(op==13u)return sqrt(x); if(op==14u)return double(sin(float(x)));
     if(op==15u)return double(cos(float(x))); if(op==16u)return double(exp(float(x)));
@@ -343,8 +371,8 @@ void main(){
         Node n=nodes[i]; uint op=n.ids.x; double v=0.0;
         if(op==1u)v=double(n.params.x);
         else if(op==2u)v=double(normalNoise(p*vec3(n.params.y,n.params.z,n.params.y),uint(n.params.x)));
-        else if(op==3u){double x=values[n.ids.y],y=values[n.ids.z];if(n.meta.x==1u)v=x+y;else if(n.meta.x==2u)v=x==0.0?0.0:x*y;else if(n.meta.x==3u)v=min(x,y);else v=max(x,y);}
-        else if(op==4u)v=n.meta.x==2u?values[n.ids.y]*double(n.params.z):values[n.ids.y]+double(n.params.z);
+        else if(op==3u){double x=values[n.ids.y],y=values[n.ids.z];if(n.meta.x==1u)v=graphAdd(x,y);else if(n.meta.x==2u)v=x==0.0?0.0:graphMultiply(x,y);else if(n.meta.x==3u)v=min(x,y);else v=max(x,y);}
+        else if(op==4u)v=n.meta.x==2u?graphMultiply(values[n.ids.y],double(n.params.z)):graphAdd(values[n.ids.y],double(n.params.z));
         else if(op==5u)v=clamp(values[n.ids.y],double(n.params.x),double(n.params.y));
         else if(op==6u)v=mapValue(values[n.ids.y],n.meta.x);
         else if(op==7u)v=values[n.ids.y];
@@ -354,9 +382,15 @@ void main(){
         else if(op==11u){vec3 q=vec3(p.x*n.params.x+float(values[n.ids.y]),p.y*n.params.y+float(values[n.ids.z]),p.z*n.params.x+float(values[n.ids.w]));v=double(normalNoise(q,uint(n.params.z)));}
         else if(op==12u){v=splineValue(values[n.ids.y],uint(n.params.x)*64u,uint(n.params.y),values);}
         else if(op==13u){v=blendedNoise64(p,uint(n.params.x));}
-        else if(op==14u){double t=clamp((pExact.y-double(n.params.x))/(double(n.params.y)-double(n.params.x)),0.0,1.0);v=mix(double(n.params.z),double(n.params.w),t);}
+        else if(op==14u){double t=clamp(graphDivide(graphSubtract(pExact.y,double(n.params.x)),graphSubtract(double(n.params.y),double(n.params.x))),0.0,1.0);
+#ifdef FAST_MATH
+            v=graphAdd(double(n.params.z),graphMultiply(graphSubtract(double(n.params.w),double(n.params.z)),t));
+#else
+            v=mix(double(n.params.z),double(n.params.w),t);
+#endif
+        }
         else if(op==20u){v=n.meta.x==0u?pExact.x:(n.meta.x==1u?pExact.y:pExact.z);}
-        else if(op==21u){double x=values[n.ids.y],y=values[n.ids.z];if(n.meta.x==1u)v=x+y;else if(n.meta.x==2u)v=x-y;else if(n.meta.x==3u)v=x*y;else if(n.meta.x==4u)v=x/y;else if(n.meta.x==5u)v=javaMin(x,y);else if(n.meta.x==7u)v=javaRemainder(x,y);else if(n.meta.x==8u)v=javaAtan2(x,y);else if(n.meta.x==9u)v=javaPow(x,y);else v=javaMax(x,y);}
+        else if(op==21u){double x=values[n.ids.y],y=values[n.ids.z];if(n.meta.x==1u)v=graphAdd(x,y);else if(n.meta.x==2u)v=graphSubtract(x,y);else if(n.meta.x==3u)v=graphMultiply(x,y);else if(n.meta.x==4u)v=graphDivide(x,y);else if(n.meta.x==5u)v=javaMin(x,y);else if(n.meta.x==7u)v=javaRemainder(x,y);else if(n.meta.x==8u)v=javaAtan2(x,y);else if(n.meta.x==9u)v=javaPow(x,y);else v=javaMax(x,y);}
         else if(op==22u)v=compareValues(values[n.ids.y],values[n.ids.z],n.meta.x)?1.0:0.0;
         else if(op==23u)v=values[n.ids.y]!=0.0?values[n.ids.z]:values[n.ids.w];
         else if(op==24u)v=javaIntOperation(n.meta.x,values[n.ids.y],n.meta.x==6u?0.0:values[n.ids.z]);

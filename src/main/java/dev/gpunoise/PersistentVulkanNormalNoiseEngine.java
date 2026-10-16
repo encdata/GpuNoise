@@ -17,6 +17,7 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Reusable Vulkan resources for repeated NormalNoise submissions. */
 final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
+    private static final boolean FAST_GRAPH_MATH = Boolean.getBoolean("gpunoise.fastMath");
     static final int CAPACITY = 262_144;
     static final int GRAPH_NODE_CAPACITY = 2048;
     // interpolationOutput stores the compact per-block final-density output.
@@ -35,6 +36,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long graphShader, gridShader, graphPipeline, gridPipeline;
     private final long graphDescriptorLayout, graphPipelineLayout, graphDescriptorPool, graphDescriptorSet;
     private int graphRegisterVariant = 256;
+    private boolean graphFastMathVariant;
     private final long interpolationShader, interpolationDescriptorLayout, interpolationPipelineLayout,
             interpolationPipeline, interpolationDescriptorPool, interpolationDescriptorSet;
     private final long aquiferPressureShader, aquiferPressureDescriptorLayout, aquiferPressurePipelineLayout,
@@ -902,16 +904,21 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private void ensureGraphVariant(GpuDensityGraph graph, MemoryStack stack) throws Exception {
         int required = graph.registerCount();
         int variant = required <= 32 ? 32 : required <= 64 ? 64 : required <= 128 ? 128 : 256;
-        if (variant == graphRegisterVariant) return;
+        if (variant == graphRegisterVariant && FAST_GRAPH_MATH == graphFastMathVariant) return;
         vkDestroyPipeline(device, graphPipeline, null);
         vkDestroyPipeline(device, gridPipeline, null);
         vkDestroyShaderModule(device, graphShader, null);
         vkDestroyShaderModule(device, gridShader, null);
-        graphShader = loadShader(stack, "/assets/gpunoise/shaders/density_graph_" + variant + ".comp.spv", "graph shader variant");
-        gridShader = loadShader(stack, "/assets/gpunoise/shaders/density_graph_grid_" + variant + ".comp.spv", "grid shader variant");
+        String fast = FAST_GRAPH_MATH ? "_fast" : "";
+        graphShader = loadShader(stack, "/assets/gpunoise/shaders/density_graph" + fast
+                + "_" + variant + ".comp.spv", "graph shader variant");
+        gridShader = loadShader(stack, "/assets/gpunoise/shaders/density_graph_grid" + fast
+                + "_" + variant + ".comp.spv", "grid shader variant");
         graphPipeline = graphPipeline(stack);
         gridPipeline = gridPipeline(stack);
         graphRegisterVariant = variant;
+        graphFastMathVariant = FAST_GRAPH_MATH;
+        GpuNoise.LOGGER.info("GPU density shader variant: registers={}, fastMath={}", variant, FAST_GRAPH_MATH);
     }
     private long graphDescriptorPool(MemoryStack s){VkDescriptorPoolSize.Buffer z=VkDescriptorPoolSize.calloc(1,s).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(11);VkDescriptorPoolCreateInfo i=VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(z);LongBuffer h=s.longs(0);check(vkCreateDescriptorPool(device,i,null,h),"graph pool");return h.get(0);}
     private long graphDescriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(graphDescriptorPool).pSetLayouts(s.longs(graphDescriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"graph set");return h.get(0);}

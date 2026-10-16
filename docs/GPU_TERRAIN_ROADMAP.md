@@ -126,6 +126,10 @@ parity checks.
   latency so queue coalescing can be tuned against actual GPU CPS. The run
   harness verifies the selected window reached the server before accepting
   any benchmark measurement.
+  An opt-in `gpunoise.fastMath` shader variant rounds generic density add,
+  subtract, multiply, and divide through FP32 while keeping the default
+  FP64 path intact. CI runs the full Vulkan parity fixtures and terrain-grid
+  parity gate on FP32 before including it in the GPU throughput comparison.
   `Math.signum(float)` and
   `Math.signum(double)` retain their respective input precision.
   Minecraft's indexed sine table is generated once and uploaded to persistent

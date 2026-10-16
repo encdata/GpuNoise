@@ -88,6 +88,7 @@ runs {
         systemProperty 'gpunoise.profileTerrain', System.getProperty('gpunoise.profileTerrain', 'false')
         systemProperty 'gpunoise.disableChunkWriter', System.getProperty('gpunoise.disableChunkWriter', 'false')
         systemProperty 'gpunoise.terrainBatchWindowMs', System.getProperty('gpunoise.terrainBatchWindowMs', '20')
+        systemProperty 'gpunoise.fastMath', System.getProperty('gpunoise.fastMath', 'false')
         systemProperty 'gpunoise.vulkanSmoke', System.getProperty('gpunoise.vulkanSmoke', 'false')
         argument '--nogui'
         def configuredServerPort = providers.gradleProperty('gpunoiseServerPort')
@@ -273,8 +274,12 @@ tasks.register('compileGpuShaders') {
             .get()
     def shaderSources = fileTree(shaderDir).matching { include '**/*.comp'; exclude 'density_graph_grid.comp' }.files
     def shaderOutputs = shaderSources.collect { file(it.path + '.spv') } + file(shaderDir.path + '/density_graph_grid.comp.spv')
+    def fastGraphOutputs = [32, 64, 128, 256].collectMany { registerCount ->
+        [file(shaderDir.path + "/density_graph_fast_${registerCount}.comp.spv"),
+         file(shaderDir.path + "/density_graph_grid_fast_${registerCount}.comp.spv")]
+    }
     inputs.files(shaderSources)
-    outputs.files(shaderOutputs)
+    outputs.files(shaderOutputs + fastGraphOutputs)
     doLast {
         shaderSources.eachWithIndex { source, index ->
             def output = shaderOutputs[index]
@@ -308,6 +313,23 @@ tasks.register('compileGpuShaders') {
                 arg(value: "-DREGISTER_COUNT=${registerCount}")
                 arg(value: '-o')
                 arg(value: shaderDir.path + "/density_graph_grid_${registerCount}.comp.spv")
+                arg(value: shaderDir.path + '/density_graph.comp')
+            }
+            ant.exec(executable: compiler, failonerror: true, logError: true) {
+                arg(value: '-O')
+                arg(value: '-DFAST_MATH')
+                arg(value: "-DREGISTER_COUNT=${registerCount}")
+                arg(value: '-o')
+                arg(value: shaderDir.path + "/density_graph_fast_${registerCount}.comp.spv")
+                arg(value: shaderDir.path + '/density_graph.comp')
+            }
+            ant.exec(executable: compiler, failonerror: true, logError: true) {
+                arg(value: '-O')
+                arg(value: '-DFAST_MATH')
+                arg(value: '-DGRID_INPUT')
+                arg(value: "-DREGISTER_COUNT=${registerCount}")
+                arg(value: '-o')
+                arg(value: shaderDir.path + "/density_graph_grid_fast_${registerCount}.comp.spv")
                 arg(value: shaderDir.path + '/density_graph.comp')
             }
         }

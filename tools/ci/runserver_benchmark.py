@@ -56,6 +56,7 @@ GPU_COUNTS = re.compile(
     r"GPU terrain: submitted=(\d+), completed=(\d+), consumed=(\d+), fallback=(\d+)"
 )
 GPU_BATCH_WINDOW = re.compile(r"GPU terrain batch window=(\d+)ms, chunk limit=(\d+)")
+GPU_SHADER_VARIANT = re.compile(r"GPU density shader variant: registers=(\d+), fastMath=(true|false)")
 
 
 def fetch_mods(destination: Path) -> None:
@@ -146,7 +147,7 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
         "-Dgpunoise.chunkyCenterZ=0",
         f"-Dgpunoise.forceCpuTerrain={str(force_cpu).lower()}",
     ]
-    run_vulkan_smoke = force_cpu and repetition == 1
+    run_vulkan_smoke = repetition == 1
     if run_vulkan_smoke:
         # Run registry-dependent compiler fixtures after NeoForge has fully
         # booted. A standalone JavaExec has no LoadingModList or mod lifecycle.
@@ -157,6 +158,7 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
         # GPU materialization with the Java cell-corner interpolation first.
         command.append("-Dgpunoise.fullBlockOutput=true")
         command.append(f"-Dgpunoise.terrainBatchWindowMs={BATCH_WINDOW_MS}")
+        command.append("-Dgpunoise.fastMath=true")
     print(f"Starting {mode} Chunky benchmark: {' '.join(command)}", flush=True)
     process = subprocess.Popen(
         command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -243,6 +245,11 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
             if batch_window is None or int(batch_window.group(1)) != BATCH_WINDOW_MS:
                 observed = "missing" if batch_window is None else f"{batch_window.group(1)}ms"
                 raise RuntimeError(f"GPU batch-window setting was {observed}; expected {BATCH_WINDOW_MS}ms")
+            shader_variants = GPU_SHADER_VARIANT.findall(run_log)
+            expected_fast_math = "false" if force_cpu else "true"
+            if not shader_variants or shader_variants[-1][1] != expected_fast_math:
+                observed = "missing" if not shader_variants else shader_variants[-1][1]
+                raise RuntimeError(f"GPU shader fastMath mode was {observed}; expected {expected_fast_math}")
 
         if run_vulkan_smoke and "GPU_NOISE_VULKAN_SMOKE_PASSED" not in log_path.read_text(encoding="utf-8"):
             raise RuntimeError("Vulkan server lifecycle smoke did not report success")
