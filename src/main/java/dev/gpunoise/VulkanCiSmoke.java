@@ -5,9 +5,6 @@ import java.nio.ByteOrder;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-import net.minecraft.server.Bootstrap;
-import net.minecraft.world.level.levelgen.DensityFunctions;
-
 /** Headless Vulkan smoke test for CI's Mesa Lavapipe device. */
 public final class VulkanCiSmoke {
     private static final float EXPECTED = 0.375f;
@@ -15,19 +12,17 @@ public final class VulkanCiSmoke {
     private VulkanCiSmoke() {}
 
     public static void main(String[] args) throws Exception {
-        // DensityFunctions references built-in registries during class
-        // initialization, so initialize Minecraft before constructing a graph.
-        Bootstrap.bootStrap();
         GpuDevice device = GpuProbe.findPreferredDevice(GpuNoiseConfig.GpuVendorPreference.AUTO);
         if (device == null) throw new IllegalStateException("No Vulkan compute device found");
         if (!VulkanComputeProbe.verify(device)) {
             throw new IllegalStateException("Vulkan compute queue probe failed on " + device.name());
         }
 
-        GpuDensityGraph graph = GpuDensityGraphLowerer.lower(new GpuDensityGraph(
-                List.of(new GpuDensityGraph.Node("Constant", new int[0], new double[]{EXPECTED}, null)),
-                new int[]{0}, List.of(), List.of(), List.of(),
-                List.of(DensityFunctions.constant(EXPECTED))));
+        // Supply an already-lowered one-node IR directly. This smoke test
+        // exercises Vulkan shader dispatch without booting NeoForge registries.
+        GpuDensityGraph graph = new GpuDensityGraph(
+                List.of(new GpuDensityGraph.Node("Constant", new int[0], new double[]{EXPECTED}, null, 0)),
+                new int[]{0}, List.of(), List.of(), List.of(), List.of(), 1);
         VulkanSubmissionRing ring = VulkanBootstrapThread.call(() -> new VulkanSubmissionRing(device));
         try (ring) {
             float[] x = {-64.0f, 0.0f, 16_777_216.0f, 30_000_000.0f};
