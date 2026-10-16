@@ -128,6 +128,13 @@ public final class VulkanCiSmoke {
                     "Mth modulo and angle boundary cases", angleX, new float[angleX.length], angleZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.triangleWaveMathFixture(),
                     "Mth triangle wave", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.angleMotionMathFixture(),
+                    "Mth angle motion functions", mathX, mathY, mathZ);
+            float[] angleMotionX = {-73.0f, -72.0f, -71.0f, 71.0f, 72.0f, 73.0f};
+            float[] angleMotionY = {-16.0f, -1.0f, 0.0f, 1.0f, 16.0f, 80.0f};
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.angleMotionMathFixture(),
+                    "Mth angle motion boundary cases", angleMotionX, angleMotionY,
+                    new float[angleMotionX.length]);
             GpuDensityExpressionSmoke.VulkanBranchFixture minecraftMathFixture =
                     GpuDensityExpressionSmoke.minecraftMathOverloadsFixture();
             float[] overloadX = {-2_147_483_648.0f, -46_341.0f, 0.0f, 46_341.0f, 2_147_483_520.0f};

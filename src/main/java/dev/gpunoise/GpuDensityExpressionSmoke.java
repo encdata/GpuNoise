@@ -99,6 +99,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new TriangleWaveMathDensity());
     }
 
+    static VulkanBranchFixture angleMotionMathFixture() {
+        return graphFixture(new AngleMotionMathDensity());
+    }
+
     static VulkanBranchFixture minecraftMathOverloadsFixture() {
         return graphFixture(new MinecraftMathOverloadsDensity());
     }
@@ -477,6 +481,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new FloatInterpolationMathDensity(), "Mth float interpolation functions");
         verifyStandaloneMath(new ModuloAndAngleMathDensity(), "Mth modulo and angle functions");
         verifyStandaloneMath(new TriangleWaveMathDensity(), "Mth triangle wave");
+        verifyStandaloneMath(new AngleMotionMathDensity(), "Mth angle motion functions");
         verifyStandaloneMath(new MinecraftMathOverloadsDensity(), "Mth float and integer overloads");
         verifyStandaloneMath(new DynamicClampDensity(), "dynamic Mth.clamp overloads");
 
@@ -1019,6 +1024,22 @@ final class GpuDensityExpressionSmoke {
             float period = 5.25F + Math.abs(context.blockY() * 0.125F);
             return net.minecraft.util.Mth.triangleWave(x, period) * 0.25F
                     + net.minecraft.util.Mth.triangleWave(context.blockZ() * -0.5F, 8.0F) * 0.125F;
+        }
+    }
+
+    private static final class AngleMotionMathDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            float current = context.blockX() * 2.5F;
+            float target = context.blockZ() * -3.25F;
+            float step = context.blockY() * 0.125F;
+            return net.minecraft.util.Mth.degreesDifference(current, target) * 0.001F
+                    + net.minecraft.util.Mth.degreesDifferenceAbs(current, target) * 0.001F
+                    + net.minecraft.util.Mth.approach(current, target, step) * 0.01F
+                    + net.minecraft.util.Mth.approachDegrees(current, target, step) * 0.01F
+                    + net.minecraft.util.Mth.rotateIfNecessary(current, target, step) * 0.001F
+                    + net.minecraft.util.Mth.rotLerp(0.35F, current, target) * 0.001F
+                    + net.minecraft.util.Mth.rotLerp(context.blockY() * 0.01,
+                            context.blockX() * 2.5, context.blockZ() * -3.25) * 0.0001;
         }
     }
 

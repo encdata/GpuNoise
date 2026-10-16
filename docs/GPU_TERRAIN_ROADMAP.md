@@ -111,6 +111,9 @@ parity checks.
   common angular and periodic terrain transforms.
   `Mth.triangleWave(float,float)` lowers as explicit rounded JVM float
   operations and has an isolated dynamic-period parity fixture.
+  Float/double `rotLerp` and float degree-difference, rotation-clamp, and
+  approach helpers compose the same explicit wrap, compare, select, and
+  per-operation float IR used by their standalone primitives.
   `Math.signum(float)` and
   `Math.signum(double)` retain their respective input precision.
   Minecraft's indexed sine table is generated once and uploaded to persistent

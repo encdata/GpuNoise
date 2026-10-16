@@ -831,6 +831,62 @@ final class GpuDensityBytecodeCompiler {
                 stack.add(floatMathBinary("FDIV", triangle, quarterPeriod));
                 return;
             }
+            if (owner.equals("net/minecraft/util/Mth") && arguments.length == 2
+                    && descriptor.equals("(FF)F")
+                    && (name.equals("degreesDifference") || name.equals("degreesDifferenceAbs"))) {
+                Value difference = floatMathBinary("FSUB", arguments[1], arguments[0]);
+                Value wrapped = wrapDegreesValue(difference, true);
+                if (name.equals("degreesDifferenceAbs")) {
+                    int absolute = builder.map(GpuDensityExpression.Mapping.ABS, wrapped.expression());
+                    wrapped = Value.value(absolute, null);
+                }
+                stack.add(wrapped);
+                return;
+            }
+            if (owner.equals("net/minecraft/util/Mth") && arguments.length == 3
+                    && descriptor.equals("(FFF)F") && name.equals("rotateIfNecessary")) {
+                Value difference = floatMathBinary("FSUB", arguments[1], arguments[0]);
+                Value wrapped = wrapDegreesValue(difference, true);
+                Value negativeLimit = floatNegated(arguments[2]);
+                Value clamped = clampValue(wrapped, negativeLimit, arguments[2], true);
+                stack.add(floatMathBinary("FSUB", arguments[1], clamped));
+                return;
+            }
+            if (owner.equals("net/minecraft/util/Mth") && arguments.length == 3
+                    && descriptor.equals("(FFF)F")
+                    && (name.equals("approach") || name.equals("approachDegrees"))) {
+                Value current = arguments[0], target = arguments[1], step = arguments[2];
+                if (name.equals("approachDegrees")) {
+                    Value delta = floatMathBinary("FSUB", target, current);
+                    Value wrapped = wrapDegreesValue(delta, true);
+                    target = floatMathBinary("FADD", current, wrapped);
+                }
+                Value absoluteStep = mappedValue(GpuDensityExpression.Mapping.ABS, step);
+                int below = builder.compare("LT", current.expression(), target.expression());
+                Value increasing = floatMathBinary("FADD", current, absoluteStep);
+                Value decreasing = floatMathBinary("FSUB", current, absoluteStep);
+                Value increasingResult = clampValue(increasing, current, target, true);
+                Value decreasingResult = clampValue(decreasing, target, current, true);
+                int result = builder.select(below, increasingResult.expression(), decreasingResult.expression());
+                stack.add(Value.value(result, null));
+                return;
+            }
+            if (owner.equals("net/minecraft/util/Mth") && arguments.length == 3
+                    && (descriptor.equals("(FFF)F") || descriptor.equals("(DDD)D"))
+                    && name.equals("rotLerp")) {
+                boolean floatResult = descriptor.equals("(FFF)F");
+                Value difference = floatResult
+                        ? floatMathBinary("FSUB", arguments[2], arguments[1])
+                        : mathBinary(GpuDensityExpression.Operation.SUBTRACT, arguments[2], arguments[1]);
+                Value wrapped = wrapDegreesValue(difference, floatResult);
+                Value scaled = floatResult
+                        ? floatMathBinary("FMUL", arguments[0], wrapped)
+                        : mathBinary(GpuDensityExpression.Operation.MULTIPLY, arguments[0], wrapped);
+                stack.add(floatResult
+                        ? floatMathBinary("FADD", arguments[1], scaled)
+                        : mathBinary(GpuDensityExpression.Operation.ADD, arguments[1], scaled));
+                return;
+            }
             if (owner.equals("net/minecraft/util/Mth") && descriptor.equals("(D)D")
                     && arguments.length == 1 && name.equals("smoothstep")) {
                 Value x = arguments[0];
@@ -984,6 +1040,13 @@ final class GpuDensityBytecodeCompiler {
                 };
                 if (Float.isFinite(result)) constant = (double) result;
             }
+            return Value.value(expression, constant);
+        }
+
+        private Value floatNegated(Value input) {
+            int expression = builder.floatOperation("FNEG", input.expression(), -1);
+            Double constant = input.constant() == null ? null
+                    : (double) -(float) input.constant().doubleValue();
             return Value.value(expression, constant);
         }
 
