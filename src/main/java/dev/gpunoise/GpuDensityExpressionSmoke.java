@@ -223,6 +223,12 @@ final class GpuDensityExpressionSmoke {
                 GpuDensityGraphCompiler.compileDensityFunction(function, true)), function);
     }
 
+    static VulkanBranchFixture boundedSwitchLoopFixture() {
+        DensityFunction function = new BoundedSwitchLoopDensity();
+        return new VulkanBranchFixture(GpuDensityGraphLowerer.lower(
+                GpuDensityGraphCompiler.compileDensityFunction(function, true)), function);
+    }
+
     static void verify() {
         requireOpcode("EXPR_ADD", 1);
         requireOpcode("EXPR_SUBTRACT", 2);
@@ -534,6 +540,19 @@ final class GpuDensityExpressionSmoke {
         }
         GpuDensityGraphBuffer.pack(boundedConditionalLoopFixture().graph());
 
+        BoundedSwitchLoopDensity switchLoop = new BoundedSwitchLoopDensity();
+        GpuDensityBytecodeCompiler.Result switchLoopResult = GpuDensityBytecodeCompiler.compile(switchLoop);
+        if (switchLoopResult.expression() == null) {
+            throw new AssertionError("bounded loop with a dynamic switch should compile: "
+                    + switchLoopResult.rejection());
+        }
+        for (int xValue : new int[]{-7, -3, -1, 0, 1, 2, 8}) {
+            double expected = switchLoop.compute(new DensityFunction.SinglePointContext(xValue, 0, 0));
+            requireClose(switchLoopResult.expression().evaluate(xValue, 0, 0), expected,
+                    "dynamic switch inside bounded loop at x=" + xValue);
+        }
+        GpuDensityGraphBuffer.pack(boundedSwitchLoopFixture().graph());
+
         verifyMinecraftLerpBytecode();
 
         ScalarMathDensity scalarMath = new ScalarMathDensity();
@@ -840,6 +859,26 @@ final class GpuDensityExpressionSmoke {
                     sum += context.blockX() * (0.125 + octave * 0.01);
                 } else {
                     sum -= octave * 0.25;
+                }
+            }
+            return sum;
+        }
+        @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
+        @Override public double minValue() { return -100_000.0; }
+        @Override public double maxValue() { return 100_000.0; }
+        @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
+            return DensityFunctions.constant(0.0).codec();
+        }
+    }
+
+    private static final class BoundedSwitchLoopDensity implements DensityFunction.SimpleFunction {
+        @Override public double compute(FunctionContext context) {
+            double sum = 0.0;
+            for (int step = 0; step < 2; step++) {
+                switch ((context.blockX() + step) % 3) {
+                    case -1 -> sum += step * 0.5 + 0.25;
+                    case 0 -> sum += context.blockX() * 0.125;
+                    default -> sum -= step * 0.25;
                 }
             }
             return sum;

@@ -290,6 +290,11 @@ public final class VulkanCiSmoke {
             assertNumericFixture(ring, conditionalLoopFixture, "dynamic branch inside bounded loop",
                     new float[]{-17.0f, -3.0f, -1.0f, 0.0f, 1.0f, 3.0f, 17.0f},
                     new float[7], new float[7]);
+            GpuDensityExpressionSmoke.VulkanBranchFixture switchLoopFixture =
+                    GpuDensityExpressionSmoke.boundedSwitchLoopFixture();
+            assertNumericFixture(ring, switchLoopFixture, "dynamic switch inside bounded loop",
+                    new float[]{-7.0f, -3.0f, -1.0f, 0.0f, 1.0f, 2.0f, 8.0f},
+                    new float[7], new float[7]);
 
             GpuDensityExpressionSmoke.VulkanBranchFixture powerFixture =
                     GpuDensityExpressionSmoke.dynamicPowerFixture();
