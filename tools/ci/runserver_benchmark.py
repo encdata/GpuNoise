@@ -37,6 +37,7 @@ MODS = {
 RCON_PASSWORD = "gpunoise-ci-only"
 SERVER_START_TIMEOUT = 900
 SHUTDOWN_TIMEOUT = 90
+CHUNKY_RADIUS = 256
 TASK_DONE = re.compile(
     r"Task finished for .*?Processed:\s*([\d,]+) chunks \(([^)]+)%\), "
     r"Total time:\s*(\d+):(\d+):(\d+)"
@@ -117,9 +118,9 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool) -> tuple[in
     command = [
         "./gradlew", "--no-daemon", "runServer",
         f"-PgpunoiseRunDir=run/ci-{mode}",
-        # At radius 64 the generated area can finish before GpuTerrainRuntime
-        # emits its first 64-chunk usage-stat milestone.
-        "-Dgpunoise.chunkyRadius=128",
+        # Radius 256 covers 1,089 chunks, giving a steadier throughput sample
+        # than a small smoke-sized region and exercising the 1,000-chunk scale.
+        f"-Dgpunoise.chunkyRadius={CHUNKY_RADIUS}",
         "-Dgpunoise.chunkyCenterX=0",
         "-Dgpunoise.chunkyCenterZ=0",
         f"-Dgpunoise.forceCpuTerrain={str(force_cpu).lower()}",

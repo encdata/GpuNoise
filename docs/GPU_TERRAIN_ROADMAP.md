@@ -136,7 +136,13 @@ The first paired C2ME/Chunky CI run completed 289 chunks on each path: CPU
 consumed and no fallbacks. This is a coarse historical baseline from commit
 `b50cba6`; Chunky reported only whole-second task durations. Later multi-cell
 interpolation checks exposed axis and lattice-order bugs, so this measurement
-does not validate the current shader. CI is rerunning that parity gate now.
-Lavapipe validates Vulkan behavior and overhead; physical-GPU performance
-still needs separate measurements. The CI benchmark now measures Chunky's
+does not validate the current shader.
+
+The corrected shader passed the multi-cell Vulkan smoke and two precise paired
+289-chunk runs. The latest measured 49.829 CPU CPS and 39.603 Lavapipe CPS
+(0.795x CPU), with 318 GPU caches consumed and no fallbacks. The prior run
+measured 32.468 CPU CPS and 20.943 Lavapipe CPS (0.645x CPU). This spread shows
+the small area is too noisy for tuning, so the CI benchmark is increasing to
+1,089 chunks. Lavapipe validates Vulkan behavior and overhead; physical-GPU
+performance still needs separate measurements. CI now measures Chunky's
 streamed task start and finish at sub-second precision.
