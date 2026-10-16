@@ -1090,12 +1090,14 @@ final class GpuDensityExpressionSmoke {
     private static final class ExternalStaticHelperDensity extends NumericSmokeDensity {
         @Override public double compute(FunctionContext context) {
             return TerrainMathLibrary.shape(context.blockY(), 0.125)
-                    + TerrainMathLibrary.ridge(context.blockX(), context.blockZ()) * 0.05;
+                    + TerrainMathLibrary.ridge(context.blockX(), context.blockZ()) * 0.05
+                    + TerrainMathLibrary.octave(context.blockX() * 0.03125, 2) * 0.01;
         }
     }
 
     private static final class TerrainMathLibrary {
         private static final double RIDGE_SCALE = 0.0625;
+        private static final double[] OCTAVE_WEIGHTS = {0.5, -0.25, 0.125, -0.0625};
 
         private static double ridge(double x, double z) {
             return Math.abs(x - z) * RIDGE_SCALE + Math.sin(x * 0.03125);
@@ -1105,6 +1107,10 @@ final class GpuDensityExpressionSmoke {
             double elevation = y * scale;
             double ridge = ridge(elevation, y - elevation);
             return ridge * 0.5 + (y > 0 ? elevation * 0.01 : -elevation * 0.02);
+        }
+
+        private static double octave(double input, int octave) {
+            return Math.sin(input * (octave + 1)) * OCTAVE_WEIGHTS[octave];
         }
     }
 
