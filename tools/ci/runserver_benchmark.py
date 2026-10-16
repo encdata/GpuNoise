@@ -267,11 +267,17 @@ def main() -> int:
     if len(chunk_counts) != 1:
         raise RuntimeError(f"Benchmark areas differed across repetitions: {sorted(chunk_counts)}")
     count = chunk_counts.pop()
-    ratio = gpu_cps / cpu_cps if cpu_cps else 0.0
+    paired_ratios = [gpu_run[1] / cpu_run[1] if cpu_run[1] else 0.0
+                     for cpu_run, gpu_run in zip(measurements["cpu"], measurements["gpu"])]
+    ratio = statistics.median(paired_ratios)
+    cpu_values = [cps for _, cps in measurements["cpu"]]
+    gpu_values = [cps for _, cps in measurements["gpu"]]
     print(
         f"CI_WORLDGEN_COMPARISON repetitions={BENCHMARK_REPETITIONS} chunks={count} "
         f"cpu_median_cps={cpu_cps:.3f} lavapipe_median_cps={gpu_cps:.3f} "
-        f"median_ratio={ratio:.3f}",
+        f"median_paired_ratio={ratio:.3f} "
+        f"cpu_range_cps={min(cpu_values):.3f}..{max(cpu_values):.3f} "
+        f"lavapipe_range_cps={min(gpu_values):.3f}..{max(gpu_values):.3f}",
         flush=True,
     )
     print("Lavapipe results validate correctness and overhead only; they do not represent a discrete GPU.")
