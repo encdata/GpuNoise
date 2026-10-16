@@ -45,6 +45,10 @@ TASK_DONE = re.compile(
     r"Total time:\s*(\d+):(\d+):(\d+)"
 )
 TASK_STARTED = re.compile(r"\[Chunky\] Task started in minecraft:overworld")
+SERVER_CRASH = re.compile(
+    r"Encountered an unexpected exception|Failed to start the minecraft server|server thread.*FATAL",
+    re.IGNORECASE,
+)
 GPU_COUNTS = re.compile(
     r"GPU terrain: submitted=(\d+), completed=(\d+), consumed=(\d+), fallback=(\d+)"
 )
@@ -88,6 +92,14 @@ def stop_server_with_rcon() -> None:
         if response_id == -1:
             raise RuntimeError("RCON authentication failed")
         rcon_packet(connection, 2, 2, "stop")
+
+
+def crash_context(log_path: Path, max_lines: int = 45) -> str:
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as error:
+        return f"Unable to read server log {log_path}: {error}"
+    return "\n".join(lines[-max_lines:]) or "Server log is empty."
 
 
 def prepare_run_directory(run_dir: Path, downloaded_mods: Path) -> None:
@@ -176,6 +188,11 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
             line, observed_at = event
             if TASK_STARTED.search(line):
                 chunky_started = observed_at
+            if SERVER_CRASH.search(line):
+                raise RuntimeError(
+                    f"{mode} server reported a fatal error before Chunky completed:\n"
+                    f"{crash_context(log_path)}"
+                )
             match = TASK_DONE.search(line)
             if match:
                 completed = match
@@ -192,6 +209,12 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
                 break
 
         if completed is None:
+            if process.poll() is not None:
+                reader.join(timeout=5)
+                raise RuntimeError(
+                    f"{mode} runServer exited with status {process.returncode} before Chunky completed:\n"
+                    f"{crash_context(log_path)}"
+                )
             raise TimeoutError(f"{mode} server did not complete Chunky within {SERVER_START_TIMEOUT}s")
 
         count = int(completed.group(1).replace(",", ""))
