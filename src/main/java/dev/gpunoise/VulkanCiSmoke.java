@@ -104,6 +104,12 @@ public final class VulkanCiSmoke {
                             + ": expected " + expected + ", got " + mathResults[sample]);
                 }
             }
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.doubleMinMaxFixture(),
+                    "double Math.min/max", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.floatMathFixture(),
+                    "float Math and Mth.square", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.dynamicClampFixture(),
+                    "dynamic double/float Mth.clamp", mathX, mathY, mathZ);
 
             GpuDensityExpressionSmoke.VulkanBranchFixture integerFixture =
                     GpuDensityExpressionSmoke.integerMathFixture();
@@ -526,6 +532,21 @@ public final class VulkanCiSmoke {
             if (Math.abs(values[i] - EXPECTED) > 1.0e-6f) {
                 throw new IllegalStateException(label + " mismatch at sample " + i
                         + ": expected " + EXPECTED + ", got " + values[i]);
+            }
+        }
+    }
+
+    private static void assertNumericFixture(VulkanSubmissionRing ring,
+            GpuDensityExpressionSmoke.VulkanBranchFixture fixture, String label,
+            float[] x, float[] y, float[] z) throws Exception {
+        float[] actual = ring.submitGraphRoots(fixture.graph(), x, y, z).get(60, TimeUnit.SECONDS);
+        for (int sample = 0; sample < actual.length; sample++) {
+            double expected = fixture.javaFunction().compute(
+                    new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(
+                            (int) x[sample], (int) y[sample], (int) z[sample]));
+            if (Math.abs(actual[sample] - expected) > 0.005) {
+                throw new IllegalStateException(label + " Vulkan mismatch at sample " + sample
+                        + ": expected " + expected + ", got " + actual[sample]);
             }
         }
     }

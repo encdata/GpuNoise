@@ -43,6 +43,23 @@ final class GpuDensityExpressionSmoke {
                 GpuDensityGraphCompiler.compileDensityFunction(function, true)), function);
     }
 
+    static VulkanBranchFixture doubleMinMaxFixture() {
+        return graphFixture(new DoubleMinMaxDensity());
+    }
+
+    static VulkanBranchFixture floatMathFixture() {
+        return graphFixture(new FloatMathDensity());
+    }
+
+    static VulkanBranchFixture dynamicClampFixture() {
+        return graphFixture(new DynamicClampDensity());
+    }
+
+    private static VulkanBranchFixture graphFixture(DensityFunction function) {
+        return new VulkanBranchFixture(GpuDensityGraphLowerer.lower(
+                GpuDensityGraphCompiler.compileDensityFunction(function, true)), function);
+    }
+
     static VulkanBranchFixture dynamicPowerFixture() {
         DensityFunction function = new DynamicPowerDensity();
         return new VulkanBranchFixture(GpuDensityGraphLowerer.lower(
@@ -399,6 +416,10 @@ final class GpuDensityExpressionSmoke {
         }
         GpuDensityGraphBuffer.pack(scalarMathGraph);
 
+        verifyStandaloneMath(new DoubleMinMaxDensity(), "double Math.min/max");
+        verifyStandaloneMath(new FloatMathDensity(), "float Math overloads and Mth.square");
+        verifyStandaloneMath(new DynamicClampDensity(), "dynamic Mth.clamp overloads");
+
         DynamicPowerDensity dynamicPower = new DynamicPowerDensity();
         GpuDensityBytecodeCompiler.Result dynamicPowerResult = GpuDensityBytecodeCompiler.compile(dynamicPower);
         if (dynamicPowerResult.expression() == null) {
@@ -715,6 +736,21 @@ final class GpuDensityExpressionSmoke {
         requireClose(actual, expected, tolerance, label);
     }
 
+    private static void verifyStandaloneMath(DensityFunction function, String label) {
+        GpuDensityBytecodeCompiler.Result result = GpuDensityBytecodeCompiler.compile(function);
+        if (result.expression() == null) {
+            throw new AssertionError(label + " should compile: " + result.rejection());
+        }
+        for (int[] point : new int[][]{{-81, -17, -5}, {-1, 0, 1}, {0, 0, 0}, {17, 9, 31}}) {
+            double expected = function.compute(new DensityFunction.SinglePointContext(
+                    point[0], point[1], point[2]));
+            requireFloatAbiClose(result.expression().evaluate(point[0], point[1], point[2]), expected,
+                    label + " CPU IR at " + java.util.Arrays.toString(point));
+        }
+        GpuDensityGraphBuffer.pack(GpuDensityGraphLowerer.lower(
+                GpuDensityGraphCompiler.compileDensityFunction(function, true)));
+    }
+
     private static void requireClose(double actual, double expected, double epsilon, String label) {
         if (Math.abs(actual - expected) > epsilon) {
             throw new AssertionError(label + " expected " + expected + ", got " + actual);
@@ -751,16 +787,7 @@ final class GpuDensityExpressionSmoke {
             double x = context.blockX();
             double y = context.blockY();
             double z = context.blockZ();
-            float floatX = (float) x;
-            float floatZ = (float) z;
             return Math.floor(y * 0.25) + Math.ceil(x * 0.1)
-                    + Math.min(x * 0.02, z * 0.01) + Math.max(x * -0.015, z * 0.025)
-                    + Math.min(floatX * 0.125F, Math.max(floatZ * -0.25F, -2.5F)) * 0.1
-                    + Math.abs(floatZ * -0.03125F) * 0.05
-                    + net.minecraft.util.Mth.square(floatX * 0.0078125F) * 0.125
-                    + net.minecraft.util.Mth.clamp(x * 0.02, y * 0.01, z * 0.03) * 0.01
-                    + net.minecraft.util.Mth.clamp(floatX * 0.01F, floatY * 0.02F,
-                            floatZ * 0.03F) * 0.01
                     + Math.sqrt(Math.abs(x)) + Math.sin(x * 0.05)
                     + Math.cos(z * 0.05) + Math.log(Math.exp(0.25))
                     + Math.atan2(z, x) * 0.05
@@ -784,6 +811,40 @@ final class GpuDensityExpressionSmoke {
         @Override public double maxValue() { return 100.0; }
         @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
             return DensityFunctions.constant(0.0).codec();
+        }
+    }
+
+    private abstract static class NumericSmokeDensity implements DensityFunction.SimpleFunction {
+        @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
+        @Override public double minValue() { return -100.0; }
+        @Override public double maxValue() { return 100.0; }
+        @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
+            return DensityFunctions.constant(0.0).codec();
+        }
+    }
+
+    private static final class DoubleMinMaxDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            double x = context.blockX(), z = context.blockZ();
+            return Math.min(x * 0.02, z * 0.01) + Math.max(x * -0.015, z * 0.025);
+        }
+    }
+
+    private static final class FloatMathDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            float x = context.blockX(), z = context.blockZ();
+            return Math.min(x * 0.125F, Math.max(z * -0.25F, -2.5F)) * 0.1
+                    + Math.abs(z * -0.03125F) * 0.05
+                    + net.minecraft.util.Mth.square(x * 0.0078125F) * 0.125;
+        }
+    }
+
+    private static final class DynamicClampDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            double x = context.blockX(), y = context.blockY(), z = context.blockZ();
+            float fx = (float) x, fy = (float) y, fz = (float) z;
+            return net.minecraft.util.Mth.clamp(x * 0.02, y * 0.01, z * 0.03) * 0.01
+                    + net.minecraft.util.Mth.clamp(fx * 0.01F, fy * 0.02F, fz * 0.03F) * 0.01;
         }
     }
 
