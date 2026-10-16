@@ -144,10 +144,11 @@ abstract class NoiseChunkGeneratorWriteMixin {
                 || GpuTerrainRuntime.activeFillCache() == null) {
             return section.setBlockState(x, y, z, state, ignored);
         }
+        long writeStart = GpuTerrainProfiler.beginPhase();
         fillState.lastWrittenBlockHasFluid = ((GpuLevelChunkSectionAccess) (Object) section)
                 .gpunoise$writeGpuBlock((y << 4 | z) << 4 | x, state);
         fillState.lastWrittenBlockFluidCached = true;
-        GpuTerrainProfiler.recordBlockWrite();
+        GpuTerrainProfiler.recordBlockWrite(writeStart);
         return state;
     }
 

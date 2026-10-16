@@ -156,9 +156,10 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
         // and boundary queries, so revalidating the chunk on every hot-path
         // final-density call is unnecessary.
         if (cache != null) {
+            long lookupStart = GpuTerrainProfiler.beginPhase();
             double gpu = cache.finalDensity(context.blockX(), context.blockY(), context.blockZ());
             if (!Double.isNaN(gpu)) {
-                GpuTerrainProfiler.recordGpuFinalDensity();
+                GpuTerrainProfiler.recordGpuFinalDensity(lookupStart);
                 gpunoise$markGpuUse(cache);
                 return gpunoise$zeroBeardifier ? gpu : gpu + beardifier.compute(context);
             }
@@ -176,9 +177,10 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     private double gpunoise$useGpuInitialDensity(DensityFunction vanillaFunction, DensityFunction.FunctionContext context) {
         GpuChunkDensityCache cache = gpunoise$getActiveCache();
         if (cache != null) {
+            long lookupStart = GpuTerrainProfiler.beginPhase();
             double gpu = cache.initialDensity(context.blockX(), context.blockY(), context.blockZ());
             if (!Double.isNaN(gpu)) {
-                GpuTerrainProfiler.recordGpuInitialDensity();
+                GpuTerrainProfiler.recordGpuInitialDensity(lookupStart);
                 gpunoise$markGpuUse(cache);
                 return gpu;
             }
@@ -218,9 +220,10 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
                 }
             }
             if (activeCache != null) {
+                long lookupStart = GpuTerrainProfiler.beginPhase();
                 double value = activeCache.climate(context.blockX(), context.blockY(), context.blockZ(), root);
                 if (!Double.isNaN(value)) {
-                    GpuTerrainProfiler.recordGpuClimate();
+                    GpuTerrainProfiler.recordGpuClimate(lookupStart);
                     GpuTerrainRuntime.markGpuCacheUsed(activeCache);
                     return value;
                 }

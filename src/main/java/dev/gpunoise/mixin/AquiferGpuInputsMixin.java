@@ -77,6 +77,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner {
                         : vanillaFunction == lavaNoise ? GpuTerrainRoots.LAVA
                         : vanillaFunction == erosion ? GpuTerrainRoots.EROSION
                         : vanillaFunction == depth ? GpuTerrainRoots.DEPTH : -1;
+                long lookupStart = GpuTerrainProfiler.beginPhase();
                 double gpu = switch (root) {
                     case GpuTerrainRoots.BARRIER -> cache.aquiferBarrier(context.blockX(), context.blockY(), context.blockZ());
                     case GpuTerrainRoots.FLOODEDNESS -> cache.aquiferFloodedness(context.blockX(), context.blockY(), context.blockZ());
@@ -87,7 +88,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner {
                     default -> Double.NaN;
                 };
                 if (!Double.isNaN(gpu)) {
-                    GpuTerrainProfiler.recordAquifer();
+                    GpuTerrainProfiler.recordAquifer(lookupStart);
                     GpuTerrainRuntime.markGpuCacheUsed(cache);
                     return gpu;
                 }
