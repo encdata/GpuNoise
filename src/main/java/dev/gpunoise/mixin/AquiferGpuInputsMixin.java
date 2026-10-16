@@ -7,7 +7,6 @@ import dev.gpunoise.GpuTerrainRoots;
 import dev.gpunoise.GpuAquiferCoordinatePlanner;
 import dev.gpunoise.GpuWorldgenDependency;
 import dev.gpunoise.GpuTerrainProfiler;
-import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 import net.minecraft.world.level.levelgen.Aquifer;
 import net.minecraft.world.level.levelgen.DensityFunction;
@@ -47,13 +46,11 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner {
                 int gridZ = minGridZ + localZ;
                 for (int localX = 0; localX < gridSizeX; localX++) {
                     int gridX = minGridX + localX;
-                    RandomSource random = positionalRandomFactory.at(gridX, gridY, gridZ);
-                    int x = gridX * 16 + random.nextInt(10);
-                    int y = gridY * 12 + random.nextInt(9);
-                    int z = gridZ * 16 + random.nextInt(10);
-                    builder.add(x, y, z);
-                    builder.addSpreadFromBlock(x, y, z);
-                    builder.addLavaFromBlock(x, y, z);
+                    int[] center = GpuAquiferNearestThree.centerAt(positionalRandomFactory,
+                            gridX, gridY, gridZ);
+                    builder.add(center[0], center[1], center[2]);
+                    builder.addSpreadFromBlock(center[0], center[1], center[2]);
+                    builder.addLavaFromBlock(center[0], center[1], center[2]);
                 }
             }
         }

@@ -93,7 +93,7 @@ parity checks.
   Keep the flowing-fluid update bit alongside the result; it affects later
   chunk fluid scheduling even when the chosen block state is unchanged.
 - Use integer world coordinates and exact floor division for aquifer grid
-  coordinates. The three nearest random centers are sampled from the 3x3x3
+  coordinates. The three nearest random centers are sampled from the 2x3x2
   neighborhood using 16x12x16 grid spacing and bounded offsets (10, 9, 10).
   Stable tie handling matters because the third-nearest selection feeds both
   similarity and pressure decisions.
@@ -109,12 +109,14 @@ parity checks.
   component; it is a validated kernel boundary, not yet eligible to decide
   blocks near a pressure threshold until precision behavior is compared with
   vanilla's double calculation and a safe threshold fallback is implemented.
-- A second standalone kernel selects the nearest three centers from 27 exact
-  candidate positions. Its packed query carries xyz plus 27 center xyz records;
+- A second standalone kernel selects the nearest three centers from the exact
+  12 candidates. Its packed query carries xyz plus 12 center xyz records;
   output carries selected indices and squared integer distances. Selection
   preserves vanilla's strict first/second comparisons and inclusive third
-  comparison. Mesa smoke checks ordinary and equal-distance cases against the
-  Java reference.
+  comparison. One shared positional-random helper now builds centers for both
+  this kernel's future inputs and the existing strict dependency planner, so
+  candidate coordinates use one implementation. Mesa smoke checks ordinary
+  and equal-distance cases against the Java reference.
 - Keep fluid picking, preliminary surface sampling, surface level selection,
   and fluid type selection as explicit inputs/operations. These consult
   `NoiseChunk`, density roots, and world settings; the shader must not infer

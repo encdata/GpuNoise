@@ -2,10 +2,13 @@ package dev.gpunoise;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 
 /** Input contract and vanilla-order reference for aquifer center selection. */
-final class GpuAquiferNearestThree {
-    static final int CANDIDATES = 27;
+public final class GpuAquiferNearestThree {
+    // Vanilla visits grid X offsets 0..1, Y offsets -1..1, Z offsets 0..1.
+    static final int CANDIDATES = 12;
     static final int RECORD_BYTES = 16 * (CANDIDATES + 1);
     static final int OUTPUT_INTS = 8;
     static final int MAX_QUERIES = 16_384;
@@ -20,7 +23,7 @@ final class GpuAquiferNearestThree {
         for (int i = 0; i < queries.length; i++) {
             int[] query = queries[i];
             if (query.length != 3 || centers[i].length != CANDIDATES)
-                throw new IllegalArgumentException("aquifer query must contain one point and 27 centers");
+                throw new IllegalArgumentException("aquifer query must contain one point and 12 centers");
             packed.putInt(query[0]).putInt(query[1]).putInt(query[2]).putInt(0);
             for (int[] center : centers[i]) {
                 if (center.length != 3) throw new IllegalArgumentException("aquifer center must be xyz");
@@ -30,10 +33,35 @@ final class GpuAquiferNearestThree {
         return packed.flip();
     }
 
+    /** Recreates the 2x3x2 positional-random neighborhood used by vanilla. */
+    static int[][] centersForQuery(PositionalRandomFactory factory, int[] query) {
+        if (query.length != 3) throw new IllegalArgumentException("aquifer query must be xyz");
+        int baseX = Math.floorDiv(query[0] - 5, 16);
+        int baseY = Math.floorDiv(query[1] + 1, 12);
+        int baseZ = Math.floorDiv(query[2] - 5, 16);
+        int[][] centers = new int[CANDIDATES][3];
+        int index = 0;
+        for (int offsetX = 0; offsetX <= 1; offsetX++) {
+            for (int offsetY = -1; offsetY <= 1; offsetY++) {
+                for (int offsetZ = 0; offsetZ <= 1; offsetZ++) {
+                    centers[index++] = centerAt(factory,
+                            baseX + offsetX, baseY + offsetY, baseZ + offsetZ);
+                }
+            }
+        }
+        return centers;
+    }
+
+    public static int[] centerAt(PositionalRandomFactory factory, int gridX, int gridY, int gridZ) {
+        RandomSource random = factory.at(gridX, gridY, gridZ);
+        return new int[]{gridX * 16 + random.nextInt(10),
+                gridY * 12 + random.nextInt(9), gridZ * 16 + random.nextInt(10)};
+    }
+
     /** Returns nearest indices followed by their squared distances. */
     static int[] select(int[] query, int[][] centers) {
         if (query.length != 3 || centers.length != CANDIDATES)
-            throw new IllegalArgumentException("aquifer query must contain one point and 27 centers");
+            throw new IllegalArgumentException("aquifer query must contain one point and 12 centers");
         int[] indices = {-1, -1, -1};
         int[] distances = {Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE};
         for (int i = 0; i < CANDIDATES; i++) {

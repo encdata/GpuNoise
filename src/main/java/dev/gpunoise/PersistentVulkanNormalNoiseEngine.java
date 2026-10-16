@@ -622,7 +622,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
 
     /** Runs the pure numerical aquifer pressure term over packed status pairs. */
     synchronized float[] submitAquiferPressure(ByteBuffer records, int count) throws Exception {
-        if (count < 0 || count > CAPACITY
+        if (count <= 0 || count > CAPACITY
                 || records.remaining() != count * GpuAquiferPressure.RECORD_BYTES)
             throw new IllegalArgumentException("invalid aquifer pressure batch");
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -661,7 +661,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
 
     /** Selects aquifer centers with Minecraft's exact integer tie ordering. */
     synchronized int[] submitAquiferNearestThree(ByteBuffer records, int count) throws Exception {
-        if (count < 0 || count > GpuAquiferNearestThree.MAX_QUERIES
+        if (count <= 0 || count > GpuAquiferNearestThree.MAX_QUERIES
                 || records.remaining() != count * GpuAquiferNearestThree.RECORD_BYTES)
             throw new IllegalArgumentException("invalid aquifer nearest-three batch");
         try (MemoryStack stack = MemoryStack.stackPush()) {

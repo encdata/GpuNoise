@@ -7,7 +7,6 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
-import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 
 /** Exact GPU coordinate dependencies for one chunk-generation task. */
@@ -122,13 +121,10 @@ public final class GpuWorldgenDependency {
         for (int gridY = minGridY; gridY <= maxGridY; gridY++) {
             for (int gridZ = minGridZ; gridZ <= maxGridZ; gridZ++) {
                 for (int gridX = minGridX; gridX <= maxGridX; gridX++) {
-                    RandomSource random = factory.at(gridX, gridY, gridZ);
-                    int x = gridX * 16 + random.nextInt(10);
-                    int y = gridY * 12 + random.nextInt(9);
-                    int z = gridZ * 16 + random.nextInt(10);
-                    builder.add(x, y, z);
-                    builder.addSpreadFromBlock(x, y, z);
-                    builder.addLavaFromBlock(x, y, z);
+                    int[] center = GpuAquiferNearestThree.centerAt(factory, gridX, gridY, gridZ);
+                    builder.add(center[0], center[1], center[2]);
+                    builder.addSpreadFromBlock(center[0], center[1], center[2]);
+                    builder.addLavaFromBlock(center[0], center[1], center[2]);
                 }
             }
         }
