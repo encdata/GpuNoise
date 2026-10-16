@@ -13,9 +13,9 @@ public final class VulkanCiSmoke {
     private VulkanCiSmoke() {}
 
     public static void main(String[] args) throws Exception {
-        // The compiler fixtures instantiate DensityFunction implementations;
-        // initialize vanilla registries before their interfaces are loaded.
-        net.minecraft.server.Bootstrap.bootStrap();
+        // Called by the CI server after NeoForge has initialized the registry
+        // and mod-loading lifecycle. A standalone JavaExec cannot safely boot
+        // these fixtures because NeoForge's LoadingModList is unavailable.
         GpuDensityExpressionSmoke.verify();
         verifyTranslatorRegistry();
         GpuDevice device = GpuProbe.findPreferredDevice(GpuNoiseConfig.GpuVendorPreference.AUTO);

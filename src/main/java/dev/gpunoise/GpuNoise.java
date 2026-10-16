@@ -48,6 +48,15 @@ public final class GpuNoise {
     }
 
     private void onServerStarted(ServerStartedEvent event) {
+        if (Boolean.getBoolean("gpunoise.vulkanSmoke")) {
+            LOGGER.info("Running Vulkan CI smoke inside the initialized NeoForge server");
+            try {
+                VulkanCiSmoke.main(new String[0]);
+                LOGGER.info("GPU_NOISE_VULKAN_SMOKE_PASSED");
+            } catch (Exception exception) {
+                throw new IllegalStateException("Vulkan CI smoke failed", exception);
+            }
+        }
         if (!Boolean.getBoolean("gpunoise.chunkyBenchmark")) return;
         var server = event.getServer();
         server.execute(() -> {

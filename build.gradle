@@ -87,6 +87,7 @@ runs {
         systemProperty 'gpunoise.fullBlockOutput', System.getProperty('gpunoise.fullBlockOutput', 'false')
         systemProperty 'gpunoise.profileTerrain', System.getProperty('gpunoise.profileTerrain', 'false')
         systemProperty 'gpunoise.disableChunkWriter', System.getProperty('gpunoise.disableChunkWriter', 'false')
+        systemProperty 'gpunoise.vulkanSmoke', System.getProperty('gpunoise.vulkanSmoke', 'false')
         argument '--nogui'
         def configuredServerPort = providers.gradleProperty('gpunoiseServerPort')
         if (configuredServerPort.isPresent()) {
@@ -312,15 +313,8 @@ tasks.register('compileGpuShaders') {
     }
 }
 
-// Runs the production graph shaders against a headless Vulkan device. CI uses
-// Mesa Lavapipe, so this validates dispatch and readback without a physical GPU.
-tasks.register('vulkanSmoke', JavaExec) {
-    group = 'verification'
-    description = 'Executes the density graph and terrain grid shaders on Vulkan.'
-    dependsOn(tasks.named('classes'), tasks.named('compileGpuShaders'))
-    classpath = sourceSets.main.runtimeClasspath + configurations.lwjglNatives
-    mainClass = 'dev.gpunoise.VulkanCiSmoke'
-}
+// The Vulkan smoke runs from the initialized CI server lifecycle so Minecraft
+// and NeoForge registries are available to the Java bytecode fixtures.
 
 // Example configuration to allow publishing using the maven-publish plugin
 publishing {

@@ -130,6 +130,11 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
         "-Dgpunoise.chunkyCenterZ=0",
         f"-Dgpunoise.forceCpuTerrain={str(force_cpu).lower()}",
     ]
+    run_vulkan_smoke = force_cpu and repetition == 1
+    if run_vulkan_smoke:
+        # Run registry-dependent compiler fixtures after NeoForge has fully
+        # booted. A standalone JavaExec has no LoadingModList or mod lifecycle.
+        command.append("-Dgpunoise.vulkanSmoke=true")
     if not force_cpu:
         # Exercise the Vulkan interpolation buffer through NoiseChunk's
         # authoritative final-density callback; per-chunk samples compare the
@@ -205,6 +210,9 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
                 raise RuntimeError("GPU benchmark completed without any GPU terrain cache being consumed")
             if "GPU terrain grid parity:" not in log_path.read_text(encoding="utf-8"):
                 raise RuntimeError("GPU terrain grid parity check did not run")
+
+        if run_vulkan_smoke and "GPU_NOISE_VULKAN_SMOKE_PASSED" not in log_path.read_text(encoding="utf-8"):
+            raise RuntimeError("Vulkan server lifecycle smoke did not report success")
 
         try:
             stop_server_with_rcon()
