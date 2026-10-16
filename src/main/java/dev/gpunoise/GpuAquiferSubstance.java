@@ -59,14 +59,24 @@ final class GpuAquiferSubstance {
         if (nearThreshold(firstResult)) return output(CPU_FALLBACK, 0, false);
         if (firstResult > 0.0) return output(RETURN_DEFAULT, 0, false);
 
-        double similarity12 = similarity(input.distance1, input.distance2);
-        if (similarity12 > 0.0) {
-            double contribution12 = similarity01 * similarity12
-                    * pressure(input.y, input.level1, input.level2,
-                            input.kind1, input.kind2, input.barrier);
-            double secondResult = input.density + contribution12;
+        double similarity02 = similarity(input.distance0, input.distance2);
+        if (similarity02 > 0.0) {
+            double contribution02 = similarity01 * similarity02
+                    * pressure(input.y, input.level0, input.level2,
+                            input.kind0, input.kind2, input.barrier);
+            double secondResult = input.density + contribution02;
             if (nearThreshold(secondResult)) return output(CPU_FALLBACK, 0, false);
             if (secondResult > 0.0) return output(RETURN_DEFAULT, 0, false);
+        }
+
+        double similarity12 = similarity(input.distance1, input.distance2);
+        if (similarity12 > 0.0) {
+            double contribution12 = similarity12
+                    * pressure(input.y, input.level1, input.level2,
+                            input.kind1, input.kind2, input.barrier);
+            double thirdResult = input.density + contribution12;
+            if (nearThreshold(thirdResult)) return output(CPU_FALLBACK, 0, false);
+            if (thirdResult > 0.0) return output(RETURN_DEFAULT, 0, false);
         }
         return output(RETURN_STATE, input.nearestStateId, true);
     }

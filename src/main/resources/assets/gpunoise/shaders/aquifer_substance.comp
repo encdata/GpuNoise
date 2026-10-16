@@ -103,16 +103,31 @@ void main() {
         return;
     }
 
-    float similarity12 = similarity(r.distance1, r.distance2);
-    if (similarity12 > 0.0) {
-        float contribution12 = similarity01 * similarity12 * pressure(r.y,
-                r.level1, r.level2, r.kind1, r.kind2, r.barrier);
-        float secondResult = r.density + contribution12;
+    float similarity02 = similarity(r.distance0, r.distance2);
+    if (similarity02 > 0.0) {
+        float contribution02 = similarity01 * similarity02 * pressure(r.y,
+                r.level0, r.level2, r.kind0, r.kind2, r.barrier);
+        float secondResult = r.density + contribution02;
         if (abs(secondResult) <= PRECISION_EPSILON) {
             emit(i, CPU_FALLBACK, 0u, 0u);
             return;
         }
         if (secondResult > 0.0) {
+            emit(i, RETURN_DEFAULT, 0u, 0u);
+            return;
+        }
+    }
+
+    float similarity12 = similarity(r.distance1, r.distance2);
+    if (similarity12 > 0.0) {
+        float contribution12 = similarity12 * pressure(r.y,
+                r.level1, r.level2, r.kind1, r.kind2, r.barrier);
+        float thirdResult = r.density + contribution12;
+        if (abs(thirdResult) <= PRECISION_EPSILON) {
+            emit(i, CPU_FALLBACK, 0u, 0u);
+            return;
+        }
+        if (thirdResult > 0.0) {
             emit(i, RETURN_DEFAULT, 0u, 0u);
             return;
         }
