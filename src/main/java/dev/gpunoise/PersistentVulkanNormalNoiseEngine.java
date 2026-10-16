@@ -657,7 +657,43 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private NativeBuffer deviceLocalBuffer(long size,MemoryStack s){
         return createBuffer(size,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,s);
     }
-    private NativeBuffer createBuffer(long size,int properties,MemoryStack s){VkBufferCreateInfo i=VkBufferCreateInfo.calloc(s).sType$Default().size(size).usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK_BUFFER_USAGE_TRANSFER_SRC_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT).sharingMode(VK_SHARING_MODE_EXCLUSIVE);LongBuffer h=s.longs(0);check(vkCreateBuffer(device,i,null,h),"create buffer");VkMemoryRequirements r=VkMemoryRequirements.malloc(s);vkGetBufferMemoryRequirements(device,h.get(0),r);VkPhysicalDeviceMemoryProperties m=VkPhysicalDeviceMemoryProperties.malloc(s);vkGetPhysicalDeviceMemoryProperties(physical,m);int t=-1;for(int x=0;x<m.memoryTypeCount();x++)if((r.memoryTypeBits()&(1<<x))!=0&&(m.memoryTypes(x).propertyFlags()&properties)==properties){t=x;break;}if(t<0)throw new IllegalStateException("no compatible Vulkan memory");VkMemoryAllocateInfo a=VkMemoryAllocateInfo.calloc(s).sType$Default().allocationSize(r.size()).memoryTypeIndex(t);LongBuffer mh=s.longs(0);check(vkAllocateMemory(device,a,null,mh),"allocate");check(vkBindBufferMemory(device,h.get(0),mh.get(0),0),"bind");return new NativeBuffer(h.get(0),mh.get(0),size,(properties&VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)!=0);}
+    private NativeBuffer createBuffer(long size, int properties, MemoryStack stack) {
+        VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack).sType$Default()
+                .size(size)
+                .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+                        | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT)
+                .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+        LongBuffer bufferHandle = stack.longs(0);
+        check(vkCreateBuffer(device, bufferInfo, null, bufferHandle), "create buffer");
+
+        VkMemoryRequirements requirements = VkMemoryRequirements.malloc(stack);
+        vkGetBufferMemoryRequirements(device, bufferHandle.get(0), requirements);
+        VkPhysicalDeviceMemoryProperties memoryProperties = VkPhysicalDeviceMemoryProperties.malloc(stack);
+        vkGetPhysicalDeviceMemoryProperties(physical, memoryProperties);
+        int memoryType = -1;
+        for (int index = 0; index < memoryProperties.memoryTypeCount(); index++) {
+            int flags = memoryProperties.memoryTypes(index).propertyFlags();
+            if ((requirements.memoryTypeBits() & (1 << index)) != 0 && (flags & properties) == properties) {
+                memoryType = index;
+                break;
+            }
+        }
+        if (memoryType < 0) throw new IllegalStateException("no compatible Vulkan memory");
+
+        int actualFlags = memoryProperties.memoryTypes(memoryType).propertyFlags();
+        VkMemoryAllocateInfo allocateInfo = VkMemoryAllocateInfo.calloc(stack).sType$Default()
+                .allocationSize(requirements.size()).memoryTypeIndex(memoryType);
+        LongBuffer memoryHandle = stack.longs(0);
+        check(vkAllocateMemory(device, allocateInfo, null, memoryHandle), "allocate");
+        check(vkBindBufferMemory(device, bufferHandle.get(0), memoryHandle.get(0), 0), "bind");
+
+        // Lavapipe and unified-memory GPUs often expose device-local storage
+        // that is also coherent and host-visible. Map that storage once and
+        // write it directly instead of allocating transient staging buffers.
+        int coherentHostFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        boolean persistentlyMappable = (actualFlags & coherentHostFlags) == coherentHostFlags;
+        return new NativeBuffer(bufferHandle.get(0), memoryHandle.get(0), size, persistentlyMappable);
+    }
     private long shader(MemoryStack s)throws Exception{try(var in=getClass().getResourceAsStream("/assets/gpunoise/shaders/minecraft_noise_batch.comp.spv")){byte[] b=in.readAllBytes();ByteBuffer c=MemoryUtil.memAlloc(b.length).put(b).flip();try{VkShaderModuleCreateInfo i=VkShaderModuleCreateInfo.calloc(s).sType$Default().pCode(c);LongBuffer h=s.longs(0);check(vkCreateShaderModule(device,i,null,h),"shader");return h.get(0);}finally{MemoryUtil.memFree(c);}}}
     private long descriptorLayout(MemoryStack s){VkDescriptorSetLayoutBinding.Buffer b=VkDescriptorSetLayoutBinding.calloc(5,s);for(int i=0;i<5;i++)b.get(i).binding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);VkDescriptorSetLayoutCreateInfo i=VkDescriptorSetLayoutCreateInfo.calloc(s).sType$Default().pBindings(b);LongBuffer h=s.longs(0);check(vkCreateDescriptorSetLayout(device,i,null,h),"layout");return h.get(0);}
     private long pipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(8);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(descriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"pipeline layout");return h.get(0);}
