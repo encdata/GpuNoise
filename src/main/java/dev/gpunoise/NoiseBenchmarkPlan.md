@@ -55,8 +55,7 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   results do not meet the throughput or tail-latency goals, and Lavapipe is not
   a discrete-GPU performance measurement. Those runs forced diagnostic
   full-block output, so they are useful for comparing the scheduler but are
-  not the production cell-grid throughput baseline. The corrected production
-  mode benchmark is pending.
+  not the production cell-grid throughput baseline.
 - The subsequent complete-tile early-dispatch and spatial/layout queue
   partition changes also completed a paired diagnostic run: median CPU
   throughput was 41.724 CPS and Lavapipe was 30.508 CPS (paired ratio 0.733).
@@ -64,8 +63,16 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   p95 remained in the 2.5-second bucket, and queue wait was about 35-39 ms per
   chunk. These results used full-block diagnostic output. They show that the
   early-tile and layout partition changes did not yet fill 64-chunk batches or
-  remove the latency tail. A corrected production cell-grid benchmark and the
-  fullest-cluster candidate-selection benchmark are running.
+  remove the latency tail.
+- The first corrected production cell-grid run (commit `18a30d5`, radius 256
+  blocks, target 64) completed 1,089 chunks per repetition at median CPU 33.509
+  CPS and Lavapipe 21.780 CPS (paired ratio 0.642). Dispatches averaged
+  14.39-14.65 chunks. Chunk latency buckets were p50 2.5 seconds, p95 5
+  seconds, and p99 5 seconds. GPU cache use and zero CPU fallback gates passed.
+  The scheduler was still dispatching a single prefetched tile early, so the
+  96-target/no-early-tile experiment is a separate pending measurement. New CI
+  runs use a 1,600-block radius (100 chunks per direction) to measure sustained
+  pregen, with a one-hour Chunky timeout.
 
 ## Work passes
 
