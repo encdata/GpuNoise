@@ -45,10 +45,22 @@ public final class VulkanCiSmoke {
                     .get(60, TimeUnit.SECONDS);
             System.out.println("Vulkan CI smoke: terrain grid shader completed");
             assertConstantResults("terrain grid shader", gridResults, 8);
+
+            // Exercise the cell-grid to block-density interpolation shader
+            // used by the per-block terrain output path.
+            float[] corners = new float[8];
+            java.util.Arrays.fill(corners, EXPECTED);
+            ByteBuffer interpolationMetadata = GpuInterpolationBatch.metadata(
+                    1, 1, 1, 1, 2, 8, 8);
+            System.out.println("Vulkan CI smoke: dispatching block interpolation shader");
+            float[] blockResults = ring.submitInterpolation(corners, interpolationMetadata, 1, 8)
+                    .get(60, TimeUnit.SECONDS);
+            System.out.println("Vulkan CI smoke: block interpolation shader completed");
+            assertConstantResults("block interpolation shader", blockResults, 8);
         }
 
         System.out.println("Vulkan CI smoke passed on " + device.name()
-                + ": graph and terrain grid shaders returned the expected value.");
+                + ": coordinate, terrain grid, and block interpolation shaders returned the expected value.");
     }
 
     private static void assertConstantResults(String label, float[] values, int expectedCount) {
