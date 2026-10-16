@@ -52,7 +52,7 @@ public final class VulkanCiSmoke {
             for (int cornerY = 0; cornerY < 2; cornerY++) {
                 for (int cornerZ = 0; cornerZ < 2; cornerZ++) {
                     for (int cornerX = 0; cornerX < 2; cornerX++) {
-                        int corner = (cornerY * 2 + cornerZ) * 2 + cornerX;
+                        int corner = (cornerY * 2 + cornerX) * 2 + cornerZ;
                         corners[corner] = cornerX * 0.25f + cornerY + cornerZ * 2.0f;
                     }
                 }

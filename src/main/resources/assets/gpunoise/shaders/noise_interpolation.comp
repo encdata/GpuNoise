@@ -1,8 +1,8 @@
 #version 450
 layout(local_size_x = 64) in;
 
-// Eight density corners per cell, ordered like vanilla's trilinear interpolation:
-// x changes fastest, then z, then y.
+// Corners are read from the shared terrain lattice. Grid samples are ordered
+// Z-fastest, then X, then Y; root values are interleaved within each sample.
 layout(std430,set=0,binding=0) readonly buffer Corners { float corners[]; };
 layout(std430,set=0,binding=1) writeonly buffer Blocks { float blocks[]; };
 // Per chunk: corner offset, block offset, cellsX, cellsY, cellsZ,
@@ -42,12 +42,17 @@ void main(){
     uint cellX=x/blocksPerCellX, cellY=y/blocksPerCellY, cellZ=z/blocksPerCellX;
     vec3 t=vec3(x%blocksPerCellX,y%blocksPerCellY,z%blocksPerCellX)
         /vec3(float(blocksPerCellX),float(blocksPerCellY),float(blocksPerCellX));
-    uint cell=cornerOffset+((cellY*cellsZ+cellZ)*cellsX+cellX)*8u;
+    uint gridX=cellsX+1u, gridZ=cellsZ+1u;
+    uint cellSample=cornerOffset+((cellY*gridZ+cellZ)*gridX+cellX);
+    uint strideX=gridZ*rootStride;
+    uint strideY=gridX*gridZ*rootStride;
+    uint strideZ=rootStride;
     for(uint root=0u;root<outputStride;root++) {
-        float value=lerp3(corners[cell*rootStride+root],corners[(cell+1u)*rootStride+root],
-            corners[(cell+2u)*rootStride+root],corners[(cell+3u)*rootStride+root],
-            corners[(cell+4u)*rootStride+root],corners[(cell+5u)*rootStride+root],
-            corners[(cell+6u)*rootStride+root],corners[(cell+7u)*rootStride+root],t);
+        uint valueBase=cellSample*rootStride+root;
+        float value=lerp3(corners[valueBase],corners[valueBase+strideX],
+            corners[valueBase+strideY],corners[valueBase+strideY+strideX],
+            corners[valueBase+strideZ],corners[valueBase+strideZ+strideX],
+            corners[valueBase+strideY+strideZ],corners[valueBase+strideY+strideZ+strideX],t);
         blocks[blockOffset+index*outputStride+root]=value;
     }
 }
