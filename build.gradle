@@ -127,6 +127,10 @@ dependencies {
     // And its provides the option to then use net.minecraft as the group, and one of; client, server or joined as the module name, plus the game version as version.
     // For all intends and purposes: You can treat this dependency as if it is a normal library you would use.
     implementation "net.neoforged:neoforge:${neo_version}"
+    // ASM's tree API is used by the conservative runtime density-bytecode
+    // frontend. Directly declaring it avoids relying on NeoForge/Mixin's
+    // transitive implementation details.
+    implementation 'org.ow2.asm:asm-tree:9.7.1'
     // Vulkan Java bindings for the dedicated-server compute backend. These are
     // bundled in the legacy -all artifact for standalone servers.
     jarJar(implementation("org.lwjgl:lwjgl-vulkan:${lwjgl_version}")) {

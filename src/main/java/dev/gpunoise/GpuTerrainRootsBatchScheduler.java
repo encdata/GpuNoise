@@ -25,6 +25,10 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     // promptly instead of waiting for neighbors that may never arrive.
     private static final long BATCH_WINDOW_NANOS = 20_000_000L;
     private final BlockingQueue<Pending> queue = new ArrayBlockingQueue<>(256);
+    // Grid metadata is small and the Vulkan submission is asynchronous. Keep a
+    // bounded pool alive until each submission has consumed its metadata rather
+    // than allocating native buffers for every dispatch or reusing one too soon.
+    private final BlockingQueue<DispatchMetadata> metadataPool = new ArrayBlockingQueue<>(8);
     private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "GPU terrain roots batcher");
         t.setDaemon(true);
@@ -36,8 +40,10 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     private final AtomicLong dispatchCount = new AtomicLong();
     private final AtomicLong totalChunksDispatched = new AtomicLong();
     private final AtomicLong totalSamplesDispatched = new AtomicLong();
+    private final AtomicLong totalQueueWaitNanos = new AtomicLong();
 
     GpuTerrainRootsBatchScheduler() {
+        for (int i = 0; i < 8; i++) metadataPool.add(new DispatchMetadata());
         worker.execute(this::run);
     }
 
@@ -54,7 +60,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                     "one chunk exceeds GPU terrain block-output capacity"));
             return future;
         }
-        if (closed || !queue.offer(new Pending(grid, future)))
+        if (closed || !queue.offer(new Pending(grid, future, System.nanoTime())))
             future.completeExceptionally(new IllegalStateException("GPU terrain roots queue is full"));
         return future;
     }
@@ -112,10 +118,14 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 dispatchCount.incrementAndGet();
                 totalChunksDispatched.addAndGet(batch.size());
                 totalSamplesDispatched.addAndGet(input);
+                long queueWaitNanos = 0L;
+                for (Pending item : batch) queueWaitNanos += System.nanoTime() - item.enqueuedNanos;
+                totalQueueWaitNanos.addAndGet(queueWaitNanos);
                 if ((dispatchCount.get() & 63L) == 0L) {
-                    GpuNoise.LOGGER.info("GPU terrain roots batching: avgChunksPerDispatch={}, avgSamplesPerDispatch={}",
+                    GpuNoise.LOGGER.info("GPU terrain roots batching: avgChunksPerDispatch={}, avgSamplesPerDispatch={}, avgQueueWaitMsPerChunk={}",
                             (double) totalChunksDispatched.get() / dispatchCount.get(),
-                            (double) totalSamplesDispatched.get() / dispatchCount.get());
+                            (double) totalSamplesDispatched.get() / dispatchCount.get(),
+                            totalQueueWaitNanos.get() / (double) totalChunksDispatched.get() / 1_000_000.0);
                 }
                 dispatch(batch, samplesPerChunk, input);
             }
@@ -200,13 +210,21 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     }
 
     private void dispatch(List<Pending> batch, int samplesPerChunk, int inputCount) {
-        java.nio.ByteBuffer metadata = java.nio.ByteBuffer.allocateDirect(batch.size() * 32)
-                .order(java.nio.ByteOrder.nativeOrder());
-        int blocksPerChunk = GpuTerrainRuntime.terrainBlockOutputEnabled()
-                ? blocksPerChunk(batch.get(0).grid) : 0;
-        java.nio.ByteBuffer outputMetadata = java.nio.ByteBuffer.allocateDirect(
-                GpuTerrainRuntime.terrainBlockOutputEnabled() ? batch.size() * 32 : 0)
-                .order(java.nio.ByteOrder.nativeOrder());
+        DispatchMetadata buffers;
+        try {
+            buffers = metadataPool.take();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            IllegalStateException failure = new IllegalStateException("interrupted waiting for terrain metadata buffers", interrupted);
+            for (Pending item : batch) item.future.completeExceptionally(failure);
+            return;
+        }
+        java.nio.ByteBuffer metadata = buffers.grid;
+        java.nio.ByteBuffer outputMetadata = buffers.output;
+        metadata.clear();
+        outputMetadata.clear();
+        boolean blockOutput = GpuTerrainRuntime.terrainBlockOutputEnabled();
+        int blocksPerChunk = blockOutput ? blocksPerChunk(batch.get(0).grid) : 0;
         int cornerOffset = 0;
         int blockOffset = 0;
         int outputRoots = GpuTerrainRuntime.terrainBlockOutputRootCount();
@@ -215,7 +233,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
             metadata.putInt(g.minX()).putInt(g.minY()).putInt(g.minZ())
                     .putInt(g.gridX()).putInt(g.gridY()).putInt(g.gridZ())
                     .putInt(g.cellWidth()).putInt(g.cellHeight());
-            if (!GpuTerrainRuntime.terrainBlockOutputEnabled()) continue;
+            if (!blockOutput) continue;
             int cellsX = g.gridX() - 1;
             int cellsY = g.gridY() - 1;
             int cellsZ = g.gridZ() - 1;
@@ -226,21 +244,32 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
             blockOffset += blocksPerChunk;
         }
         metadata.flip();
+        if (!blockOutput) outputMetadata.limit(0);
         outputMetadata.flip();
-        GpuTerrainRuntime.submitTerrainGridInterpolated(metadata, batch.size(), samplesPerChunk,
-                outputMetadata, blocksPerChunk).whenComplete((values, failure) -> {
-            int cornerOffset0 = 0;
-            int blockOffset0 = 0;
-            int roots = failure == null && values != null && inputCount != 0 ? values.roots() : 0;
-            for (Pending item : batch) {
-                if (failure != null) item.future.completeExceptionally(failure);
-                else {
-                    item.future.complete(values.slice(cornerOffset0, item.grid.sampleCount(), blockOffset0, blocksPerChunk));
+        try {
+            GpuTerrainRuntime.submitTerrainGridInterpolated(metadata, batch.size(), samplesPerChunk,
+                    outputMetadata, blocksPerChunk).whenComplete((values, failure) -> {
+                try {
+                    int cornerOffset0 = 0;
+                    int blockOffset0 = 0;
+                    for (Pending item : batch) {
+                        if (failure != null) item.future.completeExceptionally(failure);
+                        else {
+                            item.future.complete(values.slice(cornerOffset0, item.grid.sampleCount(), blockOffset0, blocksPerChunk));
+                        }
+                        cornerOffset0 += item.grid.sampleCount();
+                        blockOffset0 += blocksPerChunk;
+                    }
+                } catch (Throwable completionFailure) {
+                    for (Pending item : batch) item.future.completeExceptionally(completionFailure);
+                } finally {
+                    metadataPool.offer(buffers);
                 }
-                cornerOffset0 += item.grid.sampleCount();
-                blockOffset0 += blocksPerChunk;
-            }
-        });
+            });
+        } catch (Throwable submissionFailure) {
+            metadataPool.offer(buffers);
+            for (Pending item : batch) item.future.completeExceptionally(submissionFailure);
+        }
     }
 
     private static int blocksPerChunk(GpuTerrainGrid grid) {
@@ -261,6 +290,14 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         worker.shutdownNow();
     }
 
-    private record Pending(GpuTerrainGrid grid, CompletableFuture<GpuTerrainBatchResult> future) {}
+    private record Pending(GpuTerrainGrid grid, CompletableFuture<GpuTerrainBatchResult> future,
+                           long enqueuedNanos) {}
+
+    private static final class DispatchMetadata {
+        final java.nio.ByteBuffer grid = java.nio.ByteBuffer.allocateDirect(MAX_CHUNKS * 32)
+                .order(java.nio.ByteOrder.nativeOrder());
+        final java.nio.ByteBuffer output = java.nio.ByteBuffer.allocateDirect(MAX_CHUNKS * 32)
+                .order(java.nio.ByteOrder.nativeOrder());
+    }
 
 }

@@ -19,7 +19,7 @@ final class GpuDensityGraphBuffer {
             Map.entry("MulOrAdd", 4), Map.entry("Clamp", 5), Map.entry("Mapped", 6),
             Map.entry("Marker", 7), Map.entry("Shift", 8), Map.entry("ShiftA", 9),
             Map.entry("ShiftB", 10), Map.entry("ShiftedNoise", 11), Map.entry("Spline", 12),
-            Map.entry("BlendedNoise", 13), Map.entry("YClampedGradient", 14), Map.entry("BlendDensity", 15), Map.entry("RangeChoice", 16), Map.entry("WeirdScaledSampler", 17), Map.entry("TectonicConfigNoise", 18), Map.entry("TectonicInvert", 19)
+            Map.entry("BlendedNoise", 13), Map.entry("YClampedGradient", 14), Map.entry("BlendDensity", 15), Map.entry("RangeChoice", 16), Map.entry("WeirdScaledSampler", 17), Map.entry("TectonicConfigNoise", 18), Map.entry("TectonicInvert", 19), Map.entry("GpuCoordinate", 20), Map.entry("GpuMath", 21), Map.entry("GpuCompare", 22), Map.entry("GpuSelect", 23), Map.entry("GpuInt", 24), Map.entry("GpuFloat", 25), Map.entry("GpuCast", 26)
     );
 
     private GpuDensityGraphBuffer() {}
@@ -157,19 +157,95 @@ final class GpuDensityGraphBuffer {
         }
     }
 
-    private static int operation(String payload) {
+    static int operation(String payload) {
         if (payload == null) return 0;
         return switch (payload) {
             case "ADD" -> 1;
             case "MUL" -> 2;
             case "MIN" -> 3;
             case "MAX" -> 4;
+            case "EXPR_ADD" -> 1;
+            case "EXPR_SUBTRACT" -> 2;
+            case "EXPR_MULTIPLY" -> 3;
+            case "DIVIDE" -> 4;
+            case "EXPR_DIVIDE" -> 4;
+            case "EXPR_MIN" -> 5;
+            case "EXPR_MAX" -> 6;
+            case "REMAINDER", "EXPR_REMAINDER" -> 7;
+            case "ATAN2", "EXPR_ATAN2" -> 8;
+            case "POW", "EXPR_POW" -> 9;
+            case "EQ" -> 11;
+            case "NE" -> 12;
+            case "LT" -> 13;
+            case "LE" -> 14;
+            case "GT" -> 15;
+            case "GE" -> 16;
+            case "DCMPL_EQ" -> 17;
+            case "DCMPL_NE" -> 18;
+            case "DCMPL_LT" -> 19;
+            case "DCMPL_LE" -> 20;
+            case "DCMPL_GT" -> 21;
+            case "DCMPL_GE" -> 22;
+            case "DCMPG_EQ" -> 23;
+            case "DCMPG_NE" -> 24;
+            case "DCMPG_LT" -> 25;
+            case "DCMPG_LE" -> 26;
+            case "DCMPG_GT" -> 27;
+            case "DCMPG_GE" -> 28;
+            case "FCMPL_EQ" -> 29;
+            case "FCMPL_NE" -> 30;
+            case "FCMPL_LT" -> 31;
+            case "FCMPL_LE" -> 32;
+            case "FCMPL_GT" -> 33;
+            case "FCMPL_GE" -> 34;
+            case "FCMPG_EQ" -> 35;
+            case "FCMPG_NE" -> 36;
+            case "FCMPG_LT" -> 37;
+            case "FCMPG_LE" -> 38;
+            case "FCMPG_GT" -> 39;
+            case "FCMPG_GE" -> 40;
+            case "X" -> 0;
+            case "Y" -> 1;
+            case "Z" -> 2;
             case "ABS" -> 5;
             case "SQUARE" -> 6;
             case "CUBE" -> 7;
             case "HALF_NEGATIVE" -> 8;
             case "QUARTER_NEGATIVE" -> 9;
             case "SQUEEZE" -> 10;
+            case "FLOOR" -> 11;
+            case "CEIL" -> 12;
+            case "SQRT" -> 13;
+            case "SIN" -> 14;
+            case "COS" -> 15;
+            case "EXP" -> 16;
+            case "LOG" -> 17;
+            case "TANH" -> 18;
+            case "IADD" -> 1;
+            case "ISUB" -> 2;
+            case "IMUL" -> 3;
+            case "IDIV" -> 4;
+            case "IREM" -> 5;
+            case "IAND" -> 10;
+            case "IOR" -> 11;
+            case "IXOR" -> 12;
+            case "ISHL" -> 13;
+            case "ISHR" -> 14;
+            case "IUSHR" -> 15;
+            case "INEG" -> 6;
+            case "I2B" -> 7;
+            case "I2C" -> 8;
+            case "I2S" -> 9;
+            case "FADD" -> 1;
+            case "FSUB" -> 2;
+            case "FMUL" -> 3;
+            case "FDIV" -> 4;
+            case "FREM" -> 5;
+            case "FNEG" -> 6;
+            case "I2F" -> 1;
+            case "D2F" -> 2;
+            case "F2I" -> 3;
+            case "D2I" -> 4;
             case "TYPE1" -> 0;
             case "TYPE2" -> 1;
             case "true" -> 1;

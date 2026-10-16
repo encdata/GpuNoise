@@ -58,13 +58,57 @@ parity checks.
   positional float arrays.
 - Add per-function translator registration, a built-in operation catalog,
   compile diagnostics, and capability checks. The first adapter API can lower
-  custom functions to supported Minecraft density operations. Translator
+  custom functions to supported Minecraft density operations. Registration is
+  now frozen when graph compilation begins so worldgen workers see a stable
+  adapter set. Translator
   registration now supports exact classes and mod API supertypes; exact matches
   win, the closest supertype wins, and equally specific conflicts fail loudly.
 - Add a typed expression builder for custom noise algorithms that cannot be
   represented by vanilla `DensityFunctions`, including explicit sampler
-  inputs and coordinate transforms. Current adapters still lower to existing
-  density functions and cannot describe a custom shader operation directly.
+  inputs and coordinate transforms. Minecraft `NormalNoise` samplers are now
+  explicit expression inputs; custom sampler algorithms and resource types
+  remain future work.
+- The first direct expression IR now has typed X/Y/Z inputs, finite constants,
+  explicit `NormalNoise` inputs, binary arithmetic, clamp, and the shader's
+  absolute, square, cube, half-negative, quarter-negative, and squeeze mappings,
+  comparison/select operations for bytecode branches, with finite constant
+  subgraphs folded, identical pure nodes shared, and
+  unreachable nodes and samplers removed before lowering. Graph-shape checks
+  validate the compact IR.
+  before packing. A Java IR evaluator now provides an independent numerical
+  reference; it does not yet prove an adapter matches its original Java
+  function. The point-sample Vulkan shader understands its coordinate and
+  arithmetic opcodes. Division follows Java IEEE behavior, including zero
+  divisors. Terrain-grid compilation lowers constants, exact X/Y/Z coordinate nodes,
+  `NormalNoise`, clamp, mapping, arithmetic, comparisons, and selections into
+  shader operations. Dynamic double division now uses the shader’s IEEE
+  floating-point path; integer division still requires a constant nonzero
+  divisor. Differential checks against each
+  adapter's original Java function remain necessary for each newly supported
+  operation before broad modpack terrain graphs can be enabled by default.
+- Custom density compilation now also inspects `compute(FunctionContext)` JVM
+  bytecode after explicit translators. It recursively inlines bounded pure
+  same-class helpers, carries final `DensityFunction` fields as graph
+  dependencies and inlines class/interface static-final primitive constants, expands bounded forward branches into compare/select nodes,
+  lowers bounded integer table/lookup switches through the same IR, and
+  recognizes `floor`, `ceil`, `sqrt`, `sin`, `cos`, `exp`, `log`, and the
+  `Mth.map`, `clampedMap`, `inverseLerp`, `clampedLerp`, `lerp2`, and
+  `lerp3`, plus `absMax`, `smoothstep`, `atan2`, `pow`, `signum`, and `tanh`.
+  Java double division and double/float remainder are represented explicitly;
+  integer division and remainder require a compile-time nonzero divisor. Java
+  32-bit arithmetic, bitwise AND/OR/XOR, signed/unsigned shifts, and
+  byte/short/char narrowing preserve integer semantics in dedicated IR nodes. Float arithmetic
+  uses a dedicated per-instruction IR that rounds at each JVM float operation;
+  int/float/double casts have explicit nodes. Transcendental GPU operations are
+  validated against the Java CPU reference with the configured parity
+  tolerance.
+  `FCMPL`/`FCMPG` and `DCMPL`/`DCMPG` NaN ordering is retained. Loops with
+  statically known exits unroll up to 64 iterations; dynamic loops and
+  dynamic branches inside loop bodies remain CPU fallbacks. No mod Java is
+  executed from a shader. The Mesa smoke path checks
+  nested ternaries, a noise-dependent floating branch, and a switch expression
+  through lowering, packing, and dispatch against Java results. This grows the
+  automatic compiler while preserving the vanilla implementation as oracle.
 - Retain the original Java function as the reference evaluator. Compare outputs
   over boundary, negative-coordinate, high-altitude, and random samples.
 - Allow unsupported nodes to form explicit CPU islands in a dependency graph
@@ -242,3 +286,11 @@ pressure ties, global lava, water over lava, and CPU fallback thresholds. The
 Lavapipe CPS (0.613x), with 15.078 average chunks per dispatch and no reported
 GPU terrain fallbacks. This remains a standalone kernel; the result does not
 measure aquifer decision integration or final block selection.
+
+The terrain roots batcher now reuses a bounded pool of direct metadata buffers
+until each asynchronous Vulkan submission completes. This removes per-dispatch
+native metadata allocation without letting an in-flight submission observe
+overwritten records. Periodic batch telemetry now includes enqueue-to-dispatch
+wait per chunk as well as average batch fill. The next CI run must establish
+whether the allocation reduction changes end-to-end throughput; Lavapipe is
+still only a CPU Vulkan backend and cannot establish discrete-GPU speedup.

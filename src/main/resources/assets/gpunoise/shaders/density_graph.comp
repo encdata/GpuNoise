@@ -86,6 +86,97 @@ float improvedSmear(vec3 pos, vec4 params, uint base, float yScale, float yMax){
     return mix(mix(mix(n0,n1,x),mix(n2,n3,x),y),mix(mix(n4,n5,x),mix(n6,n7,x),y),z);
 }
 double fade64(double v){return v*v*v*(v*(v*6.0-15.0)+10.0);}
+double javaRemainder(double x,double y){
+    if(isinf(y)&&!isinf(x)) return x;
+    return x-trunc(x/y)*y;
+}
+int signedIntFromBits(uint bits){
+    return bits<=2147483647u?int(bits):int(double(bits)-4294967296.0);
+}
+double javaIntOperation(uint operation,double leftValue,double rightValue){
+    int left=int(leftValue);
+    if(operation==6u)return double(signedIntFromBits(0u-uint(left)));
+    if(operation==7u){int value=left&255;return double(value>=128?value-256:value);}
+    if(operation==8u)return double(left&65535);
+    if(operation==9u){int value=left&65535;return double(value>=32768?value-65536:value);}
+    int right=int(rightValue);
+    if(operation==1u)return double(signedIntFromBits(uint(left)+uint(right)));
+    if(operation==2u)return double(signedIntFromBits(uint(left)-uint(right)));
+    if(operation==3u)return double(signedIntFromBits(uint(left)*uint(right)));
+    if(operation==10u)return double(signedIntFromBits(uint(left)&uint(right)));
+    if(operation==11u)return double(signedIntFromBits(uint(left)|uint(right)));
+    if(operation==12u)return double(signedIntFromBits(uint(left)^uint(right)));
+    uint shift=uint(right&31);
+    if(operation==13u)return double(signedIntFromBits(uint(left)<<shift));
+    if(operation==14u)return double(left>>int(shift));
+    if(operation==15u)return double(signedIntFromBits(uint(left)>>shift));
+    if(right==0)return 0.0; // The compiler and graph validator reject this input.
+    if(operation==4u){
+        if(left==(-2147483647-1)&&right==-1)return double(left);
+        return double(left/right);
+    }
+    if(operation==5u){
+        if(left==(-2147483647-1)&&right==-1)return 0.0;
+        return double(left%right);
+    }
+    return 0.0;
+}
+double javaDoubleToInt(double value){
+    if(isnan(value))return 0.0;
+    if(value>=2147483647.0)return 2147483647.0;
+    if(value<=-2147483648.0)return -2147483648.0;
+    return double(int(value));
+}
+double javaFloatOperation(uint operation,double leftValue,double rightValue){
+    float left=float(leftValue);
+    if(operation==6u)return double(-left);
+    float right=float(rightValue);
+    precise float result=0.0;
+    if(operation==1u)result=left+right;
+    else if(operation==2u)result=left-right;
+    else if(operation==3u)result=left*right;
+    else if(operation==4u)result=left/right;
+    else if(operation==5u){
+        if(isnan(left)||isnan(right)||isinf(left)||right==0.0)result=uintBitsToFloat(0x7fc00000u);
+        else if(isinf(right))result=left;
+        else result=float(double(left)-trunc(double(left)/double(right))*double(right));
+    }
+    return double(result);
+}
+double javaNumericCast(uint operation,double value){
+    if(operation==1u)return double(float(int(value)));
+    if(operation==2u)return double(float(value));
+    if(operation==3u)return javaDoubleToInt(double(float(value)));
+    if(operation==4u)return javaDoubleToInt(value);
+    return value;
+}
+double javaPow(double baseValue,double exponent){
+    if(exponent==0.0||baseValue==1.0)return 1.0;
+    if(isnan(baseValue)||isnan(exponent))return double(uintBitsToFloat(0x7fc00000u));
+    if(isinf(exponent)){
+        double magnitude=abs(baseValue);
+        if(magnitude==1.0)return double(uintBitsToFloat(0x7fc00000u));
+        bool grows=(magnitude>1.0)==(exponent>0.0);
+        return grows?double(uintBitsToFloat(0x7f800000u)):0.0;
+    }
+    bool integralExponent=exponent==trunc(exponent);
+    bool oddExponent=integralExponent&&mod(abs(exponent),2.0)==1.0;
+    double infinity=double(uintBitsToFloat(0x7f800000u));
+    if(baseValue==0.0){
+        bool negativeZero=(1.0/baseValue)<0.0;
+        bool negativeResult=negativeZero&&oddExponent;
+        if(exponent>0.0)return negativeResult?-0.0:0.0;
+        if(exponent<0.0)return negativeResult?-infinity:infinity;
+    }
+    if(isinf(baseValue)){
+        bool negativeResult=baseValue<0.0&&oddExponent;
+        if(exponent>0.0)return negativeResult?-infinity:infinity;
+        if(exponent<0.0)return negativeResult?-0.0:0.0;
+    }
+    if(baseValue<0.0&&!integralExponent)return double(uintBitsToFloat(0x7fc00000u));
+    double magnitude=pow(abs(baseValue),exponent);
+    return baseValue<0.0&&oddExponent?-magnitude:magnitude;
+}
 double grad64(uint base,int i,dvec3 d){return dot(dvec3(G[perm(base,i)&15u]),d);}
 double improvedSmear64(dvec3 pos, vec4 params, uint base, double yScale, double yMax){
     dvec3 v=pos+dvec3(params.xyz); dvec3 cell=floor(v); dvec3 d=v-cell;
@@ -134,7 +225,32 @@ float spaghettiRarity(float x, uint mapper){
 double mapValue(double x,uint op){
     if(op==5u)return abs(x); if(op==6u)return x*x; if(op==7u)return x*x*x;
     if(op==8u)return x>0?x:x*.5; if(op==9u)return x>0?x:x*.25;
-    if(op==10u){double v=clamp(x,-1.0,1.0);return v*.5-v*v*v/24.;} return x;
+    if(op==10u){double v=clamp(x,-1.0,1.0);return v*.5-v*v*v/24.;}
+    if(op==11u)return floor(x); if(op==12u)return ceil(x);
+    if(op==13u)return sqrt(x); if(op==14u)return sin(x);
+    if(op==15u)return cos(x); if(op==16u)return exp(x);
+    if(op==17u)return log(x); if(op==18u)return tanh(x); return x;
+}
+bool compareValues(double x,double y,uint mode){
+    if(mode>=17u&&mode<=40u){
+        double c;
+        bool greaterOnNaN=(mode>=23u&&mode<=28u)||mode>=35u;
+        if(isnan(x)||isnan(y)) c=greaterOnNaN?1.0:-1.0;
+        else c=x<y?-1.0:(x>y?1.0:0.0);
+        uint relation=mode<=22u?mode-16u:(mode<=28u?mode-22u:(mode<=34u?mode-28u:mode-34u));
+        if(relation==1u)return c==0.0;
+        if(relation==2u)return c!=0.0;
+        if(relation==3u)return c<0.0;
+        if(relation==4u)return c<=0.0;
+        if(relation==5u)return c>0.0;
+        return c>=0.0;
+    }
+    if(mode==11u)return x==y;
+    if(mode==12u)return x!=y;
+    if(mode==13u)return x<y;
+    if(mode==14u)return x<=y;
+    if(mode==15u)return x>y;
+    return x>=y;
 }
 double splineValue(double coordinate, uint base, uint count, double values[REGISTER_COUNT]) {
     if (count == 0u) return 0.0;
@@ -169,11 +285,14 @@ void main(){
     uint q = localIndex / uint(g.gridZ);
     uint gx = q % uint(g.gridX);
     uint gy = q / uint(g.gridX);
-    vec3 p = vec3(g.minX + int(gx) * g.cellWidth,
-                  g.minY + int(gy) * g.cellHeight,
-                  g.minZ + int(gz) * g.cellWidth);
+    int blockX = g.minX + int(gx) * g.cellWidth;
+    int blockY = g.minY + int(gy) * g.cellHeight;
+    int blockZ = g.minZ + int(gz) * g.cellWidth;
+    dvec3 pExact = dvec3(blockX, blockY, blockZ);
+    vec3 p = vec3(pExact);
 #else
     vec3 p=coordinates[sampleIndex].xyz;
+    dvec3 pExact=dvec3(p);
 #endif
     for(uint i=0;i<nodeCount;i++){
         Node n=nodes[i]; uint op=n.ids.x; double v=0.0;
@@ -190,7 +309,14 @@ void main(){
         else if(op==11u){vec3 q=vec3(p.x*n.params.x+float(values[n.ids.y]),p.y*n.params.y+float(values[n.ids.z]),p.z*n.params.x+float(values[n.ids.w]));v=double(normalNoise(q,uint(n.params.z)));}
         else if(op==12u){v=splineValue(values[n.ids.y],uint(n.params.x)*64u,uint(n.params.y),values);}
         else if(op==13u){v=blendedNoise64(p,uint(n.params.x));}
-        else if(op==14u){double t=clamp((double(p.y)-double(n.params.x))/(double(n.params.y)-double(n.params.x)),0.0,1.0);v=mix(double(n.params.z),double(n.params.w),t);}
+        else if(op==14u){double t=clamp((pExact.y-double(n.params.x))/(double(n.params.y)-double(n.params.x)),0.0,1.0);v=mix(double(n.params.z),double(n.params.w),t);}
+        else if(op==20u){v=n.meta.x==0u?pExact.x:(n.meta.x==1u?pExact.y:pExact.z);}
+        else if(op==21u){double x=values[n.ids.y],y=values[n.ids.z];if(n.meta.x==1u)v=x+y;else if(n.meta.x==2u)v=x-y;else if(n.meta.x==3u)v=x*y;else if(n.meta.x==4u)v=x/y;else if(n.meta.x==5u)v=min(x,y);else if(n.meta.x==7u)v=javaRemainder(x,y);else if(n.meta.x==8u)v=atan(x,y);else if(n.meta.x==9u)v=javaPow(x,y);else v=max(x,y);}
+        else if(op==22u)v=compareValues(values[n.ids.y],values[n.ids.z],n.meta.x)?1.0:0.0;
+        else if(op==23u)v=values[n.ids.y]!=0.0?values[n.ids.z]:values[n.ids.w];
+        else if(op==24u)v=javaIntOperation(n.meta.x,values[n.ids.y],n.meta.x==6u?0.0:values[n.ids.z]);
+        else if(op==25u)v=javaFloatOperation(n.meta.x,values[n.ids.y],n.meta.x==6u?0.0:values[n.ids.z]);
+        else if(op==26u)v=javaNumericCast(n.meta.x,values[n.ids.y]);
         else if(op==15u){
 #ifdef GRID_INPUT
             // Normal new-chunk terrain has the vanilla no-blending pair (0,1).

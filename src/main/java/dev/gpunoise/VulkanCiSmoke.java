@@ -13,6 +13,7 @@ public final class VulkanCiSmoke {
     private VulkanCiSmoke() {}
 
     public static void main(String[] args) throws Exception {
+        GpuDensityExpressionSmoke.verify();
         verifyTranslatorRegistry();
         GpuDevice device = GpuProbe.findPreferredDevice(GpuNoiseConfig.GpuVendorPreference.AUTO);
         if (device == null) throw new IllegalStateException("No Vulkan compute device found");
@@ -37,6 +38,189 @@ public final class VulkanCiSmoke {
             System.out.println("Vulkan CI smoke: coordinate graph shader completed");
             assertConstantResults("coordinate graph shader", graphResults, x.length);
 
+            GpuDensityGraph conditionalGraph = GpuDensityExpressionSmoke.conditionalGraphForVulkanSmoke();
+            float[] conditionalResults = ring.submitGraphRoots(conditionalGraph, x, y, z)
+                    .get(60, TimeUnit.SECONDS);
+            for (int sample = 0; sample < x.length; sample++) {
+                float expected = x[sample] < 0.0f ? -1.0f : (x[sample] == 0.0f ? 0.0f : 1.0f);
+                if (Math.abs(conditionalResults[sample] - expected) > 1.0e-6f) {
+                    throw new IllegalStateException("Conditional Java bytecode mismatch at sample " + sample
+                            + ": expected " + expected + ", got " + conditionalResults[sample]);
+                }
+            }
+
+            GpuDensityExpressionSmoke.VulkanBranchFixture floatingFixture =
+                    GpuDensityExpressionSmoke.floatingConditionalFixture();
+            float[] floatingBranchResults = ring.submitGraphRoots(floatingFixture.graph(), x, y, z)
+                    .get(60, TimeUnit.SECONDS);
+            for (int sample = 0; sample < x.length; sample++) {
+                double expected = floatingFixture.javaFunction().compute(
+                        new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(
+                                (int) x[sample], (int) y[sample], (int) z[sample]));
+                if (Math.abs(floatingBranchResults[sample] - expected) > 0.005) {
+                    throw new IllegalStateException("Floating conditional Java bytecode mismatch at sample "
+                            + sample + ": expected " + expected + ", got " + floatingBranchResults[sample]);
+                }
+            }
+
+            float[] switchX = {-7.0f, -1.0f, 0.0f, 1.0f, 2.0f, 100.0f};
+            float[] switchY = new float[switchX.length];
+            float[] switchZ = new float[switchX.length];
+            float[] switchResults = ring.submitGraphRoots(
+                    GpuDensityExpressionSmoke.switchGraphForVulkanSmoke(), switchX, switchY, switchZ)
+                    .get(60, TimeUnit.SECONDS);
+            float[] switchExpected = {2.0f, -1.0f, 0.0f, 1.0f, 2.0f, 2.0f};
+            for (int sample = 0; sample < switchX.length; sample++) {
+                if (Math.abs(switchResults[sample] - switchExpected[sample]) > 1.0e-6f) {
+                    throw new IllegalStateException("Switch Java bytecode mismatch at sample " + sample
+                            + ": expected " + switchExpected[sample] + ", got " + switchResults[sample]);
+                }
+            }
+
+            GpuDensityExpressionSmoke.VulkanBranchFixture mathFixture =
+                    GpuDensityExpressionSmoke.scalarMathFixture();
+            float[] mathX = {-81.0f, -1.0f, 0.0f, 17.0f, 192.0f};
+            float[] mathY = {-17.0f, 0.0f, 1.0f, 9.0f, 80.0f};
+            float[] mathZ = {-5.0f, 1.0f, 0.0f, 31.0f, -64.0f};
+            float[] mathResults = ring.submitGraphRoots(mathFixture.graph(), mathX, mathY, mathZ)
+                    .get(60, TimeUnit.SECONDS);
+            for (int sample = 0; sample < mathX.length; sample++) {
+                double expected = mathFixture.javaFunction().compute(
+                        new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(
+                                (int) mathX[sample], (int) mathY[sample], (int) mathZ[sample]));
+                if (Math.abs(mathResults[sample] - expected) > 0.005) {
+                    throw new IllegalStateException("Scalar Math Java bytecode mismatch at sample " + sample
+                            + ": expected " + expected + ", got " + mathResults[sample]);
+                }
+            }
+
+            GpuDensityExpressionSmoke.VulkanBranchFixture integerFixture =
+                    GpuDensityExpressionSmoke.integerMathFixture();
+            float[] integerX = {-30_000_001.0f, -17.0f, -1.0f, 0.0f, 19.0f, 30_000_001.0f};
+            float[] integerZeros = new float[integerX.length];
+            float[] integerResults = ring.submitGraphRoots(integerFixture.graph(), integerX,
+                    integerZeros, integerZeros).get(60, TimeUnit.SECONDS);
+            for (int sample = 0; sample < integerX.length; sample++) {
+                int xValue = (int) integerX[sample];
+                double expected = integerFixture.javaFunction().compute(
+                        new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(xValue, 0, 0));
+                if (Math.abs(integerResults[sample] - expected) > 128.0) {
+                    throw new IllegalStateException("Integer arithmetic Java bytecode mismatch at sample " + sample
+                            + ": expected " + expected + ", got " + integerResults[sample]);
+                }
+            }
+            GpuDensityExpressionSmoke.VulkanBranchFixture bitwiseFixture =
+                    GpuDensityExpressionSmoke.integerBitwiseFixture();
+            float[] bitwiseX = {-30_000_001.0f, -257.0f, -1.0f, 0.0f,
+                    1.0f, 19.0f, 257.0f, 30_000_001.0f};
+            float[] bitwiseZeros = new float[bitwiseX.length];
+            float[] bitwiseResults = ring.submitGraphRoots(bitwiseFixture.graph(), bitwiseX,
+                    bitwiseZeros, bitwiseZeros).get(60, TimeUnit.SECONDS);
+            for (int sample = 0; sample < bitwiseX.length; sample++) {
+                int xValue = (int) bitwiseX[sample];
+                double expected = bitwiseFixture.javaFunction().compute(
+                        new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(xValue, 0, 0));
+                if (Math.abs(bitwiseResults[sample] - expected) > 0.005) {
+                    throw new IllegalStateException("Integer bitwise/shift Java bytecode mismatch at sample " + sample
+                            + ": expected " + expected + ", got " + bitwiseResults[sample]);
+                }
+            }
+            GpuDensityExpressionSmoke.VulkanBranchFixture overflowFixture =
+                    GpuDensityExpressionSmoke.integerDivisionOverflowFixture();
+            float[] overflowX = {-1.0f, 0.0f, 1.0f};
+            float[] overflowZeros = new float[overflowX.length];
+            float[] overflowResults = ring.submitGraphRoots(overflowFixture.graph(), overflowX,
+                    overflowZeros, overflowZeros).get(60, TimeUnit.SECONDS);
+            for (int sample = 0; sample < overflowX.length; sample++) {
+                int xValue = (int) overflowX[sample];
+                double expected = overflowFixture.javaFunction().compute(
+                        new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(xValue, 0, 0));
+                if (overflowResults[sample] != (float) expected) {
+                    throw new IllegalStateException("Integer MIN_VALUE / -1 mismatch at sample " + sample
+                            + ": expected " + expected + ", got " + overflowResults[sample]);
+                }
+            }
+            GpuDensityExpressionSmoke.VulkanBranchFixture narrowingFixture =
+                    GpuDensityExpressionSmoke.narrowingFixture();
+            float[] narrowingX = {-257.0f, -129.0f, -1.0f, 0.0f, 127.0f, 128.0f, 255.0f, 65_537.0f};
+            float[] narrowingZeros = new float[narrowingX.length];
+            float[] narrowingResults = ring.submitGraphRoots(narrowingFixture.graph(), narrowingX,
+                    narrowingZeros, narrowingZeros).get(60, TimeUnit.SECONDS);
+            for (int sample = 0; sample < narrowingX.length; sample++) {
+                int xValue = (int) narrowingX[sample];
+                double expected = narrowingFixture.javaFunction().compute(
+                        new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(xValue, 0, 0));
+                if (narrowingResults[sample] != (float) expected) {
+                    throw new IllegalStateException("Integer narrowing Java bytecode mismatch at sample " + sample
+                            + ": expected " + expected + ", got " + narrowingResults[sample]);
+                }
+            }
+            GpuDensityExpressionSmoke.VulkanBranchFixture floatFixture =
+                    GpuDensityExpressionSmoke.floatArithmeticFixture();
+            float[] floatX = {-30_000_001.0f, -257.0f, -1.0f, 0.0f, 7.0f, 1_234_567.0f, 30_000_001.0f};
+            float[] floatZeros = new float[floatX.length];
+            float[] floatResults = ring.submitGraphRoots(floatFixture.graph(), floatX,
+                    floatZeros, floatZeros).get(60, TimeUnit.SECONDS);
+            for (int sample = 0; sample < floatX.length; sample++) {
+                int xValue = (int) floatX[sample];
+                double expected = floatFixture.javaFunction().compute(
+                        new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(xValue, 0, 0));
+                if (Math.abs(floatResults[sample] - expected) > 0.5) {
+                    throw new IllegalStateException("Float rounding Java bytecode mismatch at sample " + sample
+                            + ": expected " + expected + ", got " + floatResults[sample]);
+                }
+            }
+            GpuDensityExpressionSmoke.VulkanBranchFixture floatCompareFixture =
+                    GpuDensityExpressionSmoke.floatCompareFixture();
+            float[] comparisonX = {-7.0f, -1.0f, 0.0f, 1.0f, 7.0f};
+            float[] comparisonZeros = new float[comparisonX.length];
+            float[] comparisonResults = ring.submitGraphRoots(floatCompareFixture.graph(), comparisonX,
+                    comparisonZeros, comparisonZeros).get(60, TimeUnit.SECONDS);
+            for (int sample = 0; sample < comparisonX.length; sample++) {
+                int xValue = (int) comparisonX[sample];
+                double expected = floatCompareFixture.javaFunction().compute(
+                        new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(xValue, 0, 0));
+                if (comparisonResults[sample] != (float) expected) {
+                    throw new IllegalStateException("Float NaN compare Java bytecode mismatch at sample " + sample
+                            + ": expected " + expected + ", got " + comparisonResults[sample]);
+                }
+            }
+            GpuDensityExpressionSmoke.VulkanBranchFixture loopFixture =
+                    GpuDensityExpressionSmoke.boundedLoopFixture();
+            float[] loopX = {-30_000_001.0f, -17.0f, 0.0f, 7.0f, 1_234_567.0f, 30_000_001.0f};
+            float[] loopZeros = new float[loopX.length];
+            float[] loopResults = ring.submitGraphRoots(loopFixture.graph(), loopX,
+                    loopZeros, loopZeros).get(60, TimeUnit.SECONDS);
+            for (int sample = 0; sample < loopX.length; sample++) {
+                int xValue = (int) loopX[sample];
+                double expected = loopFixture.javaFunction().compute(
+                        new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(xValue, 0, 0));
+                if (Math.abs(loopResults[sample] - expected) > 0.5) {
+                    throw new IllegalStateException("Bounded loop Java bytecode mismatch at sample " + sample
+                            + ": expected " + expected + ", got " + loopResults[sample]);
+                }
+            }
+
+            GpuDensityExpressionSmoke.VulkanBranchFixture powerFixture =
+                    GpuDensityExpressionSmoke.dynamicPowerFixture();
+            float[] powerX = {-2.0f, -2.0f, -2.0f, -2.0f, -2.0f, -2.0f};
+            float[] powerY = {-6.0f, -1.0f, 0.0f, 1.0f, 4.0f, 6.0f};
+            float[] powerZ = new float[powerX.length];
+            float[] powerResults = ring.submitGraphRoots(powerFixture.graph(), powerX, powerY, powerZ)
+                    .get(60, TimeUnit.SECONDS);
+            for (int sample = 0; sample < powerX.length; sample++) {
+                double expected = powerFixture.javaFunction().compute(
+                        new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(
+                                (int) powerX[sample], (int) powerY[sample], 0));
+                boolean mismatch = Double.isNaN(expected)
+                        ? !Float.isNaN(powerResults[sample])
+                        : Math.abs(powerResults[sample] - expected) > 0.005;
+                if (mismatch) {
+                    throw new IllegalStateException("Dynamic Java pow mismatch at sample " + sample
+                            + ": expected " + expected + ", got " + powerResults[sample]);
+                }
+            }
+
             // One 2x2x2 grid exercises the GRID_INPUT shader variant and its
             // sample-to-coordinate indexing, not just arbitrary coordinates.
             ByteBuffer metadata = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder());
@@ -47,6 +231,27 @@ public final class VulkanCiSmoke {
                     .get(60, TimeUnit.SECONDS);
             System.out.println("Vulkan CI smoke: terrain grid shader completed");
             assertConstantResults("terrain grid shader", gridResults, 8);
+
+            GpuDensityExpressionSmoke.VulkanBranchFixture customGridFixture =
+                    GpuDensityExpressionSmoke.scalarMathFixture();
+            float[] customGridResults = ring.submitGraphRootsGrid(
+                    customGridFixture.graph(), metadata, 1, 8).get(60, TimeUnit.SECONDS);
+            for (int sample = 0; sample < customGridResults.length; sample++) {
+                int gridZ = sample % 2;
+                int gridQ = sample / 2;
+                int gridX = gridQ % 2;
+                int gridY = gridQ / 2;
+                int blockX = -16 + gridX;
+                int blockY = -8 + gridY;
+                int blockZ = 32 + gridZ;
+                double expected = customGridFixture.javaFunction().compute(
+                        new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(
+                                blockX, blockY, blockZ));
+                if (Math.abs(customGridResults[sample] - expected) > 0.005) {
+                    throw new IllegalStateException("Custom terrain-grid expression mismatch at sample " + sample
+                            + ": expected " + expected + ", got " + customGridResults[sample]);
+                }
+            }
 
             // Exercise the cell-grid to block-density interpolation shader
             // used by the per-block terrain output path.

@@ -21,6 +21,7 @@ import net.minecraft.world.level.levelgen.DensityFunctions;
  * Unsupported objects fail compilation; they are never silently approximated.
  */
 final class GpuDensityGraphCompiler {
+    private static final int MAX_COMPILATION_DEPTH = 512;
     private final Map<DensityFunction, Integer> indices = new IdentityHashMap<>();
     private final List<GpuDensityGraph.Node> nodes = new ArrayList<>();
     private final List<NormalNoise> noises = new ArrayList<>();
@@ -28,10 +29,13 @@ final class GpuDensityGraphCompiler {
     private final List<GpuDensityGraph.Spline> splines = new ArrayList<>();
     private final List<GpuDensityGraph.Blended> blended = new ArrayList<>();
     private final List<DensityFunction> sourceFunctions = new ArrayList<>();
+    private boolean terrainGridMode;
+    private int compilationDepth;
 
     private GpuDensityGraphCompiler() {}
 
     static GpuDensityGraph compile(NoiseRouter router) {
+        GpuDensityFunctionTranslators.freezeRegistrations();
         GpuDensityGraphCompiler compiler = new GpuDensityGraphCompiler();
         int[] roots = {
             compiler.node(router.barrierNoise()), compiler.node(router.fluidLevelFloodednessNoise()),
@@ -46,7 +50,9 @@ final class GpuDensityGraphCompiler {
     }
 
     static GpuDensityGraph compileTerrain(NoiseRouter router) {
+        GpuDensityFunctionTranslators.freezeRegistrations();
         GpuDensityGraphCompiler compiler = new GpuDensityGraphCompiler();
+        compiler.terrainGridMode = true;
         // Keep every density input used by NoiseChunk and NoiseBasedAquifer
         // in the same GPU dispatch. The order is part of GpuChunkDensityCache.
         int[] roots = {compiler.node(router.finalDensity()),
@@ -65,7 +71,33 @@ final class GpuDensityGraphCompiler {
                 compiler.blended, compiler.sourceFunctions);
     }
 
+    /**
+     * Compiles one custom density root through the same graph path used by
+     * NoiseRouter compilation. This is also the stable seam for validating
+     * Java-to-GPU translators without constructing a synthetic 15-root router.
+     */
+    static GpuDensityGraph compileDensityFunction(DensityFunction function, boolean terrainGridMode) {
+        GpuDensityFunctionTranslators.freezeRegistrations();
+        GpuDensityGraphCompiler compiler = new GpuDensityGraphCompiler();
+        compiler.terrainGridMode = terrainGridMode;
+        int root = compiler.node(function);
+        return new GpuDensityGraph(compiler.nodes, new int[]{root}, compiler.noises,
+                compiler.splines, compiler.blended, compiler.sourceFunctions);
+    }
+
     private int node(DensityFunction function) {
+        if (++compilationDepth > MAX_COMPILATION_DEPTH) {
+            compilationDepth--;
+            throw unsupported(function, "density dependency depth exceeds " + MAX_COMPILATION_DEPTH);
+        }
+        try {
+            return compileNode(function);
+        } finally {
+            compilationDepth--;
+        }
+    }
+
+    private int compileNode(DensityFunction function) {
         if (function == null) throw new IllegalArgumentException("NoiseRouter contains null density function");
         Integer existing = indices.get(function);
         if (existing != null) {
@@ -105,6 +137,66 @@ final class GpuDensityGraphCompiler {
         boolean tectonicFunction = functionClassName.startsWith(
                 "dev.worldgen.tectonic.worldgen.densityfunction.");
         if (customFunction) {
+            GpuDensityExpression expression = GpuDensityFunctionTranslators.translateToGpu(function);
+            String bytecodeRejection = null;
+            if (expression == null) {
+                GpuDensityBytecodeCompiler.Result bytecode = GpuDensityBytecodeCompiler.compile(function);
+                expression = bytecode.expression();
+                bytecodeRejection = bytecode.rejection();
+            }
+            if (expression != null
+                    && (!terrainGridMode || expression.unsupportedOperation(
+                            GpuDensityExpression.Backend.TERRAIN_GRID) == null)) {
+                int[] samplerRemap = new int[expression.noises().size()];
+                for (int sampler = 0; sampler < samplerRemap.length; sampler++) {
+                    NormalNoise noise = expression.noises().get(sampler);
+                    samplerRemap[sampler] = noiseIndices.computeIfAbsent(noise, key -> {
+                        noises.add(key);
+                        return noises.size() - 1;
+                    });
+                }
+                int[] expressionNodeRemap = new int[expression.nodes().size()];
+                for (int localIndex = 0; localIndex < expression.nodes().size(); localIndex++) {
+                    GpuDensityExpression.Node expressionNode = expression.nodes().get(localIndex);
+                    int[] children = expressionNode.children();
+                    for (int child = 0; child < children.length; child++) {
+                        children[child] = expressionNodeRemap[children[child]];
+                    }
+                    double[] constants = expressionNode.constants();
+                    if (expressionNode.opcode().equals("Noise")) {
+                        int localSampler = (int) constants[0];
+                        if (localSampler < 0 || localSampler >= samplerRemap.length) {
+                            throw unsupported(function, "GPU expression references an invalid noise sampler");
+                        }
+                        constants[0] = samplerRemap[localSampler];
+                    }
+                    String opcode = expressionNode.opcode();
+                    String payload = expressionNode.payload();
+                    if (opcode.equals("DensityRef")) {
+                        int dependencyIndex = (int) constants[0];
+                        if (dependencyIndex < 0 || dependencyIndex >= expression.densityReferences().size()
+                                || constants[0] != dependencyIndex) {
+                            throw unsupported(function, "bytecode expression references an invalid density dependency");
+                        }
+                        int dependency = node(expression.densityReferences().get(dependencyIndex));
+                        nodes.add(new GpuDensityGraph.Node("Marker", new int[]{dependency},
+                                new double[0], "GpuDensityBytecodeDependency"));
+                        sourceFunctions.add(function);
+                        expressionNodeRemap[localIndex] = nodes.size() - 1;
+                        continue;
+                    }
+                    if (opcode.equals("GpuMath")) {
+                        payload = "EXPR_" + payload;
+                    }
+                    nodes.add(new GpuDensityGraph.Node(opcode, children, constants, payload));
+                    sourceFunctions.add(function);
+                    expressionNodeRemap[localIndex] = nodes.size() - 1;
+                }
+                nodes.set(index, new GpuDensityGraph.Node("Marker",
+                        new int[]{expressionNodeRemap[expression.root()]}, new double[0],
+                        "GpuDensityExpression"));
+                return index;
+            }
             DensityFunction translated = GpuDensityFunctionTranslators.translate(function);
             if (translated != null) {
                 // Keep the original function in sourceFunctions for parity and
@@ -115,8 +207,16 @@ final class GpuDensityGraphCompiler {
                         new double[0], "GpuDensityFunctionTranslator"));
                 return index;
             }
+            if (expression != null && terrainGridMode) {
+                String unsupportedNode = expression.unsupportedOperation(
+                        GpuDensityExpression.Backend.TERRAIN_GRID);
+                throw unsupported(function, "direct GPU expression node " + unsupportedNode
+                        + " is not supported by the terrain-grid shader; provide a vanilla-equivalent "
+                        + "translate() graph for the grid path");
+            }
             if (!tectonicFunction) {
-                throw unsupported(function, "custom density function has no registered GPU translator");
+                throw unsupported(function, "automatic Java bytecode compilation rejected this implementation: "
+                        + (bytecodeRejection == null ? "no registered GPU translator" : bytecodeRejection));
             }
         }
 

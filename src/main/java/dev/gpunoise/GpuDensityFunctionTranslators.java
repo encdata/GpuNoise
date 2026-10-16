@@ -6,6 +6,7 @@ import net.minecraft.world.level.levelgen.DensityFunction;
 public final class GpuDensityFunctionTranslators {
     private static final GpuDensityTranslatorRegistry<GpuDensityFunctionTranslator<?>> TRANSLATORS =
             new GpuDensityTranslatorRegistry<>();
+    private static volatile boolean registrationsFrozen;
 
     private GpuDensityFunctionTranslators() {}
 
@@ -30,24 +31,29 @@ public final class GpuDensityFunctionTranslators {
         add(functionType, translator, true);
     }
 
-    private static <T extends DensityFunction> void add(
+    private static synchronized <T extends DensityFunction> void add(
             Class<T> functionType, GpuDensityFunctionTranslator<? super T> translator,
             boolean includeSubtypes) {
+        if (registrationsFrozen) {
+            throw new IllegalStateException("GPU density translators are frozen because graph compilation has started");
+        }
         TRANSLATORS.register(functionType, translator, includeSubtypes);
     }
 
     /** Returns whether an exact or uniquely applicable translator is registered. */
-    public static boolean hasTranslator(Class<? extends DensityFunction> functionType) {
+    public static synchronized boolean hasTranslator(Class<? extends DensityFunction> functionType) {
         return TRANSLATORS.find(functionType) != null;
     }
 
-    static DensityFunction translate(DensityFunction function) {
+    static synchronized DensityFunction translate(DensityFunction function) {
         GpuDensityFunctionTranslator<?> translator = TRANSLATORS.find(function.getClass());
         if (translator == null) return null;
         DensityFunction translated = translateTyped(translator, function);
         if (translated == null) {
-            throw new IllegalStateException("GPU density translator returned null for "
-                    + function.getClass().getName());
+            // A direct-expression translator may intentionally have no
+            // vanilla graph representation. The caller decides whether its
+            // active Vulkan path supports that expression IR.
+            return null;
         }
         if (translated == function) {
             throw new IllegalStateException("GPU density translator returned its input for "
@@ -56,10 +62,27 @@ public final class GpuDensityFunctionTranslators {
         return translated;
     }
 
+    static synchronized GpuDensityExpression translateToGpu(DensityFunction function) {
+        GpuDensityFunctionTranslator<?> translator = TRANSLATORS.find(function.getClass());
+        if (translator == null) return null;
+        return translateExpressionTyped(translator, function);
+    }
+
+    static synchronized void freezeRegistrations() {
+        registrationsFrozen = true;
+    }
+
     @SuppressWarnings("unchecked")
     private static <T extends DensityFunction> DensityFunction translateTyped(
             GpuDensityFunctionTranslator<?> raw, DensityFunction function) {
         GpuDensityFunctionTranslator<T> translator = (GpuDensityFunctionTranslator<T>) raw;
         return translator.translate((T) function);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends DensityFunction> GpuDensityExpression translateExpressionTyped(
+            GpuDensityFunctionTranslator<?> raw, DensityFunction function) {
+        GpuDensityFunctionTranslator<T> translator = (GpuDensityFunctionTranslator<T>) raw;
+        return translator.translateToGpu((T) function);
     }
 }

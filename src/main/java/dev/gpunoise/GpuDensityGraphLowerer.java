@@ -9,7 +9,7 @@ import java.util.List;
 /** Validates the graph IR before a Vulkan evaluator is allowed to consume it. */
 final class GpuDensityGraphLowerer {
     private static final Set<String> SUPPORTED = Set.of(
-            "Constant", "Noise", "Ap2", "MulOrAdd", "Clamp", "Mapped", "Marker",
+            "Constant", "Noise", "Ap2", "MulOrAdd", "Clamp", "Mapped", "Marker", "GpuCoordinate", "GpuMath", "GpuCompare", "GpuSelect", "GpuInt", "GpuFloat", "GpuCast",
             "Shift", "ShiftA", "ShiftB", "ShiftedNoise", "TectonicConfigNoise", "TectonicInvert", "Spline", "BlendedNoise", "YClampedGradient", "BlendDensity", "RangeChoice", "WeirdScaledSampler"
     );
 
@@ -116,8 +116,23 @@ final class GpuDensityGraphLowerer {
         }
         for (int root : graph.routerRoots()) requireNodeIndex(root, nodes.size(), "router root");
         for (int index = 0; index < nodes.size(); index++) {
-            for (int child : nodes.get(index).children()) {
+            GpuDensityGraph.Node node = nodes.get(index);
+            for (int child : node.children()) {
                 requireNodeIndex(child, nodes.size(), "child of node " + index);
+            }
+            validateCustomNode(node, index, graph.noises().size());
+            if ("GpuInt".equals(node.opcode())
+                    && ("IDIV".equals(node.payload()) || "IREM".equals(node.payload()))) {
+                int divisorIndex = node.children()[1];
+                GpuDensityGraph.Node divisor = nodes.get(divisorIndex);
+                double[] value = divisor.constants();
+                if (!"Constant".equals(divisor.opcode()) || value.length != 1
+                        || !Double.isFinite(value[0]) || value[0] != Math.rint(value[0])
+                        || value[0] == 0.0 || value[0] < Integer.MIN_VALUE
+                        || value[0] > Integer.MAX_VALUE) {
+                    throw new IllegalArgumentException("GPU integer division node " + index
+                            + " requires a nonzero constant 32-bit divisor");
+                }
             }
         }
         for (int splineIndex = 0; splineIndex < graph.splines().size(); splineIndex++) {
@@ -137,6 +152,52 @@ final class GpuDensityGraphLowerer {
         if (index < 0 || index >= count) {
             throw new IllegalArgumentException("GPU density graph has invalid " + role + " index " + index
                     + " (node count " + count + ")");
+        }
+    }
+
+    private static void validateCustomNode(GpuDensityGraph.Node node, int index, int noiseCount) {
+        int children = node.children().length;
+        double[] parameters = node.constants();
+        int constants = parameters.length;
+        boolean valid = switch (node.opcode()) {
+            case "GpuCoordinate" -> children == 0 && constants == 0
+                    && node.payload() != null && Set.of("X", "Y", "Z").contains(node.payload());
+            case "GpuMath" -> children == 2 && constants == 0
+                    && node.payload() != null
+                    && Set.of("ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "MIN", "MAX",
+                            "EXPR_ADD", "EXPR_SUBTRACT", "EXPR_MULTIPLY", "EXPR_DIVIDE",
+                            "EXPR_MIN", "EXPR_MAX", "REMAINDER", "EXPR_REMAINDER", "ATAN2", "EXPR_ATAN2",
+                            "POW", "EXPR_POW")
+                            .contains(node.payload());
+            case "GpuCompare" -> children == 2 && constants == 0
+                    && node.payload() != null && Set.of("EQ", "NE", "LT", "LE", "GT", "GE",
+                            "DCMPL_EQ", "DCMPL_NE", "DCMPL_LT", "DCMPL_LE", "DCMPL_GT", "DCMPL_GE",
+                            "DCMPG_EQ", "DCMPG_NE", "DCMPG_LT", "DCMPG_LE", "DCMPG_GT", "DCMPG_GE",
+                            "FCMPL_EQ", "FCMPL_NE", "FCMPL_LT", "FCMPL_LE", "FCMPL_GT", "FCMPL_GE",
+                            "FCMPG_EQ", "FCMPG_NE", "FCMPG_LT", "FCMPG_LE", "FCMPG_GT", "FCMPG_GE")
+                            .contains(node.payload());
+            case "GpuSelect" -> children == 3 && constants == 0 && node.payload() == null;
+            case "GpuInt" -> (children == 1 && node.payload() != null
+                    && Set.of("INEG", "I2B", "I2C", "I2S").contains(node.payload()) || children == 2
+                    && node.payload() != null
+                    && Set.of("IADD", "ISUB", "IMUL", "IDIV", "IREM", "IAND", "IOR", "IXOR",
+                            "ISHL", "ISHR", "IUSHR").contains(node.payload()))
+                    && constants == 0;
+            case "GpuFloat" -> (children == 1 && "FNEG".equals(node.payload()) || children == 2
+                    && node.payload() != null
+                    && Set.of("FADD", "FSUB", "FMUL", "FDIV", "FREM").contains(node.payload()))
+                    && constants == 0;
+            case "GpuCast" -> children == 1 && constants == 0 && node.payload() != null
+                    && Set.of("I2F", "D2F", "F2I", "D2I").contains(node.payload());
+            case "Noise" -> children == 0 && constants == 3
+                    && Double.isFinite(parameters[0]) && parameters[0] == Math.rint(parameters[0])
+                    && parameters[0] >= 0 && parameters[0] < noiseCount
+                    && Double.isFinite(parameters[1]) && Double.isFinite(parameters[2]);
+            default -> true;
+        };
+        if (!valid) {
+            throw new IllegalArgumentException("Malformed GPU density extension node " + index
+                    + " (" + node.opcode() + ")");
         }
     }
 
