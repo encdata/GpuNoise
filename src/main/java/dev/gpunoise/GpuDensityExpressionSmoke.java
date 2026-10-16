@@ -7,6 +7,8 @@ import net.minecraft.world.level.levelgen.synth.NormalNoise;
 
 /** CPU-side public-API checks used by the GitHub Actions Vulkan smoke entry point. */
 final class GpuDensityExpressionSmoke {
+    private static final double FLOAT_ABI_PARITY_EPSILON = 1.0e-6;
+
     private GpuDensityExpressionSmoke() {}
 
     record VulkanBranchFixture(GpuDensityGraph graph, DensityFunction javaFunction) {}
@@ -383,7 +385,7 @@ final class GpuDensityExpressionSmoke {
             DensityFunction.SinglePointContext context = new DensityFunction.SinglePointContext(
                     point[0], point[1], point[2]);
             requireClose(scalarMathResult.expression().evaluate(point[0], point[1], point[2]),
-                    scalarMath.compute(context), 1.0e-6,
+                    scalarMath.compute(context), FLOAT_ABI_PARITY_EPSILON,
                     "scalar Math bytecode at x=" + point[0]);
         }
         GpuDensityGraph scalarMathGraph = scalarMathFixture().graph();
@@ -427,7 +429,7 @@ final class GpuDensityExpressionSmoke {
             double expected = staticConstants.compute(
                     new DensityFunction.SinglePointContext(xValue, 0, 0));
             requireClose(staticConstantResult.expression().evaluate(xValue, 0, 0), expected,
-                    1.0e-6, "static final terrain constant at x=" + xValue);
+                    FLOAT_ABI_PARITY_EPSILON, "static final terrain constant at x=" + xValue);
         }
         GpuDensityGraphBuffer.pack(GpuDensityGraphLowerer.lower(
                 GpuDensityGraphCompiler.compileDensityFunction(staticConstants, true)));
@@ -454,6 +456,7 @@ final class GpuDensityExpressionSmoke {
         for (int xValue : new int[]{-30_000_001, -257, -1, 0, 1, 19, 257, 30_000_001}) {
             double expected = bitwise.compute(new DensityFunction.SinglePointContext(xValue, 0, 0));
             requireClose(bitwiseResult.expression().evaluate(xValue, 0, 0), expected,
+                    FLOAT_ABI_PARITY_EPSILON,
                     "Java integer bitwise/shift operations at x=" + xValue);
         }
         GpuDensityGraphBuffer.pack(integerBitwiseFixture().graph());
