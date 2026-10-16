@@ -101,19 +101,23 @@ final class GpuDensityGraphCompiler {
         // shader opcode.  Keep those functions on the vanilla path rather
         // than producing a plausible-looking but incorrect GPU graph.
         String functionClassName = function.getClass().getName();
+        boolean customFunction = !functionClassName.startsWith("net.minecraft.");
         boolean tectonicFunction = functionClassName.startsWith(
                 "dev.worldgen.tectonic.worldgen.densityfunction.");
-        if (!functionClassName.startsWith("net.minecraft.") && !tectonicFunction) {
+        if (customFunction) {
             DensityFunction translated = GpuDensityFunctionTranslators.translate(function);
-            if (translated == null) {
+            if (translated != null) {
+                // Keep the original function in sourceFunctions for parity and
+                // fallback. The marker forwards the GPU value from the adapter's
+                // equivalent built-in density graph. Explicit adapters precede
+                // built-in compatibility lowering so mods can define exact semantics.
+                nodes.set(index, new GpuDensityGraph.Node("Marker", new int[]{node(translated)},
+                        new double[0], "GpuDensityFunctionTranslator"));
+                return index;
+            }
+            if (!tectonicFunction) {
                 throw unsupported(function, "custom density function has no registered GPU translator");
             }
-            // Keep the original function in sourceFunctions for parity and
-            // fallback. The marker forwards the GPU value from the adapter's
-            // equivalent built-in density graph.
-            nodes.set(index, new GpuDensityGraph.Node("Marker", new int[]{node(translated)},
-                    new double[0], "GpuDensityFunctionTranslator"));
-            return index;
         }
 
         // Some NeoForge/Minecraft transformations expose Constant as a normal

@@ -20,7 +20,18 @@ GpuDensityFunctionTranslators.register(MyTerrainDensity.class,
 supported `DensityFunctions` operations. GPU Noise checks the translated graph
 against the original function during terrain graph parity checks. The original
 function remains available for parity and CPU fallback. Registration is exact
-class based; register each custom implementation that needs translation.
+class based. If a mod defines an interface or base class for a family of
+custom functions, register it once for all implementations:
+
+```java
+GpuDensityFunctionTranslators.registerForSubtypes(MyDensityApi.class,
+        MyDensityApi::asGpuDensityFunction);
+```
+
+An exact-class adapter takes precedence. Otherwise GPU Noise chooses the closest
+registered supertype and reports an error if two unrelated translators match
+equally well. This lets terrain mods cover implementation wrappers without
+silently depending on mod load order.
 
 Adapters describe equivalent density math. GPU Noise does not execute arbitrary
 mod bytecode on Vulkan. If a function has no adapter or uses an unsupported

@@ -58,10 +58,13 @@ parity checks.
   positional float arrays.
 - Add per-function translator registration, a built-in operation catalog,
   compile diagnostics, and capability checks. The first adapter API can lower
-  custom functions to supported Minecraft density operations.
+  custom functions to supported Minecraft density operations. Translator
+  registration now supports exact classes and mod API supertypes; exact matches
+  win, the closest supertype wins, and equally specific conflicts fail loudly.
 - Add a typed expression builder for custom noise algorithms that cannot be
   represented by vanilla `DensityFunctions`, including explicit sampler
-  inputs and coordinate transforms.
+  inputs and coordinate transforms. Current adapters still lower to existing
+  density functions and cannot describe a custom shader operation directly.
 - Retain the original Java function as the reference evaluator. Compare outputs
   over boundary, negative-coordinate, high-altitude, and random samples.
 - Allow unsupported nodes to form explicit CPU islands in a dependency graph
