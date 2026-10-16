@@ -88,7 +88,7 @@ parity checks.
   operation before broad modpack terrain graphs can be enabled by default.
 - Custom density compilation now also inspects `compute(FunctionContext)` JVM
   bytecode after explicit translators. It recursively inlines bounded pure
-  same-class helpers, carries final `DensityFunction` fields as graph
+  same-class helpers and static helpers in dependency classes, carries final `DensityFunction` fields as graph
   dependencies and inlines class/interface static-final primitive constants, expands bounded forward branches into compare/select nodes,
   lowers bounded integer table/lookup switches through the same IR, and
   recognizes `floor`, `ceil`, `sqrt`, `sin`, `cos`, `exp`, `log`, and the

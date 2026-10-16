@@ -111,6 +111,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new IntegerInterpolationMathDensity());
     }
 
+    static VulkanBranchFixture externalStaticHelperFixture() {
+        return graphFixture(new ExternalStaticHelperDensity());
+    }
+
     static VulkanBranchFixture minecraftMathOverloadsFixture() {
         return graphFixture(new MinecraftMathOverloadsDensity());
     }
@@ -492,6 +496,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new AngleMotionMathDensity(), "Mth angle motion functions");
         verifyStandaloneMath(new VectorLengthMathDensity(), "Mth vector length functions");
         verifyStandaloneMath(new IntegerInterpolationMathDensity(), "Mth integer interpolation functions");
+        verifyStandaloneMath(new ExternalStaticHelperDensity(), "external static terrain helpers");
         verifyStandaloneMath(new MinecraftMathOverloadsDensity(), "Mth float and integer overloads");
         verifyStandaloneMath(new DynamicClampDensity(), "dynamic Mth.clamp overloads");
 
@@ -1074,6 +1079,27 @@ final class GpuDensityExpressionSmoke {
             float delta = context.blockX() * 0.00390625F;
             return net.minecraft.util.Mth.lerpInt(delta, -300_001, 280_003) * 0.001
                     + net.minecraft.util.Mth.lerpDiscrete(delta, -23, 37) * 0.01;
+        }
+    }
+
+    private static final class ExternalStaticHelperDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            return TerrainMathLibrary.shape(context.blockY(), 0.125)
+                    + TerrainMathLibrary.ridge(context.blockX(), context.blockZ()) * 0.05;
+        }
+    }
+
+    private static final class TerrainMathLibrary {
+        private static final double RIDGE_SCALE = 0.0625;
+
+        private static double ridge(double x, double z) {
+            return Math.abs(x - z) * RIDGE_SCALE + Math.sin(x * 0.03125);
+        }
+
+        private static double shape(int y, double scale) {
+            double elevation = y * scale;
+            double ridge = ridge(elevation, y - elevation);
+            return ridge * 0.5 + (y > 0 ? elevation * 0.01 : -elevation * 0.02);
         }
     }
 

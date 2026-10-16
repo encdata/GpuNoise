@@ -17,6 +17,7 @@ import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FieldInsnNode;
+import org.objectweb.asm.tree.FieldNode;
 import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.IincInsnNode;
 import org.objectweb.asm.tree.IntInsnNode;
@@ -61,10 +62,8 @@ final class GpuDensityBytecodeCompiler {
         Class<?> type = function.getClass();
         if (type.getName().startsWith("net.minecraft."))
             return Result.rejected("Minecraft implementation is handled by the vanilla graph lowering");
-        try (InputStream bytecode = type.getResourceAsStream("/" + type.getName().replace('.', '/') + ".class")) {
-            if (bytecode == null) return Result.rejected("class bytecode resource is unavailable");
-            ClassNode owner = new ClassNode(Opcodes.ASM9);
-            new ClassReader(bytecode).accept(owner, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        try {
+            ClassNode owner = readClassNode(type, Type.getInternalName(type));
             MethodNode compute = null;
             for (MethodNode method : owner.methods) {
                 if (method.name.equals("compute") && method.desc.equals(COMPUTE_DESC)) {
@@ -74,16 +73,42 @@ final class GpuDensityBytecodeCompiler {
             }
             if (compute == null) return Result.rejected("compute(FunctionContext):double bytecode was not found");
             Interpreter interpreter = new Interpreter(function, owner, compute,
-                    new GpuDensityExpression.Builder(), 0, Value.receiver(Kind.THIS),
+                    new GpuDensityExpression.Builder(), 0, new int[]{50_000}, Value.receiver(Kind.THIS),
                     new Value[]{Value.receiver(Kind.CONTEXT)});
             return interpreter.run();
         } catch (UnsupportedBytecode rejected) {
             return Result.rejected(rejected.getMessage());
-        } catch (IOException failure) {
-            return Result.rejected("cannot read class bytecode: " + failureSummary(failure));
         } catch (RuntimeException failure) {
             return Result.rejected("bytecode inspection failed: " + failureSummary(failure));
         }
+    }
+
+    private static ClassNode readClassNode(Class<?> resourceOwner, String internalName) {
+        String resource = "/" + internalName + ".class";
+        try (InputStream bytecode = resourceOwner.getResourceAsStream(resource)) {
+            if (bytecode == null) throw new UnsupportedBytecode(
+                    "class bytecode resource is unavailable: " + internalName.replace('/', '.'));
+            ClassNode node = new ClassNode(Opcodes.ASM9);
+            new ClassReader(bytecode).accept(node, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+            return node;
+        } catch (IOException failure) {
+            throw new UnsupportedBytecode("cannot read helper bytecode " + internalName.replace('/', '.')
+                    + ": " + failureSummary(failure));
+        }
+    }
+
+    private static MethodNode findMethod(ClassNode owner, String name, String descriptor) {
+        for (MethodNode method : owner.methods) {
+            if (method.name.equals(name) && method.desc.equals(descriptor)) return method;
+        }
+        return null;
+    }
+
+    private static boolean isInlineableHelperOwner(String internalName) {
+        return !(internalName.startsWith("java/") || internalName.startsWith("javax/")
+                || internalName.startsWith("jdk/") || internalName.startsWith("sun/")
+                || internalName.startsWith("net/minecraft/")
+                || internalName.startsWith("org/lwjgl/"));
     }
 
     private static String failureSummary(Exception failure) {
@@ -125,23 +150,24 @@ final class GpuDensityBytecodeCompiler {
         private final MethodNode method;
         private final GpuDensityExpression.Builder builder;
         private final int inlineDepth;
+        private final int[] remainingInstructionBudget;
         private List<Value> stack = new ArrayList<>();
         private Map<Integer, Value> locals = new HashMap<>();
         private final AbstractInsnNode[] instructions;
         private final Map<LabelNode, Integer> labels = new java.util.IdentityHashMap<>();
         private final List<LoopRegion> loopRegions = new ArrayList<>();
         private int branchForks;
-        private int remainingInstructions = 50_000;
         private Map<Integer, Integer> loopIterations = new HashMap<>();
 
         Interpreter(DensityFunction function, ClassNode owner, MethodNode method,
-                    GpuDensityExpression.Builder builder, int inlineDepth,
+                    GpuDensityExpression.Builder builder, int inlineDepth, int[] remainingInstructionBudget,
                     Value receiver, Value[] arguments) {
             this.function = function;
             this.owner = owner;
             this.method = method;
             this.builder = builder;
             this.inlineDepth = inlineDepth;
+            this.remainingInstructionBudget = remainingInstructionBudget;
             this.instructions = method.instructions.toArray();
             for (int i = 0; i < instructions.length; i++) {
                 if (instructions[i] instanceof LabelNode label) labels.put(label, i);
@@ -186,7 +212,8 @@ final class GpuDensityBytecodeCompiler {
                 if (type == AbstractInsnNode.LABEL || type == AbstractInsnNode.LINE
                         || type == AbstractInsnNode.FRAME) continue;
                 try {
-                    if (--remainingInstructions < 0) reject("control-flow expansion exceeds 50,000 bytecode steps");
+                    if (--remainingInstructionBudget[0] < 0)
+                        reject("inlined control-flow expansion exceeds 50,000 bytecode steps");
                     if (instruction instanceof InsnNode insn) {
                         if (insn.getOpcode() == Opcodes.DCMPL || insn.getOpcode() == Opcodes.DCMPG
                                 || insn.getOpcode() == Opcodes.FCMPL || insn.getOpcode() == Opcodes.FCMPG) {
@@ -477,8 +504,10 @@ final class GpuDensityBytecodeCompiler {
                 if (receiver.kind() != Kind.THIS)
                     reject("field access through a value other than the density object: " + instruction.name);
             }
-            Object fieldValue = readField(function, instruction.owner, instruction.name,
-                    instruction.desc, staticRead);
+            Object fieldValue = staticRead
+                    ? readStaticConstant(function, owner, instruction.owner,
+                            instruction.name, instruction.desc)
+                    : readField(function, instruction.owner, instruction.name, instruction.desc);
             if (fieldValue instanceof Number number) {
                 switch (instruction.desc) {
                     case "B", "C", "I", "S", "Z" -> pushIntegerConstant(number.intValue());
@@ -553,27 +582,25 @@ final class GpuDensityBytecodeCompiler {
                 return;
             }
 
-            if (owner.equals(this.owner.name)) {
-                MethodNode target = null;
-                for (MethodNode candidate : this.owner.methods) {
-                    if (candidate.name.equals(name) && candidate.desc.equals(call.desc)) {
-                        target = candidate;
-                        break;
-                    }
-                }
+            boolean sameClass = owner.equals(this.owner.name);
+            boolean externalStaticHelper = call.getOpcode() == Opcodes.INVOKESTATIC
+                    && !sameClass && isInlineableHelperOwner(owner);
+            if (sameClass || externalStaticHelper) {
+                ClassNode helperOwner = sameClass ? this.owner : readClassNode(function.getClass(), owner);
+                MethodNode target = findMethod(helperOwner, name, call.desc);
                 if (target != null) {
-                    if (inlineDepth >= 16) reject("same-class helper-call depth exceeds 16");
+                    if (inlineDepth >= 16) reject("helper-call depth exceeds 16");
                     boolean targetStatic = (target.access & Opcodes.ACC_STATIC) != 0;
                     if (targetStatic != (call.getOpcode() == Opcodes.INVOKESTATIC))
                         reject("helper invocation staticness does not match its method declaration");
                     if (!targetStatic && (receiver == null || receiver.kind() != Kind.THIS))
-                        reject("same-class instance helper must be called on the density object");
+                        reject("instance helper must be called on the density object");
                     if (Type.getReturnType(target.desc).getSort() == Type.VOID)
                         reject("void helper calls have side effects and cannot be inlined");
-                    Value result = new Interpreter(function, this.owner, target, builder, inlineDepth + 1,
-                            targetStatic ? null : receiver, arguments).runInline();
+                    Value result = new Interpreter(function, helperOwner, target, builder, inlineDepth + 1,
+                            remainingInstructionBudget, targetStatic ? null : receiver, arguments).runInline();
                     if (result.kind() != Kind.VALUE)
-                        reject("same-class helper returned a nonnumeric value");
+                        reject("helper returned a nonnumeric value");
                     stack.add(result);
                     return;
                 }
@@ -1403,8 +1430,7 @@ final class GpuDensityBytecodeCompiler {
         }
     }
 
-    private static Object readField(Object instance, String owner, String name, String descriptor,
-                                    boolean staticAccess) {
+    private static Object readField(Object instance, String owner, String name, String descriptor) {
         Field field = findField(instance.getClass(), owner, name);
         if (field == null) {
             throw new UnsupportedBytecode("field owner is not in the density class/interface hierarchy: " + owner);
@@ -1415,16 +1441,38 @@ final class GpuDensityBytecodeCompiler {
             }
             if (!field.trySetAccessible()) throw new UnsupportedBytecode("field is inaccessible: " + name);
             int modifiers = field.getModifiers();
-            if (Modifier.isStatic(modifiers) != staticAccess)
-                throw new UnsupportedBytecode("field access kind does not match runtime field: " + name);
+            if (Modifier.isStatic(modifiers))
+                throw new UnsupportedBytecode("instance field access resolved to a static field: " + name);
             if (!Modifier.isFinal(modifiers))
                 throw new UnsupportedBytecode("mutable field is not supported: " + name);
-            if (staticAccess && !field.getType().isPrimitive())
-                throw new UnsupportedBytecode("static final object fields are not numeric constants: " + name);
-            return field.get(staticAccess ? null : instance);
+            return field.get(instance);
         } catch (IllegalAccessException failure) {
             throw new UnsupportedBytecode("field cannot be read: " + name);
         }
+    }
+
+    private static Object readStaticConstant(Object density, ClassNode currentOwner, String owner,
+                                             String name, String descriptor) {
+        ClassNode declaringOwner = owner.equals(currentOwner.name)
+                ? currentOwner : readClassNode(density.getClass(), owner);
+        for (FieldNode field : declaringOwner.fields) {
+            if (!field.name.equals(name) || !field.desc.equals(descriptor)) continue;
+            if ((field.access & (Opcodes.ACC_STATIC | Opcodes.ACC_FINAL))
+                    != (Opcodes.ACC_STATIC | Opcodes.ACC_FINAL)) {
+                throw new UnsupportedBytecode("static helper field is not final: " + name);
+            }
+            if (field.value == null) {
+                throw new UnsupportedBytecode("static field requires class initialization and is not a bytecode constant: "
+                        + owner.replace('/', '.') + "." + name);
+            }
+            if (!(field.value instanceof Number || field.value instanceof Boolean
+                    || field.value instanceof Character)) {
+                throw new UnsupportedBytecode("static field is not a primitive numeric constant: " + name);
+            }
+            return field.value;
+        }
+        throw new UnsupportedBytecode("static constant was not found in class bytecode: "
+                + owner.replace('/', '.') + "." + name);
     }
 
     private static Field findField(Class<?> type, String owner, String name) {
