@@ -20,6 +20,11 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     /** Spatial batch footprint requested for terrain generation. */
     private static final int BATCH_SIZE_CHUNKS = 10;
     private static final int MAX_CHUNKS = 100;
+    /** One prefetched area is already a useful dispatch and should not wait for another tile. */
+    private static final int PREFETCH_TILE_CHUNKS = (GpuTerrainAreaRegistry.RADIUS * 2 + 1)
+            * (GpuTerrainAreaRegistry.RADIUS * 2 + 1);
+    /** Briefly collect adjacent tiles, then dispatch a complete prefetch tile even below target. */
+    private static final long TILE_COALESCE_NANOS = TimeUnit.MILLISECONDS.toNanos(10L);
     /** Aim for a useful transfer/dispatch size when nearby requests are ready. */
     private static final int TARGET_CHUNKS = (int) Math.max(1L,
             Math.min(MAX_CHUNKS, Long.getLong("gpunoise.terrainBatchTargetChunks", 64L)));
@@ -85,15 +90,24 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 while (pendingByRegion.isEmpty()) {
                     addPending(queue.take());
                 }
-                long deadline = System.nanoTime() + BATCH_WINDOW_NANOS;
+                long batchStarted = System.nanoTime();
+                long deadline = batchStarted + BATCH_WINDOW_NANOS;
+                long tileDeadline = batchStarted + TILE_COALESCE_NANOS;
+                int compatibleCount = largestNearbyCount();
                 while (System.nanoTime() < deadline && pendingCount() < MAX_CHUNKS
-                        && largestNearbyCount() < TARGET_CHUNKS) {
-                    long remaining = deadline - System.nanoTime();
+                        && compatibleCount < TARGET_CHUNKS) {
+                    long now = System.nanoTime();
+                    if (compatibleCount >= PREFETCH_TILE_CHUNKS && now >= tileDeadline) break;
+                    long remaining = deadline - now;
+                    if (compatibleCount >= PREFETCH_TILE_CHUNKS) {
+                        remaining = Math.min(remaining, tileDeadline - now);
+                    }
                     Pending next = remaining > 0
                             ? queue.poll(remaining, TimeUnit.NANOSECONDS)
                             : queue.poll();
                     if (next == null) break;
                     addPending(next);
+                    compatibleCount = largestNearbyCount();
                 }
                 long batchRegion = largestRegion();
                 ArrayDeque<Pending> region = pendingByRegion.get(batchRegion);
