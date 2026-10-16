@@ -233,3 +233,12 @@ large, and the standalone kernel is not part of the chunk hot path, so these
 measurements do not establish a performance change from the kernel. Current
 throughput measures density/interpolation under Mesa Lavapipe, not GPU-selected
 block states or physical GPU performance.
+
+The aquifer substance pipeline now follows all three ordered pressure checks
+from the pinned `NoiseBasedAquifer.computeSubstance` implementation: nearest /
+second, nearest / third, then second / third. Mesa smoke exercises each pair,
+pressure ties, global lava, water over lava, and CPU fallback thresholds. The
+1,089 chunk paired run on the same revision measured 34.354 CPU CPS and 21.066
+Lavapipe CPS (0.613x), with 15.078 average chunks per dispatch and no reported
+GPU terrain fallbacks. This remains a standalone kernel; the result does not
+measure aquifer decision integration or final block selection.
