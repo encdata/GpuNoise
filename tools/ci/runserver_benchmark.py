@@ -55,7 +55,11 @@ SERVER_CRASH = re.compile(
 GPU_COUNTS = re.compile(
     r"GPU terrain: submitted=(\d+), completed=(\d+), consumed=(\d+), fallback=(\d+)"
 )
-GPU_BATCH_WINDOW = re.compile(r"GPU terrain batch window=(\d+)ms, chunk limit=(\d+)")
+GPU_BATCH_WINDOW = re.compile(r"GPU terrain batch window=(\d+)ms, target=(\d+), chunk limit=(\d+)")
+GPU_BATCHING = re.compile(
+    r"GPU terrain roots batching: avgChunksPerDispatch=([\d.]+), "
+    r"avgSamplesPerDispatch=([\d.]+),"
+)
 GPU_SHADER_VARIANT = re.compile(r"GPU density shader variant: registers=(\d+), fastMath=(true|false)")
 GPU_CHUNK_LATENCY = re.compile(
     r"GPU terrain roots latency: completedChunks=(\d+), "
@@ -252,6 +256,13 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
                 f"CI_GPU_CHUNK_LATENCY mode={mode} samples={latest_latency[0]} "
                 f"p50_bucket_ms={latest_latency[1]} p95_bucket_ms={latest_latency[2]} "
                 f"p99_bucket_ms={latest_latency[3]}", flush=True,
+            )
+            batch_samples = GPU_BATCHING.findall(run_log)
+            if not batch_samples:
+                raise RuntimeError("GPU average chunks per dispatch were not recorded")
+            print(
+                f"CI_GPU_BATCHING mode={mode} avg_chunks_per_dispatch={batch_samples[-1][0]} "
+                f"avg_samples_per_dispatch={batch_samples[-1][1]}", flush=True,
             )
             batch_window = GPU_BATCH_WINDOW.search(run_log)
             if batch_window is None or int(batch_window.group(1)) != BATCH_WINDOW_MS:

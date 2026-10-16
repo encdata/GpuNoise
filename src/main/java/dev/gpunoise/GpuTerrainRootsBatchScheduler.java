@@ -20,6 +20,8 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     /** Spatial batch footprint requested for terrain generation. */
     private static final int BATCH_SIZE_CHUNKS = 10;
     private static final int MAX_CHUNKS = 100;
+    /** Aim for a useful transfer/dispatch size when nearby requests are ready. */
+    private static final int TARGET_CHUNKS = 32;
     private static final int MAX_INPUT = PersistentVulkanNormalNoiseEngine.CAPACITY;
     // Give C2ME enough time to enqueue the rest of the local 10x10 area. The
     // deadline is still bounded, so an isolated request is dispatched
@@ -47,11 +49,12 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     private final AtomicLong totalDispatchLatencyNanos = new AtomicLong();
     private final LatencyHistogram chunkLatency = new LatencyHistogram();
     private final AtomicLong lastLatencyLogBucket = new AtomicLong();
+    private final AtomicLong lastBatchLogBucket = new AtomicLong();
 
     GpuTerrainRootsBatchScheduler() {
         for (int i = 0; i < 8; i++) metadataPool.add(new DispatchMetadata());
-        GpuNoise.LOGGER.info("GPU terrain batch window={}ms, chunk limit={}",
-                TimeUnit.NANOSECONDS.toMillis(BATCH_WINDOW_NANOS), MAX_CHUNKS);
+        GpuNoise.LOGGER.info("GPU terrain batch window={}ms, target={}, chunk limit={}",
+                TimeUnit.NANOSECONDS.toMillis(BATCH_WINDOW_NANOS), TARGET_CHUNKS, MAX_CHUNKS);
         worker.execute(this::run);
     }
 
@@ -82,7 +85,8 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                     addPending(queue.take());
                 }
                 long deadline = System.nanoTime() + BATCH_WINDOW_NANOS;
-                while (System.nanoTime() < deadline && pendingCount() < MAX_CHUNKS) {
+                while (System.nanoTime() < deadline && pendingCount() < MAX_CHUNKS
+                        && largestNearbyCount() < TARGET_CHUNKS) {
                     long remaining = deadline - System.nanoTime();
                     Pending next = remaining > 0
                             ? queue.poll(remaining, TimeUnit.NANOSECONDS)
@@ -190,6 +194,16 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         return bestRegion;
     }
 
+    private int largestNearbyCount() {
+        long center = largestRegion();
+        int count = 0;
+        for (long region : nearbyRegions(center)) {
+            ArrayDeque<Pending> pending = pendingByRegion.get(region);
+            if (pending != null) count += pending.size();
+        }
+        return count;
+    }
+
     private List<Long> nearbyRegions(long center) {
         int centerX = (int) (center >> 32);
         int centerZ = (int) center;
@@ -282,14 +296,16 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     private void recordDispatchLatency(long submittedAt) {
         totalDispatchLatencyNanos.addAndGet(System.nanoTime() - submittedAt);
         long completed = completedDispatches.incrementAndGet();
-        if ((completed & 63L) == 0L) {
+        long completedChunks = chunkLatency.count();
+        long batchBucket = completedChunks >>> 8;
+        if (batchBucket > 0L && lastBatchLogBucket.getAndSet(batchBucket) != batchBucket) {
             GpuNoise.LOGGER.info("GPU terrain roots batching: avgChunksPerDispatch={}, avgSamplesPerDispatch={}, avgQueueWaitMsPerChunk={}, avgSubmitToCompleteMsPerDispatch={}",
                     (double) totalChunksDispatched.get() / dispatchCount.get(),
                     (double) totalSamplesDispatched.get() / dispatchCount.get(),
                     totalQueueWaitNanos.get() / (double) totalChunksDispatched.get() / 1_000_000.0,
                     totalDispatchLatencyNanos.get() / (double) completed / 1_000_000.0);
         }
-        long latencyCount = chunkLatency.count();
+        long latencyCount = completedChunks;
         long latencyBucket = latencyCount >>> 7;
         if (latencyBucket > 0L && lastLatencyLogBucket.getAndSet(latencyBucket) != latencyBucket) {
             GpuNoise.LOGGER.info("GPU terrain roots latency: completedChunks={}, p50BucketMs={}, p95BucketMs={}, p99BucketMs={}",
