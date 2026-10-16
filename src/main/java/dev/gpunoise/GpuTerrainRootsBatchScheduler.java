@@ -3,10 +3,8 @@ package dev.gpunoise;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
@@ -124,7 +122,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 // self-describing, so this keeps one dispatch useful even
                 // when C2ME's traversal crosses a 5x5 boundary between two
                 // scheduler wakeups.
-                for (long candidateRegion : nearbyRegions(batchKey.region)) {
+                for (long candidateRegion : nearbyRegions(batchKey.region, batchKey.layout)) {
                     BatchKey candidateKey = new BatchKey(candidateRegion, batchKey.layout);
                     ArrayDeque<Pending> candidate = pendingByRegion.get(candidateKey);
                     if (candidate == null) continue;
@@ -214,7 +212,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         if (seed == null) return 0;
         int capacity = maxChunksPerDispatch(seed.grid);
         int count = 0;
-        for (long region : nearbyRegions(center.region)) {
+        for (long region : nearbyRegions(center.region, center.layout)) {
             ArrayDeque<Pending> candidates = pendingByRegion.get(new BatchKey(region, center.layout));
             if (candidates == null) continue;
             count = Math.min(capacity, count + candidates.size());
@@ -223,17 +221,16 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         return count;
     }
 
-    private List<Long> nearbyRegions(long center) {
+    private List<Long> nearbyRegions(long center, GridLayout layout) {
         int centerX = (int) (center >> 32);
         int centerZ = (int) center;
-        List<Long> regions = new ArrayList<>(pendingByRegion.size());
-        Set<Long> seen = new HashSet<>();
-        for (BatchKey key : pendingByRegion.keySet()) {
-            long region = key.region;
-            int x = (int) (region >> 32);
-            int z = (int) region;
-            if (Math.abs(x - centerX) <= 1 && Math.abs(z - centerZ) <= 1 && seen.add(region)) {
-                regions.add(region);
+        List<Long> regions = new ArrayList<>(9);
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                long region = ((long) (centerX + dx) << 32) ^ ((centerZ + dz) & 0xffffffffL);
+                if (pendingByRegion.containsKey(new BatchKey(region, layout))) {
+                    regions.add(region);
+                }
             }
         }
         regions.sort((a, b) -> {
