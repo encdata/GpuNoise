@@ -94,6 +94,9 @@ parity checks.
   recognizes `floor`, `ceil`, `sqrt`, `sin`, `cos`, `exp`, `log`, and the
   `Mth.map`, `clampedMap`, `inverseLerp`, `clampedLerp`, `lerp2`, and
   `lerp3`, plus `absMax`, `smoothstep`, `atan2`, `pow`, `signum`, and `tanh`.
+  It also lowers double and float `Math.min`/`Math.max`/`Math.abs`, preserves
+  float `Mth.square` rounding, and handles `Mth.clamp` with dynamic float or
+  double bounds through compare/select nodes.
   Java double division and double/float remainder are represented explicitly;
   integer division and remainder require a compile-time nonzero divisor. Java
   32-bit arithmetic, bitwise AND/OR/XOR, signed/unsigned shifts, and

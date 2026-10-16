@@ -648,8 +648,8 @@ final class GpuDensityBytecodeCompiler {
                             : input.constant() * input.constant()));
                 } else if (descriptor.equals("(F)F")) {
                     int result = builder.floatOperation("FMUL", input.expression(), input.expression());
-                    Double constant = input.constant() == null ? null
-                            : (double) ((float) input.constant() * (float) input.constant());
+                    float value = input.constant() == null ? 0.0F : input.constant().floatValue();
+                    Double constant = input.constant() == null ? null : (double) (value * value);
                     stack.add(Value.value(result, constant));
                 } else {
                     reject("unsupported Mth.square overload " + descriptor);
@@ -792,13 +792,10 @@ final class GpuDensityBytecodeCompiler {
                 return;
             }
             if (owner.equals("net/minecraft/util/Mth") && name.equals("clamp")
-                    && descriptor.equals("(DDD)D") && arguments.length == 3
-                    && arguments[1].constant() != null && arguments[2].constant() != null) {
-                double minimum = arguments[1].constant(), maximum = arguments[2].constant();
-                int result = builder.clamp(arguments[0].expression(), minimum, maximum);
-                Double constant = arguments[0].constant() == null ? null
-                        : Math.max(minimum, Math.min(maximum, arguments[0].constant()));
-                stack.add(Value.value(result, constant));
+                    && (descriptor.equals("(DDD)D") || descriptor.equals("(FFF)F"))
+                    && arguments.length == 3) {
+                stack.add(clampValue(arguments[0], arguments[1], arguments[2],
+                        descriptor.equals("(FFF)F")));
                 return;
             }
             reject("unsupported math operation " + owner.replace('/', '.') + "." + name);
@@ -807,6 +804,27 @@ final class GpuDensityBytecodeCompiler {
         private Value mathBinary(GpuDensityExpression.Operation operation, Value left, Value right) {
             int expression = builder.apply(operation, left.expression(), right.expression());
             return Value.value(expression, combineConstant(operation, left.constant(), right.constant()));
+        }
+
+        private Value clampValue(Value input, Value minimum, Value maximum, boolean floatResult) {
+            if (minimum.constant() != null && maximum.constant() != null
+                    && minimum.constant() <= maximum.constant() && !floatResult) {
+                int result = builder.clamp(input.expression(), minimum.constant(), maximum.constant());
+                Double constant = input.constant() == null ? null
+                        : Math.max(minimum.constant(), Math.min(maximum.constant(), input.constant()));
+                return Value.value(result, constant);
+            }
+            int belowMinimum = builder.compare("LT", input.expression(), minimum.expression());
+            int aboveMaximum = builder.compare("GT", input.expression(), maximum.expression());
+            int upperClamped = builder.select(aboveMaximum, maximum.expression(), input.expression());
+            int result = builder.select(belowMinimum, minimum.expression(), upperClamped);
+            Double constant = null;
+            if (input.constant() != null && minimum.constant() != null && maximum.constant() != null) {
+                double value = input.constant() < minimum.constant() ? minimum.constant()
+                        : input.constant() > maximum.constant() ? maximum.constant() : input.constant();
+                constant = floatResult ? (double) (float) value : value;
+            }
+            return Value.value(result, constant);
         }
 
         private Value lerpValue(Value delta, Value start, Value end) {
