@@ -784,6 +784,39 @@ final class GpuDensityBytecodeCompiler {
                 stack.add(mathBinary(GpuDensityExpression.Operation.MAX, leftAbs, rightAbs));
                 return;
             }
+            if (owner.equals("net/minecraft/util/Mth") && arguments.length == 1
+                    && descriptor.equals("(F)F") && name.equals("frac")) {
+                Value input = arguments[0];
+                int rounded = builder.map(GpuDensityExpression.Mapping.FLOOR, input.expression());
+                int flooredInt = builder.cast("F2I", rounded);
+                int flooredFloat = builder.cast("I2F", flooredInt);
+                stack.add(floatMathBinary("FSUB", input,
+                        Value.value(flooredFloat, input.constant() == null ? null
+                                : (double) (float) (int) Math.floor(input.constant()))));
+                return;
+            }
+            if (owner.equals("net/minecraft/util/Mth") && arguments.length == 2
+                    && (descriptor.equals("(FF)F") || descriptor.equals("(DD)D"))
+                    && name.equals("positiveModulo")) {
+                boolean floatResult = descriptor.equals("(FF)F");
+                Value remainder = floatResult
+                        ? floatMathBinary("FREM", arguments[0], arguments[1])
+                        : mathBinary(GpuDensityExpression.Operation.REMAINDER, arguments[0], arguments[1]);
+                Value shifted = floatResult
+                        ? floatMathBinary("FADD", remainder, arguments[1])
+                        : mathBinary(GpuDensityExpression.Operation.ADD, remainder, arguments[1]);
+                Value result = floatResult
+                        ? floatMathBinary("FREM", shifted, arguments[1])
+                        : mathBinary(GpuDensityExpression.Operation.REMAINDER, shifted, arguments[1]);
+                stack.add(result);
+                return;
+            }
+            if (owner.equals("net/minecraft/util/Mth") && arguments.length == 1
+                    && (descriptor.equals("(F)F") || descriptor.equals("(D)D"))
+                    && name.equals("wrapDegrees")) {
+                stack.add(wrapDegreesValue(arguments[0], descriptor.equals("(F)F")));
+                return;
+            }
             if (owner.equals("net/minecraft/util/Mth") && descriptor.equals("(D)D")
                     && arguments.length == 1 && name.equals("smoothstep")) {
                 Value x = arguments[0];
@@ -963,6 +996,24 @@ final class GpuDensityBytecodeCompiler {
                     : delta.constant() < 0.0 ? start.constant()
                     : delta.constant() > 1.0 ? end.constant() : interpolated.constant();
             return Value.value(result, constant);
+        }
+
+        private Value wrapDegreesValue(Value input, boolean floatResult) {
+            Value fullTurn = Value.value(builder.constant(floatResult ? 360.0F : 360.0), 360.0);
+            Value halfTurn = Value.value(builder.constant(floatResult ? 180.0F : 180.0), 180.0);
+            Value remainder = floatResult
+                    ? floatMathBinary("FREM", input, fullTurn)
+                    : mathBinary(GpuDensityExpression.Operation.REMAINDER, input, fullTurn);
+            int upper = builder.compare("GE", remainder.expression(), halfTurn.expression());
+            Value minusTurn = floatResult
+                    ? floatMathBinary("FSUB", remainder, fullTurn)
+                    : mathBinary(GpuDensityExpression.Operation.SUBTRACT, remainder, fullTurn);
+            int upperAdjusted = builder.select(upper, minusTurn.expression(), remainder.expression());
+            int lower = builder.compare("LT", upperAdjusted, builder.constant(-180.0));
+            Value plusTurn = floatResult
+                    ? floatMathBinary("FADD", Value.value(upperAdjusted, null), fullTurn)
+                    : mathBinary(GpuDensityExpression.Operation.ADD, Value.value(upperAdjusted, null), fullTurn);
+            return Value.value(builder.select(lower, plusTurn.expression(), upperAdjusted), null);
         }
 
         private Value floorDivision(Value dividend, Value divisor) {

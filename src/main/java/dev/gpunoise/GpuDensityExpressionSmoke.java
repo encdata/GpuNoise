@@ -91,6 +91,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new FloatInterpolationMathDensity());
     }
 
+    static VulkanBranchFixture moduloAndAngleMathFixture() {
+        return graphFixture(new ModuloAndAngleMathDensity());
+    }
+
     static VulkanBranchFixture minecraftMathOverloadsFixture() {
         return graphFixture(new MinecraftMathOverloadsDensity());
     }
@@ -467,6 +471,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new MapMathDensity(), "Mth mapping functions");
         verifyStandaloneMath(new InterpolationMathDensity(), "Mth interpolation functions");
         verifyStandaloneMath(new FloatInterpolationMathDensity(), "Mth float interpolation functions");
+        verifyStandaloneMath(new ModuloAndAngleMathDensity(), "Mth modulo and angle functions");
         verifyStandaloneMath(new MinecraftMathOverloadsDensity(), "Mth float and integer overloads");
         verifyStandaloneMath(new DynamicClampDensity(), "dynamic Mth.clamp overloads");
 
@@ -988,6 +993,18 @@ final class GpuDensityExpressionSmoke {
                     + net.minecraft.util.Mth.inverseLerp(x, -1.0F, 1.0F) * 0.1F
                     + net.minecraft.util.Mth.map(x, -1.0F, 1.0F, -2.0F, 4.0F) * 0.1F
                     + net.minecraft.util.Mth.clampedMap(y, -1.0F, 1.0F, -2.0F, 4.0F) * 0.1F;
+        }
+    }
+
+    private static final class ModuloAndAngleMathDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            float x = context.blockX() * 0.25F;
+            double z = context.blockZ() * 0.125;
+            return net.minecraft.util.Mth.frac(x) * 0.1F
+                    + net.minecraft.util.Mth.positiveModulo(x, 17.0F) * 0.001F
+                    + net.minecraft.util.Mth.positiveModulo(z, 31.0) * 0.001
+                    + net.minecraft.util.Mth.wrapDegrees(x) * 0.0001F
+                    + net.minecraft.util.Mth.wrapDegrees(z) * 0.0001;
         }
     }
 

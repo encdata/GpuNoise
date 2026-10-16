@@ -106,6 +106,9 @@ parity checks.
   from double `Math` operations; `Mth.sqrt(float)` has its own float-rounded
   mapping. Float `Mth.lerp`, `clampedLerp`, `inverseLerp`, `map`, and
   `clampedMap` lower each JVM float arithmetic step with explicit rounding.
+  `Mth.frac(float)`, float/double `positiveModulo`, and `wrapDegrees` lower
+  with Java remainder and their original float rounding points, covering
+  common angular and periodic terrain transforms.
   `Math.signum(float)` and
   `Math.signum(double)` retain their respective input precision.
   Minecraft's indexed sine table is generated once and uploaded to persistent

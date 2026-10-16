@@ -120,6 +120,12 @@ public final class VulkanCiSmoke {
                     "Mth interpolation functions", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.floatInterpolationMathFixture(),
                     "Mth float interpolation functions", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.moduloAndAngleMathFixture(),
+                    "Mth modulo and angle functions", mathX, mathY, mathZ);
+            float[] angleX = {-2160.0f, -720.0f, -716.0f, 716.0f, 720.0f, 2160.0f};
+            float[] angleZ = {-1440.0f, -1432.0f, -1431.0f, 1431.0f, 1432.0f, 1440.0f};
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.moduloAndAngleMathFixture(),
+                    "Mth modulo and angle boundary cases", angleX, new float[angleX.length], angleZ);
             GpuDensityExpressionSmoke.VulkanBranchFixture minecraftMathFixture =
                     GpuDensityExpressionSmoke.minecraftMathOverloadsFixture();
             float[] overloadX = {-2_147_483_648.0f, -46_341.0f, 0.0f, 46_341.0f, 2_147_483_520.0f};
