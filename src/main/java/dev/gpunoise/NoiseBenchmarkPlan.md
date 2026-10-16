@@ -88,12 +88,12 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   shader execution time. Chunk latency buckets improved to p50 1 second and
   p95/p99 2.5 seconds, but remain too high for the no-stutter target. This
   points the next pass toward dispatch occupancy and the compute/device path,
-  rather than CPU-side buffer preparation. The 100-chunk-radius paired run is
-  now in CI. Its next scheduler pass searches a 50x50 chunk region (radius two
-  10x10 buckets) for compatible queued chunks, keeping the 50 ms deadline and
-  96-chunk target unchanged. The reason is the measured ~44 ms enqueue wait
-  with only 18-20 chunks per dispatch: the queue had time to collect, but the
-  previous 30x30 search region could not find enough nearby work.
+  rather than CPU-side buffer preparation. The next scheduler pass searches a
+  50x50 chunk region (radius two 10x10 buckets) for compatible queued chunks,
+  keeping the 50 ms deadline and 96-chunk target unchanged. This addresses the
+  measured ~44 ms enqueue wait with only 18-20 chunks per dispatch: the queue
+  had time to collect, but the previous 30x30 search region could not find
+  enough nearby work.
 - The capacity-aware batch pass (commit `8f3fa5c`, still at a 256-block radius
   and the 30x30 search region) built and completed all CI gates. It measured
   median CPU 33.404 CPS and Lavapipe 23.222 CPS (ratio 0.681), with 15.84-17.62
@@ -102,6 +102,21 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   slower than the earlier 96-target run; the capacity check did not increase
   occupancy, and runner variation prevents attributing the CPS change to that
   code. The larger region search is the next isolated scheduling change.
+- Five subsequent successful 100-chunk-radius Actions runs each generated
+  40,401 chunks per CPU/GPU pair over three repetitions. Across the radius-one
+  and radius-two scheduler revisions, CPU medians ranged from 41.923 to 45.615
+  CPS and Lavapipe medians ranged from 28.611 to 32.059 CPS (paired ratios
+  0.656-0.747). The radius-two run on `f0ef1c7` measured 44.617 CPU CPS and
+  29.735 Lavapipe CPS (0.666 ratio); the later capacity-aware run on `7fa38d6`
+  measured 43.876 and 31.983 CPS (0.727). The bytecode compiler run on
+  `2ce1da2` measured 45.272 and 29.896 CPS (0.661). All used Mesa/Lavapipe,
+  so these numbers establish long-run software-Vulkan correctness and relative
+  overhead only; they do not establish physical-GPU throughput. The measured
+  CPU preparation remained around 0.42-0.54 ms per dispatch while
+  submit-to-fence spanned roughly 315-372 ms, with 1.5-1.9 ms readback.
+  Fence time includes the polling interval and Lavapipe software execution.
+  Batch occupancy and p95/p99 latency still need to improve, and the next
+  benchmark should run the same revision on actual GPU hardware.
 
 ## Work passes
 

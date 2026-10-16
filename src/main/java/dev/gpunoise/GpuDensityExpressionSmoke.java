@@ -137,12 +137,19 @@ final class GpuDensityExpressionSmoke {
 
     static VulkanBranchFixture mixedTerrainRootFixture() {
         DensityFunction supported = new FinalFieldConfigurationDensity();
-        DensityFunction fallback = new UnsupportedTerrainDensity();
+        GpuDensityGraph baseline = GpuDensityGraphLowerer.lower(
+                GpuDensityGraphCompiler.compileTerrainRoots(new DensityFunction[]{supported}));
+        DensityFunction fallback = new PartiallyUnsupportedTerrainDensity(
+                new ConstantReferenceDensity(0.25), new UnsupportedTerrainDensity());
         GpuDensityGraph graph = GpuDensityGraphLowerer.lower(GpuDensityGraphCompiler.compileTerrainRoots(
                 new DensityFunction[]{supported, fallback}));
         if (!graph.supportsRouterRoot(0) || graph.supportsRouterRoot(1)
                 || graph.unsupportedRouterRootReasons()[1] == null) {
             throw new AssertionError("unsupported custom terrain root should be isolated from its GPU sibling");
+        }
+        if (graph.nodes().size() != baseline.nodes().size() + 1
+                || graph.noises().size() != baseline.noises().size()) {
+            throw new AssertionError("failed root compilation leaked partial nodes or samplers into its GPU sibling");
         }
         return new VulkanBranchFixture(graph, supported);
     }
@@ -1240,8 +1247,31 @@ final class GpuDensityExpressionSmoke {
     }
 
     private static final class UnsupportedTerrainDensity extends NumericSmokeDensity {
+        private final NormalNoise sampler = NormalNoise.create(RandomSource.create(913L), -2, 1.0, 0.5);
+
         @Override public double compute(FunctionContext context) {
-            return Math.random() + context.blockY();
+            // Build a noise-backed GPU expression before the opaque call so
+            // rollback covers abandoned nodes and sampler registrations.
+            return sampler.getValue(context.blockX() * 0.03125,
+                    context.blockY() * 0.125, context.blockZ() * 0.03125) + Math.random();
+        }
+    }
+
+    private static final class PartiallyUnsupportedTerrainDensity extends NumericSmokeDensity {
+        private final DensityFunction supportedChild;
+        private final DensityFunction unsupportedChild;
+        private final NormalNoise sampler = NormalNoise.create(RandomSource.create(914L), -2, 1.0, 0.5);
+
+        private PartiallyUnsupportedTerrainDensity(DensityFunction supportedChild,
+                                                   DensityFunction unsupportedChild) {
+            this.supportedChild = supportedChild;
+            this.unsupportedChild = unsupportedChild;
+        }
+
+        @Override public double compute(FunctionContext context) {
+            double sample = sampler.getValue(context.blockX() * 0.03125,
+                    context.blockY() * 0.125, context.blockZ() * 0.03125);
+            return supportedChild.compute(context) + sample + unsupportedChild.compute(context);
         }
     }
 
