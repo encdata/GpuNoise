@@ -8,6 +8,13 @@ on:
 permissions:
   contents: read
 
+# The server benchmark is CPU-heavy on Lavapipe. Running several revisions for
+# the same ref at once distorts paired CPS measurements and delays the newest
+# compiler/shader checks, so only the latest run for a ref remains active.
+concurrency:
+  group: gpunoise-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-24.04
