@@ -5,6 +5,7 @@ import dev.gpunoise.GpuNoiseChunkAccess;
 import dev.gpunoise.GpuTerrainRuntime;
 import dev.gpunoise.GpuTerrainRoots;
 import dev.gpunoise.GpuAquiferCoordinatePlanner;
+import dev.gpunoise.GpuAquiferNearestThree;
 import dev.gpunoise.GpuWorldgenDependency;
 import dev.gpunoise.GpuTerrainProfiler;
 import net.minecraft.world.level.levelgen.PositionalRandomFactory;
