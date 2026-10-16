@@ -42,6 +42,10 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   registers. Vulkan evaluates the terrain router roots on the cell lattice.
   Java still owns interpolation, aquifer orchestration, biome selection, and
   chunk writing; full block output remains a diagnostic option.
+- Terrain dispatch profiling now reports GPU timestamp-query command duration
+  separately from CPU preparation, submit-to-fence wall time, and readback.
+  Devices with no timestamp-capable compute queue report the GPU duration as
+  unavailable rather than treating host polling time as shader execution.
 - The C2ME + Chunky CI scenario is configured for a 1,600-block radius, or
   100 chunks in each direction (40,401 chunks per square pregen), in three
   paired repetitions. It checks Vulkan smoke/parity and captures dispatch and

@@ -84,7 +84,7 @@ GPU_BATCH_SIZES = re.compile(
 GPU_GRAPH_PROFILE = re.compile(
     r"GPU terrain graph profile: completedDispatches=(\d+), "
     r"avgCpuPrepareMs=([\d.]+), avgSubmitToFenceMs=([\d.]+), "
-    r"avgReadbackMs=([\d.]+)"
+    r"avgReadbackMs=([\d.]+)(?:, avgGpuCommandMs=([-\d.]+), gpuTimingSamples=(\d+))?"
 )
 GPU_SHADER_VARIANT = re.compile(r"GPU density shader variant: registers=(\d+), fastMath=(true|false)")
 GPU_CHUNK_LATENCY = re.compile(
@@ -325,7 +325,9 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
                 f"CI_GPU_PROFILE mode={mode} dispatches={latest_profile[0]} "
                 f"avg_cpu_prepare_ms={latest_profile[1]} "
                 f"avg_submit_to_fence_ms={latest_profile[2]} "
-                f"avg_readback_ms={latest_profile[3]}", flush=True,
+                f"avg_readback_ms={latest_profile[3]} "
+                f"avg_gpu_command_ms={latest_profile[4] or 'unavailable'} "
+                f"gpu_timing_samples={latest_profile[5] or '0'}", flush=True,
             )
             batch_window = GPU_BATCH_WINDOW.search(run_log)
             if (batch_window is None or int(batch_window.group(1)) != BATCH_WINDOW_MS
