@@ -893,7 +893,8 @@ final class GpuDensityBytecodeCompiler {
                 stack.add(Value.value(result, constant));
                 return;
             }
-            if (owner.equals("net/minecraft/util/Mth") && name.equals("abs")
+            if ((owner.equals("java/lang/Math") || owner.equals("java/lang/StrictMath")
+                    || owner.equals("net/minecraft/util/Mth")) && name.equals("abs")
                     && descriptor.equals("(I)I") && arguments.length == 1) {
                 Value input = arguments[0];
                 int zero = builder.constant(0.0);
