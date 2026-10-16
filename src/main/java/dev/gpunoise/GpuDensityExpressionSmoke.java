@@ -64,6 +64,12 @@ final class GpuDensityExpressionSmoke {
                 GpuDensityGraphCompiler.compileDensityFunction(function, true)), function);
     }
 
+    static VulkanBranchFixture floorDivisionFixture() {
+        DensityFunction function = new FloorDivisionDensity();
+        return new VulkanBranchFixture(GpuDensityGraphLowerer.lower(
+                GpuDensityGraphCompiler.compileDensityFunction(function, true)), function);
+    }
+
     static VulkanBranchFixture narrowingFixture() {
         DensityFunction function = new NarrowingDensity();
         return new VulkanBranchFixture(GpuDensityGraphLowerer.lower(
@@ -465,6 +471,20 @@ final class GpuDensityExpressionSmoke {
             throw new AssertionError("integer division by a dynamic divisor must remain on the Java path");
         }
         GpuDensityGraphBuffer.pack(integerDivisionOverflowFixture().graph());
+        FloorDivisionDensity floorDivision = new FloorDivisionDensity();
+        GpuDensityBytecodeCompiler.Result floorDivisionResult = GpuDensityBytecodeCompiler.compile(floorDivision);
+        if (floorDivisionResult.expression() == null) {
+            throw new AssertionError("Math.floorDiv/floorMod should compile: " + floorDivisionResult.rejection());
+        }
+        for (int xValue : new int[]{-33, -32, -17, -16, -15, -1, 0, 1, 15, 16, 17, 32, 33}) {
+            double expected = floorDivision.compute(new DensityFunction.SinglePointContext(xValue, 0, 0));
+            requireClose(floorDivisionResult.expression().evaluate(xValue, 0, 0), expected,
+                    "Java floorDiv/floorMod at x=" + xValue);
+        }
+        if (GpuDensityBytecodeCompiler.compile(new DynamicFloorDivisionDensity()).expression() != null) {
+            throw new AssertionError("floorDiv/floorMod by a dynamic divisor must remain on the Java path");
+        }
+        GpuDensityGraphBuffer.pack(floorDivisionFixture().graph());
         GpuDensityBytecodeCompiler.Result narrowing = GpuDensityBytecodeCompiler.compile(new NarrowingDensity());
         if (narrowing.expression() == null) {
             throw new AssertionError("Java byte/short/char narrowing should compile: " + narrowing.rejection());
@@ -800,6 +820,35 @@ final class GpuDensityExpressionSmoke {
     private static final class DynamicIntegerDivisionDensity implements DensityFunction.SimpleFunction {
         @Override public double compute(FunctionContext context) {
             return context.blockX() / context.blockY();
+        }
+        @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
+        @Override public double minValue() { return Integer.MIN_VALUE; }
+        @Override public double maxValue() { return Integer.MAX_VALUE; }
+        @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
+            return DensityFunctions.constant(0.0).codec();
+        }
+    }
+
+    private static final class FloorDivisionDensity implements DensityFunction.SimpleFunction {
+        @Override public double compute(FunctionContext context) {
+            int x = context.blockX();
+            int positiveQuotient = Math.floorDiv(x, 16);
+            int positiveRemainder = Math.floorMod(x, 16);
+            int negativeRemainder = Math.floorMod(x, -16);
+            return positiveQuotient * 1_000 + positiveRemainder * 10 + negativeRemainder;
+        }
+        @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
+        @Override public double minValue() { return -140_000_000_000.0; }
+        @Override public double maxValue() { return 140_000_000_000.0; }
+        @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
+            return DensityFunctions.constant(0.0).codec();
+        }
+    }
+
+    private static final class DynamicFloorDivisionDensity implements DensityFunction.SimpleFunction {
+        @Override public double compute(FunctionContext context) {
+            return Math.floorDiv(context.blockX(), context.blockY())
+                    + Math.floorMod(context.blockX(), context.blockY());
         }
         @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
         @Override public double minValue() { return Integer.MIN_VALUE; }

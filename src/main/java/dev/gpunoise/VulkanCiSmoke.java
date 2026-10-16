@@ -140,6 +140,22 @@ public final class VulkanCiSmoke {
                             + ": expected " + expected + ", got " + overflowResults[sample]);
                 }
             }
+            GpuDensityExpressionSmoke.VulkanBranchFixture floorDivisionFixture =
+                    GpuDensityExpressionSmoke.floorDivisionFixture();
+            float[] floorX = {-33.0f, -32.0f, -17.0f, -16.0f, -15.0f, -1.0f,
+                    0.0f, 1.0f, 15.0f, 16.0f, 17.0f, 32.0f, 33.0f};
+            float[] floorZeros = new float[floorX.length];
+            float[] floorResults = ring.submitGraphRoots(floorDivisionFixture.graph(), floorX,
+                    floorZeros, floorZeros).get(60, TimeUnit.SECONDS);
+            for (int sample = 0; sample < floorX.length; sample++) {
+                double expected = floorDivisionFixture.javaFunction().compute(
+                        new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(
+                                (int) floorX[sample], 0, 0));
+                if (Math.abs(floorResults[sample] - expected) > 0.005) {
+                    throw new IllegalStateException("Java floorDiv/floorMod mismatch at sample " + sample
+                            + ": expected " + expected + ", got " + floorResults[sample]);
+                }
+            }
             GpuDensityExpressionSmoke.VulkanBranchFixture narrowingFixture =
                     GpuDensityExpressionSmoke.narrowingFixture();
             float[] narrowingX = {-257.0f, -129.0f, -1.0f, 0.0f, 127.0f, 128.0f, 255.0f, 65_537.0f};

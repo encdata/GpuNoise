@@ -580,10 +580,8 @@ final class GpuDensityBytecodeCompiler {
                 if (name.equals("floorDiv")) {
                     stack.add(quotient);
                 } else {
-                    Value product = integerMath(GpuDensityExpression.Operation.MULTIPLY,
-                            quotient, arguments[1], "IMUL");
-                    stack.add(integerMath(GpuDensityExpression.Operation.SUBTRACT,
-                            arguments[0], product, "ISUB"));
+                    Value product = integerMath(quotient, arguments[1], "IMUL");
+                    stack.add(integerMath(arguments[0], product, "ISUB"));
                 }
                 return;
             }
@@ -797,18 +795,15 @@ final class GpuDensityBytecodeCompiler {
         }
 
         private Value floorDivision(Value dividend, Value divisor) {
-            Value quotient = integerMath(GpuDensityExpression.Operation.DIVIDE,
-                    dividend, divisor, "IDIV");
-            Value remainder = integerMath(GpuDensityExpression.Operation.REMAINDER,
-                    dividend, divisor, "IREM");
+            Value quotient = integerMath(dividend, divisor, "IDIV");
+            Value remainder = integerMath(dividend, divisor, "IREM");
             int zero = builder.constant(0.0);
             int one = builder.constant(1.0);
             int remainderNonzero = builder.compare("NE", remainder.expression(), zero);
             int signsDiffer = builder.compare("LT",
                     builder.integerOperation("IXOR", dividend.expression(), divisor.expression()), zero);
             int decrement = builder.integerOperation("IAND", remainderNonzero, signsDiffer);
-            Value adjusted = integerMath(GpuDensityExpression.Operation.SUBTRACT,
-                    quotient, Value.value(one, 1.0), "ISUB");
+            Value adjusted = integerMath(quotient, Value.value(one, 1.0), "ISUB");
             int result = builder.select(decrement, adjusted.expression(), quotient.expression());
             Double constant = dividend.constant() == null ? null
                     : (double) Math.floorDiv((int) (double) dividend.constant(),
@@ -816,8 +811,7 @@ final class GpuDensityBytecodeCompiler {
             return Value.value(result, constant);
         }
 
-        private Value integerMath(GpuDensityExpression.Operation operation, Value left, Value right,
-                                  String integerOperation) {
+        private Value integerMath(Value left, Value right, String integerOperation) {
             int expression = builder.integerOperation(integerOperation, left.expression(), right.expression());
             Double constant = null;
             if (left.constant() != null && right.constant() != null) {
@@ -976,7 +970,7 @@ final class GpuDensityBytecodeCompiler {
             if (divisor.constant() == null || !Double.isFinite(divisor.constant())
                     || divisor.constant() != Math.rint(divisor.constant()) || divisor.constant() == 0.0
                     || divisor.constant() < Integer.MIN_VALUE || divisor.constant() > Integer.MAX_VALUE
-                    || (double) (float) divisor.constant() != divisor.constant()) {
+                    || (double) divisor.constant().floatValue() != divisor.constant()) {
                 reject(operation + " requires a compile-time nonzero 32-bit divisor");
             }
         }
