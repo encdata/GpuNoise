@@ -576,6 +576,13 @@ final class GpuDensityBytecodeCompiler {
         }
 
         private void mathCall(String owner, String name, String descriptor, Value[] arguments) {
+            if ((owner.equals("java/lang/Math") || owner.equals("java/lang/StrictMath"))
+                    && descriptor.equals("(DD)D") && arguments.length == 2
+                    && (name.equals("min") || name.equals("max"))) {
+                stack.add(mathBinary(name.equals("min") ? GpuDensityExpression.Operation.MIN
+                        : GpuDensityExpression.Operation.MAX, arguments[0], arguments[1]));
+                return;
+            }
             if ((owner.equals("java/lang/Math") || owner.equals("java/lang/StrictMath")
                     || owner.equals("net/minecraft/util/Mth"))
                     && descriptor.equals("(II)I") && arguments.length == 2
