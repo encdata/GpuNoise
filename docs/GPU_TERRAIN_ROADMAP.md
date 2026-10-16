@@ -117,6 +117,8 @@ parity checks.
   power and sign operations, Minecraft mapping functions, interpolation,
   float overloads, and dynamic clamps independently so a numerical mismatch
   identifies its operation group instead of failing an opaque composite graph.
+  Shader `atan2` handles Java's signed-zero, zero-pair, infinity, and NaN cases
+  before using the GPU intrinsic for ordinary finite inputs.
   The Mesa smoke path also checks
   nested ternaries, a noise-dependent floating branch, and a switch expression
   through lowering, packing, and dispatch against Java results. This grows the

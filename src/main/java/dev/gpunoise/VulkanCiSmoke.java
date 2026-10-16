@@ -100,7 +100,11 @@ public final class VulkanCiSmoke {
             assertNumericFixture(ring, GpuDensityExpressionSmoke.transcendentalMathFixture(),
                     "transcendental Math", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.powerMathFixture(),
-                    "pow, atan2, and signum", mathX, mathY, mathZ);
+                    "pow", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.atan2MathFixture(),
+                    "atan2", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.signumMathFixture(),
+                    "signum", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.mapMathFixture(),
                     "Mth mapping functions", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.interpolationMathFixture(),

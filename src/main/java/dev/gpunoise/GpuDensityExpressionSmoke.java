@@ -63,6 +63,14 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new PowerMathDensity());
     }
 
+    static VulkanBranchFixture atan2MathFixture() {
+        return graphFixture(new Atan2MathDensity());
+    }
+
+    static VulkanBranchFixture signumMathFixture() {
+        return graphFixture(new SignumMathDensity());
+    }
+
     static VulkanBranchFixture mapMathFixture() {
         return graphFixture(new MapMathDensity());
     }
@@ -439,7 +447,9 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new DoubleMinMaxDensity(), "double Math.min/max");
         verifyStandaloneMath(new FloatMathDensity(), "float Math overloads and Mth.square");
         verifyStandaloneMath(new TranscendentalMathDensity(), "transcendental Math");
-        verifyStandaloneMath(new PowerMathDensity(), "pow, atan2, and signum");
+        verifyStandaloneMath(new PowerMathDensity(), "pow");
+        verifyStandaloneMath(new Atan2MathDensity(), "atan2");
+        verifyStandaloneMath(new SignumMathDensity(), "signum");
         verifyStandaloneMath(new MapMathDensity(), "Mth mapping functions");
         verifyStandaloneMath(new InterpolationMathDensity(), "Mth interpolation functions");
         verifyStandaloneMath(new MinecraftMathOverloadsDensity(), "Mth float and integer overloads");
@@ -893,9 +903,19 @@ final class GpuDensityExpressionSmoke {
     private static final class PowerMathDensity extends NumericSmokeDensity {
         @Override public double compute(FunctionContext context) {
             double x = context.blockX(), z = context.blockZ();
-            return Math.atan2(z, x) * 0.05
-                    + Math.pow(0.5 + Math.abs(x) * 0.01 + Math.abs(z) * 0.005, 1.7) * 0.1
-                    + Math.signum(x) * 0.01;
+            return Math.pow(0.5 + Math.abs(x) * 0.01 + Math.abs(z) * 0.005, 1.7) * 0.1;
+        }
+    }
+
+    private static final class Atan2MathDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            return Math.atan2(context.blockZ(), context.blockX()) * 0.05;
+        }
+    }
+
+    private static final class SignumMathDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            return Math.signum(context.blockX()) * 0.01;
         }
     }
 
