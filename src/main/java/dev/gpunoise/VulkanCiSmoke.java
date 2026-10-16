@@ -49,18 +49,25 @@ public final class VulkanCiSmoke {
             // Exercise the cell-grid to block-density interpolation shader
             // used by the per-block terrain output path.
             float[] corners = new float[8];
-            java.util.Arrays.fill(corners, EXPECTED);
+            for (int y = 0; y < 2; y++) {
+                for (int z = 0; z < 2; z++) {
+                    for (int x = 0; x < 2; x++) {
+                        int corner = (y * 2 + z) * 2 + x;
+                        corners[corner] = x * 0.25f + y + z * 2.0f;
+                    }
+                }
+            }
             ByteBuffer interpolationMetadata = GpuInterpolationBatch.metadata(
                     1, 1, 1, 1, 2, 8, 8);
             System.out.println("Vulkan CI smoke: dispatching block interpolation shader");
             float[] blockResults = ring.submitInterpolation(corners, interpolationMetadata, 1, 8)
                     .get(60, TimeUnit.SECONDS);
             System.out.println("Vulkan CI smoke: block interpolation shader completed");
-            assertConstantResults("block interpolation shader", blockResults, 8);
+            assertInterpolatedResults(blockResults);
         }
 
         System.out.println("Vulkan CI smoke passed on " + device.name()
-                + ": coordinate, terrain grid, and block interpolation shaders returned the expected value.");
+                + ": coordinate and terrain grid shaders passed; block interpolation preserved the axis-coded test field.");
     }
 
     private static void assertConstantResults(String label, float[] values, int expectedCount) {
@@ -72,6 +79,23 @@ public final class VulkanCiSmoke {
             if (Math.abs(values[i] - EXPECTED) > 1.0e-6f) {
                 throw new IllegalStateException(label + " mismatch at sample " + i
                         + ": expected " + EXPECTED + ", got " + values[i]);
+            }
+        }
+    }
+
+    private static void assertInterpolatedResults(float[] values) {
+        if (values.length != 8) {
+            throw new IllegalStateException("block interpolation shader returned " + values.length
+                    + " values; expected 8");
+        }
+        for (int index = 0; index < values.length; index++) {
+            int x = index & 1;
+            int z = (index >> 1) & 1;
+            int y = index >> 2;
+            float expected = x * 0.125f + y * 0.5f + z;
+            if (Math.abs(values[index] - expected) > 1.0e-6f) {
+                throw new IllegalStateException("block interpolation axis mismatch at sample " + index
+                        + ": expected " + expected + ", got " + values[index]);
             }
         }
     }
