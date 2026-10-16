@@ -218,7 +218,18 @@ public final class GpuTerrainRuntime {
         GpuTerrainAreaRegistry.release(cache);
     }
 
-    public static void markCpuFallbackChunk() { cpuFallbackChunks.incrementAndGet(); }
+    public static void markCpuFallbackChunk(int chunkX, int chunkZ, Throwable failure) {
+        long count = cpuFallbackChunks.incrementAndGet();
+        if (count <= 5 || (count & 63L) == 0L) {
+            Throwable cause = failure;
+            while ((cause instanceof java.util.concurrent.CompletionException
+                    || cause instanceof java.util.concurrent.ExecutionException) && cause.getCause() != null) {
+                cause = cause.getCause();
+            }
+            GpuNoise.LOGGER.warn("GPU terrain preparation failed for chunk {},{}; using CPU fallback (fallbacks={}): {}",
+                    chunkX, chunkZ, count, cause.getMessage(), cause);
+        }
+    }
 
     private static void logChunkStatistics(boolean force) {
         long completed = gpuChunksCompleted.get();

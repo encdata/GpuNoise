@@ -70,7 +70,8 @@ abstract class NoiseChunkGeneratorWriteMixin {
             // fill exception could mix two terrain writers into one chunk.
             return prepared.handle((cache, failure) -> {
                 if (failure != null) {
-                    GpuTerrainRuntime.markCpuFallbackChunk();
+                    GpuTerrainRuntime.markCpuFallbackChunk(
+                            chunk.getPos().x, chunk.getPos().z, failure);
                     return original.call(blender, randomState, structures, chunk);
                 }
                 return CompletableFuture.supplyAsync(
