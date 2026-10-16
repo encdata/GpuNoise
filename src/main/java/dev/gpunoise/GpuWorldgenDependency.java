@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.nio.ByteBuffer;
+import java.util.Arrays;
 
 import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 
@@ -45,6 +47,48 @@ public final class GpuWorldgenDependency {
     public boolean contains(int x, int y, int z) { return index.containsKey(new Coordinate(x, y, z)); }
     public int samples() { return index.size(); }
     public int pages() { return pages.size(); }
+
+    /**
+     * Validates candidate coordinates against this strict dependency and sends
+     * bounded nearest-center batches to Vulkan. Each output row contains three
+     * center indices, their squared distances, and two reserved words.
+     */
+    public CompletionStage<int[]> selectNearestAquiferCenters(PositionalRandomFactory factory,
+                                                               int[][] blockQueries) {
+        if (factory == null || blockQueries == null)
+            return CompletableFuture.failedStage(new IllegalArgumentException("missing aquifer query input"));
+        final int outputLength;
+        try {
+            outputLength = Math.multiplyExact(blockQueries.length, GpuAquiferNearestThree.OUTPUT_INTS);
+        } catch (ArithmeticException overflow) {
+            return CompletableFuture.failedStage(overflow);
+        }
+        int[] output = new int[outputLength];
+        List<NearestAquiferBatch> batches = new ArrayList<>();
+        for (int offset = 0; offset < blockQueries.length; offset += GpuAquiferNearestThree.MAX_QUERIES) {
+            int batchCount = Math.min(GpuAquiferNearestThree.MAX_QUERIES, blockQueries.length - offset);
+            int[][] queries = Arrays.copyOfRange(blockQueries, offset, offset + batchCount);
+            int[][][] centers = new int[batchCount][][];
+            for (int i = 0; i < batchCount; i++) {
+                centers[i] = GpuAquiferNearestThree.centersForQuery(factory, queries[i]);
+                for (int[] center : centers[i]) {
+                    if (!contains(center[0], center[1], center[2]))
+                        return CompletableFuture.failedStage(new IllegalStateException(
+                                "aquifer candidate coordinate is absent from strict GPU dependencies"));
+                }
+            }
+            batches.add(new NearestAquiferBatch(offset, batchCount,
+                    GpuAquiferNearestThree.pack(queries, centers)));
+        }
+        CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
+        for (NearestAquiferBatch batch : batches) {
+            chain = chain.thenCompose(ignored -> GpuTerrainRuntime
+                            .submitAquiferNearestThree(batch.records, batch.count).thenAccept(values ->
+                                    System.arraycopy(values, 0, output,
+                                            batch.offset * GpuAquiferNearestThree.OUTPUT_INTS, values.length)));
+        }
+        return chain.thenApply(ignored -> output);
+    }
 
     /** Declares cell and preliminary-surface coordinates used by a chunk. */
     public static Builder forChunk(int minX, int minZ, int minY, int height, int cellWidth, int cellHeight) {
@@ -215,5 +259,6 @@ public final class GpuWorldgenDependency {
     }
 
     private record Sample(int page, int index) { }
+    private record NearestAquiferBatch(int offset, int count, ByteBuffer records) { }
     public record Coordinate(int x, int y, int z) { }
 }

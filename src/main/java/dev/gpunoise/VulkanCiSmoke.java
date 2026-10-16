@@ -173,9 +173,14 @@ public final class VulkanCiSmoke {
             centers[0][2] = new int[]{queries[0][0], queries[0][1] + 1, queries[0][2]};
             centers[0][3] = new int[]{queries[0][0], queries[0][1], queries[0][2] + 1};
             ByteBuffer nearestInput = GpuAquiferNearestThree.pack(queries, centers);
+            ByteBuffer queuedGridMetadata = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder());
+            queuedGridMetadata.putInt(-16).putInt(-8).putInt(32)
+                    .putInt(2).putInt(2).putInt(2).putInt(1).putInt(1).flip();
+            var queuedGrid = ring.submitGraphRootsGrid(graph, queuedGridMetadata, 1, 8);
             System.out.println("Vulkan CI smoke: dispatching aquifer nearest-three selection");
             int[] nearest = ring.submitAquiferNearestThree(nearestInput, queryCount)
                     .get(60, TimeUnit.SECONDS);
+            assertConstantResults("queued terrain grid", queuedGrid.get(60, TimeUnit.SECONDS), 8);
             System.out.println("Vulkan CI smoke: aquifer nearest-three selection completed");
             for (int q = 0; q < queryCount; q++) {
                 int[] expected = GpuAquiferNearestThree.select(queries[q], centers[q]);

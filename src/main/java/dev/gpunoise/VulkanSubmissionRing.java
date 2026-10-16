@@ -24,6 +24,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
     /** Requests wait here, not on a worldgen thread, while the shared slot is busy. */
     private final ConcurrentLinkedQueue<GraphRootsRequest> pendingGraphRoots = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<GraphRootsGridRequest> pendingGraphGrids = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<AquiferNearestRequest> pendingAquiferNearest = new ConcurrentLinkedQueue<>();
+    /** The auxiliary kernel shares the slot command buffer with async graph work. */
+    private boolean aquiferNearestInFlight;
     private final ScheduledExecutorService completion = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "GPU Vulkan completion");
         thread.setDaemon(true);
@@ -81,11 +84,35 @@ final class VulkanSubmissionRing implements AutoCloseable {
     /** Starts at most one request per lightweight slot; never rejects work just because GPU is busy. */
     private synchronized void drainGraphRoots() {
         for (PersistentVulkanNormalNoiseEngine slot : slots) {
-            if (slot == null || slot.graphRootsInFlight()) continue;
+            if (slot == null || slot.graphRootsInFlight() || aquiferNearestInFlight) continue;
             GraphRootsRequest request = pendingGraphRoots.poll();
             if (request == null) {
                 GraphRootsGridRequest grid = pendingGraphGrids.poll();
-                if (grid == null) return;
+                if (grid == null) {
+                    AquiferNearestRequest nearest = pendingAquiferNearest.poll();
+                    if (nearest == null) return;
+                    aquiferNearestInFlight = true;
+                    try {
+                        completion.execute(() -> {
+                            try {
+                                nearest.future.complete(slot.submitAquiferNearestThree(
+                                        nearest.records, nearest.count));
+                            } catch (Throwable failure) {
+                                nearest.future.completeExceptionally(new IllegalStateException(
+                                        "GPU ring aquifer nearest-three dispatch failed", failure));
+                            } finally {
+                                synchronized (VulkanSubmissionRing.this) {
+                                    aquiferNearestInFlight = false;
+                                    drainGraphRoots();
+                                }
+                            }
+                        });
+                    } catch (RuntimeException stopped) {
+                        aquiferNearestInFlight = false;
+                        nearest.future.completeExceptionally(stopped);
+                    }
+                    return;
+                }
                 try {
                     slot.submitGraphRootsGridAsync(grid.graph, grid.metadata, grid.chunkCount, grid.samplesPerChunk)
                             .whenComplete((values, failure) -> {
@@ -152,15 +179,10 @@ final class VulkanSubmissionRing implements AutoCloseable {
     }
 
     CompletableFuture<int[]> submitAquiferNearestThree(ByteBuffer records, int count) {
-        PersistentVulkanNormalNoiseEngine slot = slots[Math.floorMod(next.getAndIncrement(), slots.length)];
-        ByteBuffer input = records.duplicate();
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                return slot.submitAquiferNearestThree(input, count);
-            } catch (Exception failure) {
-                throw new IllegalStateException("GPU aquifer nearest-three dispatch failed", failure);
-            }
-        }, completion);
+        CompletableFuture<int[]> future = new CompletableFuture<>();
+        pendingAquiferNearest.add(new AquiferNearestRequest(records.duplicate(), count, future));
+        drainGraphRoots();
+        return future;
     }
 
     CompletableFuture<GpuFusedResult> submitGraphInterpolated(GpuDensityGraph graph, float[] x, float[] y, float[] z,
@@ -201,6 +223,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
         }
+        AquiferNearestRequest request;
+        while ((request = pendingAquiferNearest.poll()) != null)
+            request.future.completeExceptionally(new IllegalStateException("GPU submission ring stopped"));
         for (int i = slots.length - 1; i >= 0; i--) {
             if (slots[i] != null) slots[i].close();
         }
@@ -210,4 +235,5 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                      int sampleCount, CompletableFuture<float[]> future) {}
     private record GraphRootsGridRequest(GpuDensityGraph graph, ByteBuffer metadata, int chunkCount, int samplesPerChunk,
                                          CompletableFuture<float[]> future) {}
+    private record AquiferNearestRequest(ByteBuffer records, int count, CompletableFuture<int[]> future) {}
 }

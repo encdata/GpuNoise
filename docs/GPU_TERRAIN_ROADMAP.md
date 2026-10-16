@@ -116,7 +116,11 @@ parity checks.
   comparison. One shared positional-random helper now builds centers for both
   this kernel's future inputs and the existing strict dependency planner, so
   candidate coordinates use one implementation. Mesa smoke checks ordinary
-  and equal-distance cases against the Java reference.
+  and equal-distance cases against the Java reference. Strict dependencies
+  can validate that all 12 centers were declared, then submit bounded batches
+  through the Vulkan ring after pending graph-root work completes. The smoke
+  also overlaps a graph-grid request with a nearest-center request to verify
+  command-buffer serialization.
 - Keep fluid picking, preliminary surface sampling, surface level selection,
   and fluid type selection as explicit inputs/operations. These consult
   `NoiseChunk`, density roots, and world settings; the shader must not infer

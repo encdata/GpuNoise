@@ -1,6 +1,7 @@
 package dev.gpunoise;
 
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -278,6 +279,14 @@ public final class GpuChunkDensityCache {
     public double aquiferErosion(int x, int y, int z) { return rootDensity(x, y, z, GpuTerrainRoots.EROSION); }
     public double aquiferDepth(int x, int y, int z) { return rootDensity(x, y, z, GpuTerrainRoots.DEPTH); }
     public double climate(int x, int y, int z, int root) { return rootDensity(x, y, z, root); }
+
+    /** Uses the exact candidate coordinates already declared by a strict chunk dependency. */
+    public CompletionStage<int[]> selectNearestAquiferCenters(PositionalRandomFactory factory,
+                                                               int[][] blockQueries) {
+        if (exact == null) return CompletableFuture.failedStage(new IllegalStateException(
+                "nearest aquifer GPU selection requires a strict terrain dependency"));
+        return exact.selectNearestAquiferCenters(factory, blockQueries);
+    }
 
     /** Exact graph-root value at a NoiseChunk cell corner. */
     public double cornerDensity(int x, int y, int z) {
