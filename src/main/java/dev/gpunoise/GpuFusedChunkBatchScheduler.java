@@ -11,12 +11,16 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** Coalesces per-chunk fused terrain requests before they reach Vulkan. */
 final class GpuFusedChunkBatchScheduler implements AutoCloseable {
     private static final int MAX_INPUT_SAMPLES = PersistentVulkanNormalNoiseEngine.CAPACITY;
     private static final int MAX_OUTPUT_SAMPLES = PersistentVulkanNormalNoiseEngine.INTERPOLATION_OUTPUT_FLOATS;
     private static final int MAX_CHUNKS_PER_BATCH = 100;
+    // Fuse requests that arrive together without making an isolated chunk
+    // wait long enough to become visible as a terrain-generation stall.
+    private static final long BATCH_WINDOW_NANOS = TimeUnit.MILLISECONDS.toNanos(1);
     private final BlockingQueue<Pending> queue = new ArrayBlockingQueue<>(256);
     // There is currently one safe Vulkan engine. Keep exactly one matching
     // host-side slab: it prevents per-dispatch allocation without allowing
@@ -28,6 +32,13 @@ final class GpuFusedChunkBatchScheduler implements AutoCloseable {
         return t;
     });
     private volatile boolean closed;
+    /** Worker-owned FIFO carry when the next queued request has another layout. */
+    private Pending deferred;
+    private final AtomicLong submittedBatches = new AtomicLong();
+    private final AtomicLong submittedChunks = new AtomicLong();
+    private final AtomicLong completedBatches = new AtomicLong();
+    private final AtomicLong totalQueueWaitNanos = new AtomicLong();
+    private final AtomicLong totalCompletionNanos = new AtomicLong();
 
     GpuFusedChunkBatchScheduler() {
         buffers.add(new BatchBuffers());
@@ -37,7 +48,18 @@ final class GpuFusedChunkBatchScheduler implements AutoCloseable {
     CompletionStage<GpuFusedResult> submit(int[] x, int[] y, int[] z, ByteBuffer metadata,
                                     int blocksPerChunk) {
         CompletableFuture<GpuFusedResult> result = new CompletableFuture<>();
-        if (closed || !queue.offer(new Pending(x, y, z, metadata, blocksPerChunk, result))) {
+        if (x == null || y == null || z == null || metadata == null
+                || x.length != y.length || x.length != z.length || x.length == 0
+                || x.length > MAX_INPUT_SAMPLES || blocksPerChunk <= 0) {
+            result.completeExceptionally(new IllegalArgumentException("invalid GPU fused chunk request"));
+            return result;
+        }
+        long outputFloats = (long) blocksPerChunk * GpuTerrainRuntime.terrainOutputRootCount();
+        if (outputFloats > MAX_OUTPUT_SAMPLES) {
+            result.completeExceptionally(new IllegalArgumentException("GPU fused chunk output exceeds capacity"));
+            return result;
+        }
+        if (closed || !queue.offer(new Pending(x, y, z, metadata, blocksPerChunk, result, System.nanoTime()))) {
             result.completeExceptionally(new IllegalStateException("GPU fused chunk queue is full"));
         }
         return result;
@@ -47,25 +69,42 @@ final class GpuFusedChunkBatchScheduler implements AutoCloseable {
         try {
             while (!closed) {
                 List<Pending> batch = new ArrayList<>();
-                Pending first = queue.take();
+                Pending first = deferred != null ? deferred : queue.take();
+                deferred = null;
                 batch.add(first);
                 int input = first.x.length;
                 long output = (long) first.blocksPerChunk * GpuTerrainRuntime.terrainOutputRootCount();
+                long deadline = System.nanoTime() + BATCH_WINDOW_NANOS;
                 while (batch.size() < MAX_CHUNKS_PER_BATCH) {
-                    Pending next = queue.peek();
-                    if (next == null || next.blocksPerChunk != first.blocksPerChunk
+                    long remaining = deadline - System.nanoTime();
+                    if (remaining <= 0) break;
+                    Pending next = queue.poll(remaining, TimeUnit.NANOSECONDS);
+                    if (next == null) break;
+                    if (next.blocksPerChunk != first.blocksPerChunk
                             || (long) input + next.x.length > MAX_INPUT_SAMPLES
-                            || output + (long) next.blocksPerChunk * GpuTerrainRuntime.terrainOutputRootCount() > MAX_OUTPUT_SAMPLES) break;
-                    queue.poll();
+                            || output + (long) next.blocksPerChunk * GpuTerrainRuntime.terrainOutputRootCount() > MAX_OUTPUT_SAMPLES) {
+                        // Preserve FIFO ordering without racing producers to
+                        // reinsert into a queue that may have filled again.
+                        deferred = next;
+                        break;
+                    }
                     batch.add(next);
                     input += next.x.length;
                     output += (long) next.blocksPerChunk * GpuTerrainRuntime.terrainOutputRootCount();
                 }
+                submittedBatches.incrementAndGet();
+                submittedChunks.addAndGet(batch.size());
+                long now = System.nanoTime();
+                for (Pending item : batch) totalQueueWaitNanos.addAndGet(now - item.enqueuedNanos);
                 dispatch(batch, input);
             }
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
         } finally {
+            if (deferred != null) {
+                deferred.result.completeExceptionally(new IllegalStateException("GPU fused chunk batcher stopped"));
+                deferred = null;
+            }
             Pending item;
             while ((item = queue.poll()) != null)
                 item.result.completeExceptionally(new IllegalStateException("GPU fused chunk batcher stopped"));
@@ -74,6 +113,7 @@ final class GpuFusedChunkBatchScheduler implements AutoCloseable {
 
     private void dispatch(List<Pending> batch, int inputCount) {
         BatchBuffers buffers = null;
+        long submittedAt = System.nanoTime();
         try {
             buffers = this.buffers.take();
             ByteBuffer metadata = buffers.metadata;
@@ -101,24 +141,44 @@ final class GpuFusedChunkBatchScheduler implements AutoCloseable {
             GpuTerrainRuntime.submitFusedDirect(submitted.x, submitted.y, submitted.z, inputCount,
                             metadata, batch.size(), batch.get(0).blocksPerChunk)
                     .whenComplete((values, failure) -> {
-                        int blockOffset = 0;
-                        for (Pending item : batch) {
-                            int count = item.blocksPerChunk;
-                            int roots = values == null ? 0 : values.roots();
-                            int perItemOutput = count * roots;
-                            if (failure != null) item.result.completeExceptionally(failure);
-                            else {
-                                item.result.complete(new GpuFusedResult(
-                                        values.batchOutput(), blockOffset, perItemOutput, roots));
+                        try {
+                            if (failure != null) {
+                                for (Pending item : batch) item.result.completeExceptionally(failure);
+                            } else if (values == null) {
+                                throw new IllegalStateException("GPU fused chunk submission returned no result");
+                            } else {
+                                int blockOffset = 0;
+                                int roots = values.roots();
+                                for (Pending item : batch) {
+                                    int perItemOutput = Math.multiplyExact(item.blocksPerChunk, roots);
+                                    item.result.complete(new GpuFusedResult(
+                                            values.batchOutput(), blockOffset, perItemOutput, roots));
+                                    blockOffset = Math.addExact(blockOffset, perItemOutput);
+                                }
                             }
-                            blockOffset += perItemOutput;
+                        } catch (Throwable completionFailure) {
+                            for (Pending item : batch) item.result.completeExceptionally(completionFailure);
+                        } finally {
+                            this.buffers.offer(submitted);
+                            recordCompletion(submittedAt);
                         }
-                        this.buffers.offer(submitted);
                     });
         } catch (Throwable failure) {
             for (Pending item : batch) item.result.completeExceptionally(failure);
             if (buffers != null) this.buffers.offer(buffers);
+            recordCompletion(submittedAt);
         }
+    }
+
+    private void recordCompletion(long submittedAt) {
+        totalCompletionNanos.addAndGet(System.nanoTime() - submittedAt);
+        long completed = completedBatches.incrementAndGet();
+        if ((completed & 63L) != 0L) return;
+        long chunks = submittedChunks.get();
+        GpuNoise.LOGGER.info("GPU fused terrain batching: avgChunksPerDispatch={}, avgQueueWaitMsPerChunk={}, avgSubmitToCompleteMsPerDispatch={}",
+                (double) chunks / submittedBatches.get(),
+                totalQueueWaitNanos.get() / (double) chunks / 1_000_000.0,
+                totalCompletionNanos.get() / (double) completed / 1_000_000.0);
     }
 
     @Override public void close() {
@@ -129,7 +189,8 @@ final class GpuFusedChunkBatchScheduler implements AutoCloseable {
     }
 
     private record Pending(int[] x, int[] y, int[] z, ByteBuffer metadata,
-                           int blocksPerChunk, CompletableFuture<GpuFusedResult> result) {}
+                           int blocksPerChunk, CompletableFuture<GpuFusedResult> result,
+                           long enqueuedNanos) {}
 
     private static final class BatchBuffers {
         final float[] x = new float[MAX_INPUT_SAMPLES];

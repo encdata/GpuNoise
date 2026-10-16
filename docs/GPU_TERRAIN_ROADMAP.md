@@ -295,3 +295,10 @@ wait per chunk, average batch fill, and submit-to-completion latency. The next
 CI run must establish whether the allocation reduction changes end-to-end
 throughput; Lavapipe is
 still only a CPU Vulkan backend and cannot establish discrete-GPU speedup.
+
+The optional fused chunk scheduler now coalesces requests for at most one
+millisecond, retains incompatible FIFO requests without racing queue producers,
+validates each request against input/output capacities before enqueueing, and
+returns its host slab even when asynchronous result handling fails. Its
+periodic batch-fill and latency counters will show whether this path is
+dispatch-bound or request-arrival-bound; CI results are still pending.
