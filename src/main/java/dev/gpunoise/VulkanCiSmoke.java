@@ -5,7 +5,6 @@ import java.nio.ByteOrder;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import net.minecraft.util.RandomSource;
-import net.minecraft.world.level.levelgen.DensityFunction;
 
 /** Headless Vulkan smoke test for CI's Mesa Lavapipe device. */
 public final class VulkanCiSmoke {
@@ -14,7 +13,7 @@ public final class VulkanCiSmoke {
     private VulkanCiSmoke() {}
 
     public static void main(String[] args) throws Exception {
-        verifyDensityFunctionTranslators();
+        verifyTranslatorRegistry();
         GpuDevice device = GpuProbe.findPreferredDevice(GpuNoiseConfig.GpuVendorPreference.AUTO);
         if (device == null) throw new IllegalStateException("No Vulkan compute device found");
         if (!VulkanComputeProbe.verify(device)) {
@@ -258,31 +257,21 @@ public final class VulkanCiSmoke {
                 + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, and shared 12-root terrain lattices; aquifer pressure, nearest-three selection, and substance decisions matched Java reference cases.");
     }
 
-    private static void verifyDensityFunctionTranslators() {
-        DensityFunction inheritedGraph = densityProxy(DensityFunction.class);
-        GpuDensityFunctionTranslators.registerForSubtypes(CustomDensityFamily.class,
-                ignored -> inheritedGraph);
-        DensityFunction inherited = densityProxy(CustomDensityImplementation.class);
-        if (!GpuDensityFunctionTranslators.hasTranslator(CustomDensityImplementation.class)
-                || GpuDensityFunctionTranslators.translate(inherited) != inheritedGraph) {
+    private static void verifyTranslatorRegistry() {
+        GpuDensityTranslatorRegistry<String> registry = new GpuDensityTranslatorRegistry<>();
+        registry.register(CustomDensityFamily.class, "family", true);
+        if (!"family".equals(registry.find(CustomDensityImplementation.class))) {
             throw new IllegalStateException("Custom density supertype translator was not selected");
         }
-
-        DensityFunction exactGraph = densityProxy(DensityFunction.class);
-        @SuppressWarnings("unchecked")
-        Class<DensityFunction> generatedType = (Class<DensityFunction>) inherited.getClass();
-        GpuDensityFunctionTranslators.register(generatedType, ignored -> exactGraph);
-        if (GpuDensityFunctionTranslators.translate(inherited) != exactGraph) {
+        registry.register(CustomDensityImplementation.class, "exact", false);
+        if (!"exact".equals(registry.find(CustomDensityImplementation.class))) {
             throw new IllegalStateException("Exact custom density translator did not take precedence");
         }
 
-        GpuDensityFunctionTranslators.registerForSubtypes(LeftDensityApi.class,
-                ignored -> densityProxy(DensityFunction.class));
-        GpuDensityFunctionTranslators.registerForSubtypes(RightDensityApi.class,
-                ignored -> densityProxy(DensityFunction.class));
-        DensityFunction ambiguous = densityProxy(LeftDensityApi.class, RightDensityApi.class);
+        registry.register(LeftDensityApi.class, "left", true);
+        registry.register(RightDensityApi.class, "right", true);
         try {
-            GpuDensityFunctionTranslators.translate(ambiguous);
+            registry.find(AmbiguousDensityApi.class);
             throw new IllegalStateException("Ambiguous custom density translators were accepted");
         } catch (IllegalStateException expected) {
             if (!expected.getMessage().startsWith("Ambiguous GPU density translators for ")) throw expected;
@@ -290,28 +279,11 @@ public final class VulkanCiSmoke {
         System.out.println("Vulkan CI smoke: custom density adapter inheritance and precedence passed");
     }
 
-    private static DensityFunction densityProxy(Class<?>... interfaces) {
-        return (DensityFunction) java.lang.reflect.Proxy.newProxyInstance(
-                DensityFunction.class.getClassLoader(), interfaces,
-                (proxy, method, arguments) -> {
-                    Class<?> type = method.getReturnType();
-                    if (!type.isPrimitive()) return null;
-                    if (type == boolean.class) return false;
-                    if (type == char.class) return (char) 0;
-                    if (type == byte.class) return (byte) 0;
-                    if (type == short.class) return (short) 0;
-                    if (type == int.class) return 0;
-                    if (type == long.class) return 0L;
-                    if (type == float.class) return 0.0f;
-                    if (type == double.class) return 0.0d;
-                    return null;
-                });
-    }
-
-    public interface CustomDensityFamily extends DensityFunction {}
+    public interface CustomDensityFamily {}
     public interface CustomDensityImplementation extends CustomDensityFamily {}
-    public interface LeftDensityApi extends DensityFunction {}
-    public interface RightDensityApi extends DensityFunction {}
+    public interface LeftDensityApi {}
+    public interface RightDensityApi {}
+    public interface AmbiguousDensityApi extends LeftDensityApi, RightDensityApi {}
 
     private static void assertConstantResults(String label, float[] values, int expectedCount) {
         if (values.length != expectedCount) {
