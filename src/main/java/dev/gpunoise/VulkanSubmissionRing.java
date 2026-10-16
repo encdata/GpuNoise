@@ -151,6 +151,18 @@ final class VulkanSubmissionRing implements AutoCloseable {
         }, completion);
     }
 
+    CompletableFuture<int[]> submitAquiferNearestThree(ByteBuffer records, int count) {
+        PersistentVulkanNormalNoiseEngine slot = slots[Math.floorMod(next.getAndIncrement(), slots.length)];
+        ByteBuffer input = records.duplicate();
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return slot.submitAquiferNearestThree(input, count);
+            } catch (Exception failure) {
+                throw new IllegalStateException("GPU aquifer nearest-three dispatch failed", failure);
+            }
+        }, completion);
+    }
+
     CompletableFuture<GpuFusedResult> submitGraphInterpolated(GpuDensityGraph graph, float[] x, float[] y, float[] z,
                                                         ByteBuffer metadata, int chunkCount, int blocksPerChunk) {
         return submitGraphInterpolated(graph, x, y, z, x.length, metadata, chunkCount, blocksPerChunk);

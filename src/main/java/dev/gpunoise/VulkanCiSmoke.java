@@ -131,10 +131,43 @@ public final class VulkanCiSmoke {
                             + ": expected " + expected + ", got " + pressureValues[i]);
                 }
             }
+
+            int queryCount = 4;
+            int[][] queries = new int[queryCount][3];
+            int[][][] centers = new int[queryCount][GpuAquiferNearestThree.CANDIDATES][3];
+            for (int q = 0; q < queryCount; q++) {
+                queries[q] = new int[]{q * 128 - 192, q * 17 - 31, 256 - q * 91};
+                for (int i = 0; i < GpuAquiferNearestThree.CANDIDATES; i++) {
+                    centers[q][i] = new int[]{queries[q][0] + ((i * 7) % 29) - 14,
+                            queries[q][1] + ((i * 11) % 25) - 12,
+                            queries[q][2] + ((i * 13) % 31) - 15};
+                }
+            }
+            // Four equal-distance centers pin the precise tie order in the
+            // three nearest slots, including vanilla's inclusive third test.
+            centers[0][0] = new int[]{queries[0][0] + 1, queries[0][1], queries[0][2]};
+            centers[0][1] = new int[]{queries[0][0] - 1, queries[0][1], queries[0][2]};
+            centers[0][2] = new int[]{queries[0][0], queries[0][1] + 1, queries[0][2]};
+            centers[0][3] = new int[]{queries[0][0], queries[0][1], queries[0][2] + 1};
+            ByteBuffer nearestInput = GpuAquiferNearestThree.pack(queries, centers);
+            System.out.println("Vulkan CI smoke: dispatching aquifer nearest-three selection");
+            int[] nearest = ring.submitAquiferNearestThree(nearestInput, queryCount)
+                    .get(60, TimeUnit.SECONDS);
+            System.out.println("Vulkan CI smoke: aquifer nearest-three selection completed");
+            for (int q = 0; q < queryCount; q++) {
+                int[] expected = GpuAquiferNearestThree.select(queries[q], centers[q]);
+                for (int field = 0; field < GpuAquiferNearestThree.OUTPUT_INTS; field++) {
+                    int actual = nearest[q * GpuAquiferNearestThree.OUTPUT_INTS + field];
+                    if (actual != expected[field]) {
+                        throw new IllegalStateException("Aquifer nearest-three mismatch at query " + q
+                                + ", field " + field + ": expected " + expected[field] + ", got " + actual);
+                    }
+                }
+            }
         }
 
         System.out.println("Vulkan CI smoke passed on " + device.name()
-                + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, and shared 12-root terrain lattices; aquifer pressure matched the Java reference cases.");
+                + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, and shared 12-root terrain lattices; aquifer pressure and nearest-three selection matched Java reference cases.");
     }
 
     private static void assertConstantResults(String label, float[] values, int expectedCount) {

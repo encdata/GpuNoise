@@ -28,7 +28,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private final int queueFamily;
     private final NativeBuffer coordinates, results, permutations, octaves, samplerMetadata;
     private final NativeBuffer graphCoordinates, graphNodes, graphSplinePoints, graphBlendedMetadata, graphBlendInputs, graphRoots;
-    private final NativeBuffer interpolationMetadata, interpolationOutput, aquiferPressureInputs;
+    private final NativeBuffer interpolationMetadata, interpolationOutput, aquiferPressureInputs,
+            aquiferNearestInputs, aquiferNearestOutput;
     private final long shader, descriptorLayout, pipelineLayout, pipeline, descriptorPool, descriptorSet, commandPool;
     private long graphShader, gridShader, graphPipeline, gridPipeline;
     private final long graphDescriptorLayout, graphPipelineLayout, graphDescriptorPool, graphDescriptorSet;
@@ -37,6 +38,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             interpolationPipeline, interpolationDescriptorPool, interpolationDescriptorSet;
     private final long aquiferPressureShader, aquiferPressureDescriptorLayout, aquiferPressurePipelineLayout,
             aquiferPressurePipeline, aquiferPressureDescriptorPool, aquiferPressureDescriptorSet;
+    private final long aquiferNearestShader, aquiferNearestDescriptorLayout, aquiferNearestPipelineLayout,
+            aquiferNearestPipeline, aquiferNearestDescriptorPool, aquiferNearestDescriptorSet;
     private final boolean ownsDevice;
     /** Vulkan requires host-side external synchronization for queue operations. */
     private final Object queueSubmitLock;
@@ -80,6 +83,10 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack); graphNodes = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack); graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 64L * 16L, stack); graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack); graphBlendInputs = hostVisibleBuffer(CAPACITY * 8L, stack); graphRoots = deviceLocalBuffer(64L, stack);
             interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack); interpolationOutput = buffer((long) CAPACITY * 16L * Float.BYTES, stack);
             aquiferPressureInputs = hostVisibleBuffer((long) CAPACITY * GpuAquiferPressure.RECORD_BYTES, stack);
+            aquiferNearestInputs = hostVisibleBuffer((long) GpuAquiferNearestThree.MAX_QUERIES
+                    * GpuAquiferNearestThree.RECORD_BYTES, stack);
+            aquiferNearestOutput = buffer((long) GpuAquiferNearestThree.MAX_QUERIES
+                    * GpuAquiferNearestThree.OUTPUT_INTS * Integer.BYTES, stack);
             permutations = deviceLocalBuffer(8 * 1024 * 1024L, stack); octaves = deviceLocalBuffer(8 * 1024 * 1024L, stack); samplerMetadata = deviceLocalBuffer(64 * 1024L, stack);
             shader = shader(stack); descriptorLayout = descriptorLayout(stack); pipelineLayout = pipelineLayout(stack);
             pipeline = pipeline(stack); descriptorPool = descriptorPool(stack); descriptorSet = descriptorSet(stack);
@@ -100,6 +107,13 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             aquiferPressureDescriptorPool = aquiferPressureDescriptorPool(stack);
             aquiferPressureDescriptorSet = aquiferPressureDescriptorSet(stack);
             aquiferPressureDescriptors(stack);
+            aquiferNearestShader = loadShader(stack, "/assets/gpunoise/shaders/aquifer_nearest_three.comp.spv", "aquifer nearest-three shader");
+            aquiferNearestDescriptorLayout = aquiferNearestDescriptorLayout(stack);
+            aquiferNearestPipelineLayout = aquiferNearestPipelineLayout(stack);
+            aquiferNearestPipeline = aquiferNearestPipeline(stack);
+            aquiferNearestDescriptorPool = aquiferNearestDescriptorPool(stack);
+            aquiferNearestDescriptorSet = aquiferNearestDescriptorSet(stack);
+            aquiferNearestDescriptors(stack);
             mapPersistentBuffers(stack);
         } catch (Throwable failure) {
             stack.close();
@@ -130,6 +144,10 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             graphRoots = deviceLocalBuffer(64L, stack);
             interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack); interpolationOutput = buffer((long) CAPACITY * 16L * Float.BYTES, stack);
             aquiferPressureInputs = hostVisibleBuffer((long) CAPACITY * GpuAquiferPressure.RECORD_BYTES, stack);
+            aquiferNearestInputs = hostVisibleBuffer((long) GpuAquiferNearestThree.MAX_QUERIES
+                    * GpuAquiferNearestThree.RECORD_BYTES, stack);
+            aquiferNearestOutput = buffer((long) GpuAquiferNearestThree.MAX_QUERIES
+                    * GpuAquiferNearestThree.OUTPUT_INTS * Integer.BYTES, stack);
             permutations = deviceLocalBuffer(8 * 1024 * 1024L, stack);
             octaves = deviceLocalBuffer(8 * 1024 * 1024L, stack);
             samplerMetadata = deviceLocalBuffer(64 * 1024L, stack);
@@ -152,6 +170,13 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             aquiferPressureDescriptorPool = aquiferPressureDescriptorPool(stack);
             aquiferPressureDescriptorSet = aquiferPressureDescriptorSet(stack);
             aquiferPressureDescriptors(stack);
+            aquiferNearestShader = loadShader(stack, "/assets/gpunoise/shaders/aquifer_nearest_three.comp.spv", "aquifer nearest-three shader");
+            aquiferNearestDescriptorLayout = aquiferNearestDescriptorLayout(stack);
+            aquiferNearestPipelineLayout = aquiferNearestPipelineLayout(stack);
+            aquiferNearestPipeline = aquiferNearestPipeline(stack);
+            aquiferNearestDescriptorPool = aquiferNearestDescriptorPool(stack);
+            aquiferNearestDescriptorSet = aquiferNearestDescriptorSet(stack);
+            aquiferNearestDescriptors(stack);
             mapPersistentBuffers(stack);
         } catch (Throwable failure) {
             stack.close();
@@ -634,6 +659,46 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         }
     }
 
+    /** Selects aquifer centers with Minecraft's exact integer tie ordering. */
+    synchronized int[] submitAquiferNearestThree(ByteBuffer records, int count) throws Exception {
+        if (count < 0 || count > GpuAquiferNearestThree.MAX_QUERIES
+                || records.remaining() != count * GpuAquiferNearestThree.RECORD_BYTES)
+            throw new IllegalArgumentException("invalid aquifer nearest-three batch");
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            put(aquiferNearestInputs, records, stack);
+            check(vkResetCommandBuffer(commandBuffer, 0), "reset aquifer nearest-three command buffer");
+            check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin aquifer nearest-three command buffer");
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, aquiferNearestPipeline);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                    aquiferNearestPipelineLayout, 0, stack.longs(aquiferNearestDescriptorSet), null);
+            ByteBuffer push = stack.malloc(4).order(ByteOrder.nativeOrder()).putInt(count).flip();
+            vkCmdPushConstants(commandBuffer, aquiferNearestPipelineLayout,
+                    VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
+            vkCmdDispatch(commandBuffer, Math.max(1, (count + 63) / 64), 1, 1);
+            VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
+                    .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
+                    .buffer(aquiferNearestOutput.buffer)
+                    .size((long) count * GpuAquiferNearestThree.OUTPUT_INTS * Integer.BYTES);
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_PIPELINE_STAGE_HOST_BIT, 0, null, barrier, null);
+            check(vkEndCommandBuffer(commandBuffer), "end aquifer nearest-three command buffer");
+            synchronized (queueSubmitLock) {
+                check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default()
+                        .pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit aquifer nearest-three");
+            }
+            check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait aquifer nearest-three");
+            check(vkResetFences(device, fence), "reset aquifer nearest-three fence");
+            aquiferNearestOutput.invalidate(device, stack);
+            IntBuffer values = persistentMappings.get(aquiferNearestOutput)
+                    .duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
+            values.clear();
+            values.limit(count * GpuAquiferNearestThree.OUTPUT_INTS);
+            int[] output = new int[count * GpuAquiferNearestThree.OUTPUT_INTS];
+            values.get(output);
+            return output;
+        }
+    }
+
     /** Tests the production interleaved-root lattice contract as well as compact smoke inputs. */
     synchronized float[] submitInterpolation(float[] corners, ByteBuffer metadata,
                                               int chunkCount, int blocksPerChunk,
@@ -686,7 +751,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private void mapPersistentBuffers(MemoryStack stack) {
         NativeBuffer[] buffers = {coordinates, results, permutations, octaves, samplerMetadata,
                 graphCoordinates, graphNodes, graphSplinePoints, graphBlendedMetadata, graphBlendInputs, graphRoots,
-                interpolationMetadata, interpolationOutput, aquiferPressureInputs};
+                interpolationMetadata, interpolationOutput, aquiferPressureInputs,
+                aquiferNearestInputs, aquiferNearestOutput};
         for (NativeBuffer buffer : buffers) {
             if (buffer.hostVisible) {
                 persistentMappings.put(buffer, buffer.map(device, stack).order(ByteOrder.nativeOrder()));
@@ -811,10 +877,16 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long aquiferPressureDescriptorPool(MemoryStack s){VkDescriptorPoolSize.Buffer z=VkDescriptorPoolSize.calloc(1,s).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(2);VkDescriptorPoolCreateInfo i=VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(z);LongBuffer h=s.longs(0);check(vkCreateDescriptorPool(device,i,null,h),"aquifer pressure pool");return h.get(0);}
     private long aquiferPressureDescriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(aquiferPressureDescriptorPool).pSetLayouts(s.longs(aquiferPressureDescriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"aquifer pressure set");return h.get(0);}
     private void aquiferPressureDescriptors(MemoryStack s){NativeBuffer[] bs={aquiferPressureInputs,interpolationOutput};VkWriteDescriptorSet.Buffer w=VkWriteDescriptorSet.calloc(2,s);for(int i=0;i<2;i++){VkDescriptorBufferInfo.Buffer bi=VkDescriptorBufferInfo.calloc(1,s).buffer(bs[i].buffer).range(bs[i].size);w.get(i).sType$Default().dstSet(aquiferPressureDescriptorSet).dstBinding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bi);}vkUpdateDescriptorSets(device,w,null);}
+    private long aquiferNearestDescriptorLayout(MemoryStack s){VkDescriptorSetLayoutBinding.Buffer b=VkDescriptorSetLayoutBinding.calloc(2,s);for(int i=0;i<2;i++)b.get(i).binding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);VkDescriptorSetLayoutCreateInfo i=VkDescriptorSetLayoutCreateInfo.calloc(s).sType$Default().pBindings(b);LongBuffer h=s.longs(0);check(vkCreateDescriptorSetLayout(device,i,null,h),"aquifer nearest-three layout");return h.get(0);}
+    private long aquiferNearestPipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(4);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(aquiferNearestDescriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"aquifer nearest-three pipeline layout");return h.get(0);}
+    private long aquiferNearestPipeline(MemoryStack s){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(aquiferNearestShader).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(aquiferNearestPipelineLayout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),"aquifer nearest-three pipeline");return h.get(0);}
+    private long aquiferNearestDescriptorPool(MemoryStack s){VkDescriptorPoolSize.Buffer z=VkDescriptorPoolSize.calloc(1,s).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(2);VkDescriptorPoolCreateInfo i=VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(z);LongBuffer h=s.longs(0);check(vkCreateDescriptorPool(device,i,null,h),"aquifer nearest-three pool");return h.get(0);}
+    private long aquiferNearestDescriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(aquiferNearestDescriptorPool).pSetLayouts(s.longs(aquiferNearestDescriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"aquifer nearest-three set");return h.get(0);}
+    private void aquiferNearestDescriptors(MemoryStack s){NativeBuffer[] bs={aquiferNearestInputs,aquiferNearestOutput};VkWriteDescriptorSet.Buffer w=VkWriteDescriptorSet.calloc(2,s);for(int i=0;i<2;i++){VkDescriptorBufferInfo.Buffer bi=VkDescriptorBufferInfo.calloc(1,s).buffer(bs[i].buffer).range(bs[i].size);w.get(i).sType$Default().dstSet(aquiferNearestDescriptorSet).dstBinding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bi);}vkUpdateDescriptorSets(device,w,null);}
     private long commandPool(MemoryStack s){VkCommandPoolCreateInfo i=VkCommandPoolCreateInfo.calloc(s).sType$Default().flags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT).queueFamilyIndex(queueFamily);LongBuffer h=s.longs(0);check(vkCreateCommandPool(device,i,null,h),"command pool");return h.get(0);}
     private VkCommandBuffer commandBuffer(MemoryStack s){VkCommandBufferAllocateInfo i=VkCommandBufferAllocateInfo.calloc(s).sType$Default().commandPool(commandPool).level(VK_COMMAND_BUFFER_LEVEL_PRIMARY).commandBufferCount(1);PointerBuffer h=s.mallocPointer(1);check(vkAllocateCommandBuffers(device,i,h),"allocate command buffer");return new VkCommandBuffer(h.get(0),device);}
     private long fence(MemoryStack s){VkFenceCreateInfo i=VkFenceCreateInfo.calloc(s).sType$Default();LongBuffer h=s.longs(0);check(vkCreateFence(device,i,null,h),"create fence");return h.get(0);}
     private static void check(int r,String op){if(r!=VK_SUCCESS)throw new IllegalStateException(op+" failed: "+r);}
     private record NativeBuffer(long buffer,long memory,long size,boolean hostVisible){ByteBuffer map(VkDevice d,MemoryStack s){PointerBuffer p=s.mallocPointer(1);check(vkMapMemory(d,memory,0,size,0,p),"map");return MemoryUtil.memByteBuffer(p.get(0),(int)size);}void flush(VkDevice d,MemoryStack s){VkMappedMemoryRange r=VkMappedMemoryRange.calloc(s).sType$Default().memory(memory).offset(0).size(size);check(vkFlushMappedMemoryRanges(d,r),"flush");}void invalidate(VkDevice d,MemoryStack s){VkMappedMemoryRange r=VkMappedMemoryRange.calloc(s).sType$Default().memory(memory).offset(0).size(size);check(vkInvalidateMappedMemoryRanges(d,r),"invalidate");}void unmap(VkDevice d){if(hostVisible)vkUnmapMemory(d,memory);}void destroy(VkDevice d){vkDestroyBuffer(d,buffer,null);vkFreeMemory(d,memory,null);}}
-    @Override public void close(){vkDeviceWaitIdle(device);for(NativeBuffer buffer:persistentMappings.keySet())buffer.unmap(device);vkDestroyFence(device,fence,null);vkDestroyCommandPool(device,commandPool,null);vkDestroyDescriptorPool(device,descriptorPool,null);vkDestroyPipeline(device,pipeline,null);vkDestroyPipelineLayout(device,pipelineLayout,null);vkDestroyDescriptorSetLayout(device,descriptorLayout,null);vkDestroyShaderModule(device,shader,null);vkDestroyPipeline(device,graphPipeline,null);vkDestroyPipeline(device,gridPipeline,null);vkDestroyPipelineLayout(device,graphPipelineLayout,null);vkDestroyDescriptorSetLayout(device,graphDescriptorLayout,null);vkDestroyDescriptorPool(device,graphDescriptorPool,null);vkDestroyShaderModule(device,graphShader,null);vkDestroyShaderModule(device,gridShader,null);vkDestroyPipeline(device,interpolationPipeline,null);vkDestroyPipelineLayout(device,interpolationPipelineLayout,null);vkDestroyDescriptorSetLayout(device,interpolationDescriptorLayout,null);vkDestroyDescriptorPool(device,interpolationDescriptorPool,null);vkDestroyShaderModule(device,interpolationShader,null);vkDestroyPipeline(device,aquiferPressurePipeline,null);vkDestroyPipelineLayout(device,aquiferPressurePipelineLayout,null);vkDestroyDescriptorSetLayout(device,aquiferPressureDescriptorLayout,null);vkDestroyDescriptorPool(device,aquiferPressureDescriptorPool,null);vkDestroyShaderModule(device,aquiferPressureShader,null);coordinates.destroy(device);graphCoordinates.destroy(device);graphNodes.destroy(device);graphSplinePoints.destroy(device);graphBlendedMetadata.destroy(device);graphBlendInputs.destroy(device);graphRoots.destroy(device);interpolationMetadata.destroy(device);interpolationOutput.destroy(device);aquiferPressureInputs.destroy(device);results.destroy(device);permutations.destroy(device);octaves.destroy(device);samplerMetadata.destroy(device);if(ownsDevice){vkDestroyDevice(device,null);vkDestroyInstance(instance,null);}}
+    @Override public void close(){vkDeviceWaitIdle(device);for(NativeBuffer buffer:persistentMappings.keySet())buffer.unmap(device);vkDestroyFence(device,fence,null);vkDestroyCommandPool(device,commandPool,null);vkDestroyDescriptorPool(device,descriptorPool,null);vkDestroyPipeline(device,pipeline,null);vkDestroyPipelineLayout(device,pipelineLayout,null);vkDestroyDescriptorSetLayout(device,descriptorLayout,null);vkDestroyShaderModule(device,shader,null);vkDestroyPipeline(device,graphPipeline,null);vkDestroyPipeline(device,gridPipeline,null);vkDestroyPipelineLayout(device,graphPipelineLayout,null);vkDestroyDescriptorSetLayout(device,graphDescriptorLayout,null);vkDestroyDescriptorPool(device,graphDescriptorPool,null);vkDestroyShaderModule(device,graphShader,null);vkDestroyShaderModule(device,gridShader,null);vkDestroyPipeline(device,interpolationPipeline,null);vkDestroyPipelineLayout(device,interpolationPipelineLayout,null);vkDestroyDescriptorSetLayout(device,interpolationDescriptorLayout,null);vkDestroyDescriptorPool(device,interpolationDescriptorPool,null);vkDestroyShaderModule(device,interpolationShader,null);vkDestroyPipeline(device,aquiferPressurePipeline,null);vkDestroyPipelineLayout(device,aquiferPressurePipelineLayout,null);vkDestroyDescriptorSetLayout(device,aquiferPressureDescriptorLayout,null);vkDestroyDescriptorPool(device,aquiferPressureDescriptorPool,null);vkDestroyShaderModule(device,aquiferPressureShader,null);vkDestroyPipeline(device,aquiferNearestPipeline,null);vkDestroyPipelineLayout(device,aquiferNearestPipelineLayout,null);vkDestroyDescriptorSetLayout(device,aquiferNearestDescriptorLayout,null);vkDestroyDescriptorPool(device,aquiferNearestDescriptorPool,null);vkDestroyShaderModule(device,aquiferNearestShader,null);coordinates.destroy(device);graphCoordinates.destroy(device);graphNodes.destroy(device);graphSplinePoints.destroy(device);graphBlendedMetadata.destroy(device);graphBlendInputs.destroy(device);graphRoots.destroy(device);interpolationMetadata.destroy(device);interpolationOutput.destroy(device);aquiferPressureInputs.destroy(device);aquiferNearestInputs.destroy(device);aquiferNearestOutput.destroy(device);results.destroy(device);permutations.destroy(device);octaves.destroy(device);samplerMetadata.destroy(device);if(ownsDevice){vkDestroyDevice(device,null);vkDestroyInstance(instance,null);}}
 }

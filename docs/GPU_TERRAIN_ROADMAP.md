@@ -109,6 +109,12 @@ parity checks.
   component; it is a validated kernel boundary, not yet eligible to decide
   blocks near a pressure threshold until precision behavior is compared with
   vanilla's double calculation and a safe threshold fallback is implemented.
+- A second standalone kernel selects the nearest three centers from 27 exact
+  candidate positions. Its packed query carries xyz plus 27 center xyz records;
+  output carries selected indices and squared integer distances. Selection
+  preserves vanilla's strict first/second comparisons and inclusive third
+  comparison. Mesa smoke checks ordinary and equal-distance cases against the
+  Java reference.
 - Keep fluid picking, preliminary surface sampling, surface level selection,
   and fluid type selection as explicit inputs/operations. These consult
   `NoiseChunk`, density roots, and world settings; the shader must not infer
@@ -165,11 +171,11 @@ grid path, optional per-block density interpolation, and a new adapter that
 translates custom density functions into supported Minecraft density graphs.
 The GPU still does not choose final solid, air, fluid, or surface block states.
 Those remain the next major terrain-generation passes.
-The first standalone aquifer pressure kernel now has a versioned 32-byte input
-record, persistent Vulkan buffers and pipeline, and a differential Mesa smoke
-case. It is not connected to `NoiseBasedAquifer.computeSubstance`; candidate
-selection, fluid status construction, the final substance output, and chunk
-state writes remain CPU-owned.
+Aquifer pressure and nearest-three candidate selection now have packed input
+records, persistent Vulkan buffers and pipelines, and differential Mesa smoke
+cases. Neither kernel is connected to `NoiseBasedAquifer.computeSubstance`;
+fluid status construction, final substance output, and chunk state writes
+remain CPU-owned.
 
 The first paired C2ME/Chunky CI run completed 289 chunks on each path: CPU
 36.125 CPS and Mesa Lavapipe 26.273 CPS (0.727x CPU), with 319 GPU caches
@@ -202,9 +208,11 @@ tile bookkeeping is bounded to 4,096 entries.
 The first tile-prefetch CI run passed shader smoke and completed the 1,089
 chunk pair at 60.842 CPU CPS and 45.190 Lavapipe CPS (0.743x CPU). It consumed
 1,207 GPU caches with no fallbacks and averaged 15.125 chunks per dispatch,
-compared with 1.82 before prefetch. GitHub-hosted runner speeds vary between
-runs; the improved batch size is the clearest result from this comparison.
-This is the current recorded throughput result. It measures the existing
-GPU density/interpolation workload under Mesa Lavapipe, not GPU-selected block
-states and not physical GPU performance. The in-progress follow-up Actions run
-only records this result in the roadmap.
+compared with 1.82 before prefetch. A repeated run on the aquifer pressure
+kernel commit measured 34.683 CPU CPS and 21.608 Lavapipe CPS (0.623x CPU),
+with 1,202 caches consumed, zero CPU fallbacks, and 14.6875 average chunks per
+dispatch. That run passed the pressure-kernel smoke. Runner variation is
+large, and the standalone kernel is not part of the chunk hot path, so these
+measurements do not establish a performance change from the kernel. Current
+throughput measures density/interpolation under Mesa Lavapipe, not GPU-selected
+block states or physical GPU performance.
