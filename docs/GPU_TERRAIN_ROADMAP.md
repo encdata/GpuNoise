@@ -102,6 +102,13 @@ parity checks.
   special case, fluid-level midpoint and distance terms, a lazily evaluated
   barrier-noise value, and the final `2 * (barrier + adjustment)` result.
   Do not approximate this with density thresholds or sampled aquifer noise.
+- The first standalone pressure kernel is now wired to the persistent Vulkan
+  engine and exercised by the Lavapipe smoke task against a Java reference.
+  Its 32-byte records carry Y, two levels, two fluid kinds, and the already
+  evaluated barrier value. The current shader uses 32-bit floats for this
+  component; it is a validated kernel boundary, not yet eligible to decide
+  blocks near a pressure threshold until precision behavior is compared with
+  vanilla's double calculation and a safe threshold fallback is implemented.
 - Keep fluid picking, preliminary surface sampling, surface level selection,
   and fluid type selection as explicit inputs/operations. These consult
   `NoiseChunk`, density roots, and world settings; the shader must not infer
@@ -158,6 +165,11 @@ grid path, optional per-block density interpolation, and a new adapter that
 translates custom density functions into supported Minecraft density graphs.
 The GPU still does not choose final solid, air, fluid, or surface block states.
 Those remain the next major terrain-generation passes.
+The first standalone aquifer pressure kernel now has a versioned 32-byte input
+record, persistent Vulkan buffers and pipeline, and a differential Mesa smoke
+case. It is not connected to `NoiseBasedAquifer.computeSubstance`; candidate
+selection, fluid status construction, the final substance output, and chunk
+state writes remain CPU-owned.
 
 The first paired C2ME/Chunky CI run completed 289 chunks on each path: CPU
 36.125 CPS and Mesa Lavapipe 26.273 CPS (0.727x CPU), with 319 GPU caches

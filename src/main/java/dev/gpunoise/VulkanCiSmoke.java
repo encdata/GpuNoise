@@ -98,10 +98,43 @@ public final class VulkanCiSmoke {
                     .get(60, TimeUnit.SECONDS);
             System.out.println("Vulkan CI smoke: shared terrain lattice interpolation completed");
             assertSharedLatticeInterpolationResults(terrainResults);
+
+            // Differentially exercise the first exact numeric component of
+            // vanilla's aquifer block decision. Record fields and boundary
+            // cases are shared with the production pressure input contract.
+            int[][] pressureCases = {
+                    {64, 63, 40, 0, 0},
+                    {32, 48, 48, 0, 0},
+                    {40, 48, 32, GpuAquiferPressure.WATER, GpuAquiferPressure.LAVA},
+                    {40, 48, 32, 0, 0},
+                    {-8, -12, 4, 0, 0},
+                    {5, 0, 40, 0, 0}
+            };
+            float[] barriers = {0.25f, 0.0f, -0.75f, 0.5f, -0.2f, 1.0f};
+            ByteBuffer pressureInput = ByteBuffer.allocateDirect(
+                    pressureCases.length * GpuAquiferPressure.RECORD_BYTES).order(ByteOrder.nativeOrder());
+            for (int i = 0; i < pressureCases.length; i++) {
+                int[] c = pressureCases[i];
+                pressureInput.putInt(c[0]).putInt(c[1]).putInt(c[2]).putInt(c[3]).putInt(c[4])
+                        .putFloat(barriers[i]).putInt(0).putInt(0);
+            }
+            pressureInput.flip();
+            System.out.println("Vulkan CI smoke: dispatching vanilla aquifer pressure kernel");
+            float[] pressureValues = ring.submitAquiferPressure(pressureInput, pressureCases.length)
+                    .get(60, TimeUnit.SECONDS);
+            System.out.println("Vulkan CI smoke: aquifer pressure kernel completed");
+            for (int i = 0; i < pressureCases.length; i++) {
+                int[] c = pressureCases[i];
+                float expected = GpuAquiferPressure.calculate(c[0], c[1], c[2], c[3], c[4], barriers[i]);
+                if (Math.abs(pressureValues[i] - expected) > 1.0e-5f) {
+                    throw new IllegalStateException("Aquifer pressure mismatch at case " + i
+                            + ": expected " + expected + ", got " + pressureValues[i]);
+                }
+            }
         }
 
         System.out.println("Vulkan CI smoke passed on " + device.name()
-                + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, and shared 12-root terrain lattices.");
+                + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, and shared 12-root terrain lattices; aquifer pressure matched the Java reference cases.");
     }
 
     private static void assertConstantResults(String label, float[] values, int expectedCount) {
