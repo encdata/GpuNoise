@@ -3,8 +3,10 @@ package dev.gpunoise;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
@@ -45,8 +47,8 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         return t;
     });
     private volatile boolean closed;
-    /** Requests are held by C2ME-style 4x4 spatial area until dispatch. */
-    private final Map<Long, ArrayDeque<Pending>> pendingByRegion = new HashMap<>();
+    /** Isolates compatible grid layouts in each spatial region for dispatch. */
+    private final Map<BatchKey, ArrayDeque<Pending>> pendingByRegion = new HashMap<>();
     private final AtomicLong dispatchCount = new AtomicLong();
     private final AtomicLong totalChunksDispatched = new AtomicLong();
     private final AtomicLong totalSamplesDispatched = new AtomicLong();
@@ -109,8 +111,8 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                     addPending(next);
                     compatibleCount = largestNearbyCount();
                 }
-                long batchRegion = largestRegion();
-                ArrayDeque<Pending> region = pendingByRegion.get(batchRegion);
+                BatchKey batchKey = largestRegion();
+                ArrayDeque<Pending> region = pendingByRegion.get(batchKey);
                 Pending seed = region.peekFirst();
                 int samplesPerChunk = seed.grid.sampleCount();
                 int maxChunks = maxChunksPerDispatch(seed.grid);
@@ -122,13 +124,13 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 // self-describing, so this keeps one dispatch useful even
                 // when C2ME's traversal crosses a 5x5 boundary between two
                 // scheduler wakeups.
-                for (long candidateRegion : nearbyRegions(batchRegion)) {
-                    ArrayDeque<Pending> candidate = pendingByRegion.get(candidateRegion);
+                for (long candidateRegion : nearbyRegions(batchKey.region)) {
+                    BatchKey candidateKey = new BatchKey(candidateRegion, batchKey.layout);
+                    ArrayDeque<Pending> candidate = pendingByRegion.get(candidateKey);
                     if (candidate == null) continue;
                     while (!candidate.isEmpty() && batch.size() < maxChunks) {
                         Pending item = candidate.peekFirst();
-                        if (!sameLayout(seed.grid, item.grid)
-                                || (long) input + item.grid.sampleCount() > MAX_INPUT) break;
+                        if ((long) input + item.grid.sampleCount() > MAX_INPUT) break;
                         long itemOutputFloats = (long) blocksPerChunk(item.grid)
                                 * GpuTerrainRuntime.terrainBlockOutputRootCount();
                         if (GpuTerrainRuntime.terrainBlockOutputEnabled()
@@ -139,7 +141,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                         input += item.grid.sampleCount();
                         outputFloats += itemOutputFloats;
                     }
-                    if (candidate.isEmpty()) pendingByRegion.remove(candidateRegion);
+                    if (candidate.isEmpty()) pendingByRegion.remove(candidateKey);
                     if (batch.size() == maxChunks) break;
                 }
                 dispatchCount.incrementAndGet();
@@ -168,7 +170,8 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     }
 
     private void addPending(Pending item) {
-        pendingByRegion.computeIfAbsent(regionKey(item.grid), ignored -> new ArrayDeque<>()).addLast(item);
+        BatchKey key = new BatchKey(regionKey(item.grid), GridLayout.of(item.grid));
+        pendingByRegion.computeIfAbsent(key, ignored -> new ArrayDeque<>()).addLast(item);
     }
 
     private int pendingCount() {
@@ -191,16 +194,10 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         return maxChunks;
     }
 
-    private static boolean sameLayout(GpuTerrainGrid first, GpuTerrainGrid next) {
-        return first.gridX() == next.gridX() && first.gridY() == next.gridY()
-                && first.gridZ() == next.gridZ() && first.cellWidth() == next.cellWidth()
-                && first.cellHeight() == next.cellHeight();
-    }
-
-    private long largestRegion() {
-        long bestRegion = 0L;
+    private BatchKey largestRegion() {
+        BatchKey bestRegion = null;
         int bestCount = -1;
-        for (Map.Entry<Long, ArrayDeque<Pending>> entry : pendingByRegion.entrySet()) {
+        for (Map.Entry<BatchKey, ArrayDeque<Pending>> entry : pendingByRegion.entrySet()) {
             if (entry.getValue().size() > bestCount) {
                 bestCount = entry.getValue().size();
                 bestRegion = entry.getKey();
@@ -210,26 +207,17 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     }
 
     private int largestNearbyCount() {
-        long center = largestRegion();
+        BatchKey center = largestRegion();
+        if (center == null) return 0;
         ArrayDeque<Pending> seedRegion = pendingByRegion.get(center);
         Pending seed = seedRegion == null ? null : seedRegion.peekFirst();
-        return seed == null ? 0 : nearbyCompatibleCount(center, seed.grid,
-                maxChunksPerDispatch(seed.grid));
-    }
-
-    private int nearbyCompatibleCount(long center, GpuTerrainGrid layout, int capacity) {
+        if (seed == null) return 0;
+        int capacity = maxChunksPerDispatch(seed.grid);
         int count = 0;
-        int centerX = (int) (center >> 32);
-        int centerZ = (int) center;
-        for (Map.Entry<Long, ArrayDeque<Pending>> entry : pendingByRegion.entrySet()) {
-            int regionX = (int) (entry.getKey() >> 32);
-            int regionZ = (int) entry.getKey().longValue();
-            if (Math.abs(regionX - centerX) > 1 || Math.abs(regionZ - centerZ) > 1) continue;
-            ArrayDeque<Pending> candidates = entry.getValue();
-            for (Pending candidate : candidates) {
-                if (!sameLayout(layout, candidate.grid) || count == capacity) break;
-                count++;
-            }
+        for (long region : nearbyRegions(center.region)) {
+            ArrayDeque<Pending> candidates = pendingByRegion.get(new BatchKey(region, center.layout));
+            if (candidates == null) continue;
+            count = Math.min(capacity, count + candidates.size());
             if (count == capacity) break;
         }
         return count;
@@ -239,10 +227,12 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         int centerX = (int) (center >> 32);
         int centerZ = (int) center;
         List<Long> regions = new ArrayList<>(pendingByRegion.size());
-        for (long region : pendingByRegion.keySet()) {
+        Set<Long> seen = new HashSet<>();
+        for (BatchKey key : pendingByRegion.keySet()) {
+            long region = key.region;
             int x = (int) (region >> 32);
             int z = (int) region;
-            if (Math.abs(x - centerX) <= 1 && Math.abs(z - centerZ) <= 1) {
+            if (Math.abs(x - centerX) <= 1 && Math.abs(z - centerZ) <= 1 && seen.add(region)) {
                 regions.add(region);
             }
         }
@@ -400,6 +390,15 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
 
     private record Pending(GpuTerrainGrid grid, CompletableFuture<GpuTerrainBatchResult> future,
                            long enqueuedNanos) {}
+
+    private record BatchKey(long region, GridLayout layout) {}
+
+    private record GridLayout(int gridX, int gridY, int gridZ, int cellWidth, int cellHeight) {
+        static GridLayout of(GpuTerrainGrid grid) {
+            return new GridLayout(grid.gridX(), grid.gridY(), grid.gridZ(),
+                    grid.cellWidth(), grid.cellHeight());
+        }
+    }
 
     private static final class DispatchMetadata {
         final java.nio.ByteBuffer grid = java.nio.ByteBuffer.allocateDirect(MAX_CHUNKS * 32)
