@@ -43,6 +43,9 @@ BENCHMARK_REPETITIONS = 3
 BATCH_WINDOW_MS = int(os.environ.get("GPUNOISE_TERRAIN_BATCH_WINDOW_MS", "50"))
 if not 1 <= BATCH_WINDOW_MS <= 250:
     raise ValueError("GPUNOISE_TERRAIN_BATCH_WINDOW_MS must be between 1 and 250")
+BATCH_TARGET_CHUNKS = int(os.environ.get("GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS", "32"))
+if not 1 <= BATCH_TARGET_CHUNKS <= 100:
+    raise ValueError("GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS must be between 1 and 100")
 TASK_DONE = re.compile(
     r"Task finished for .*?Processed:\s*([\d,]+) chunks \(([^)]+)%\), "
     r"Total time:\s*(\d+):(\d+):(\d+)"
@@ -166,6 +169,7 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
         # GPU materialization with the Java cell-corner interpolation first.
         command.append("-Dgpunoise.fullBlockOutput=true")
         command.append(f"-Dgpunoise.terrainBatchWindowMs={BATCH_WINDOW_MS}")
+        command.append(f"-Dgpunoise.terrainBatchTargetChunks={BATCH_TARGET_CHUNKS}")
     print(f"Starting {mode} Chunky benchmark: {' '.join(command)}", flush=True)
     process = subprocess.Popen(
         command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -265,9 +269,14 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
                 f"avg_samples_per_dispatch={batch_samples[-1][1]}", flush=True,
             )
             batch_window = GPU_BATCH_WINDOW.search(run_log)
-            if batch_window is None or int(batch_window.group(1)) != BATCH_WINDOW_MS:
+            if (batch_window is None or int(batch_window.group(1)) != BATCH_WINDOW_MS
+                    or int(batch_window.group(2)) != BATCH_TARGET_CHUNKS):
                 observed = "missing" if batch_window is None else f"{batch_window.group(1)}ms"
-                raise RuntimeError(f"GPU batch-window setting was {observed}; expected {BATCH_WINDOW_MS}ms")
+                raise RuntimeError(
+                    f"GPU batch policy was window={observed}, target="
+                    f"{batch_window.group(2) if batch_window else 'missing'}; expected "
+                    f"window={BATCH_WINDOW_MS}ms, target={BATCH_TARGET_CHUNKS}"
+                )
             shader_variants = GPU_SHADER_VARIANT.findall(run_log)
             # Keep the paired throughput comparison on the parity-preserving
             # shader. FP32 math remains an explicit experiment: the compiler

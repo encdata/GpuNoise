@@ -48,6 +48,7 @@ jobs:
       - name: Run C2ME Chunky CPU and GPU worldgen benchmark
         env:
           GPUNOISE_TERRAIN_BATCH_WINDOW_MS: 50
+          GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS: 32
         run: python3 tools/ci/runserver_benchmark.py
 
       - name: Upload mod artifact

@@ -21,7 +21,8 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     private static final int BATCH_SIZE_CHUNKS = 10;
     private static final int MAX_CHUNKS = 100;
     /** Aim for a useful transfer/dispatch size when nearby requests are ready. */
-    private static final int TARGET_CHUNKS = 32;
+    private static final int TARGET_CHUNKS = (int) Math.max(1L,
+            Math.min(MAX_CHUNKS, Long.getLong("gpunoise.terrainBatchTargetChunks", 32L)));
     private static final int MAX_INPUT = PersistentVulkanNormalNoiseEngine.CAPACITY;
     // Give C2ME enough time to enqueue the rest of the local 10x10 area. The
     // deadline is still bounded, so an isolated request is dispatched
