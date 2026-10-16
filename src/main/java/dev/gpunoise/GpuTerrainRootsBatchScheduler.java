@@ -93,7 +93,8 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 long batchStarted = System.nanoTime();
                 long deadline = batchStarted + BATCH_WINDOW_NANOS;
                 long tileDeadline = batchStarted + TILE_COALESCE_NANOS;
-                int compatibleCount = largestNearbyCount();
+                BatchCandidate candidate = largestNearbyBatch();
+                int compatibleCount = candidate.chunks;
                 while (System.nanoTime() < deadline && pendingCount() < MAX_CHUNKS
                         && compatibleCount < TARGET_CHUNKS) {
                     long now = System.nanoTime();
@@ -107,9 +108,10 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                             : queue.poll();
                     if (next == null) break;
                     addPending(next);
-                    compatibleCount = largestNearbyCount();
+                    candidate = largestNearbyBatch();
+                    compatibleCount = candidate.chunks;
                 }
-                BatchKey batchKey = largestRegion();
+                BatchKey batchKey = candidate.key;
                 ArrayDeque<Pending> region = pendingByRegion.get(batchKey);
                 Pending seed = region.peekFirst();
                 int samplesPerChunk = seed.grid.sampleCount();
@@ -192,33 +194,31 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         return maxChunks;
     }
 
-    private BatchKey largestRegion() {
-        BatchKey bestRegion = null;
-        int bestCount = -1;
+    private BatchCandidate largestNearbyBatch() {
+        BatchKey bestKey = null;
+        int bestCount = 0;
         for (Map.Entry<BatchKey, ArrayDeque<Pending>> entry : pendingByRegion.entrySet()) {
-            if (entry.getValue().size() > bestCount) {
-                bestCount = entry.getValue().size();
-                bestRegion = entry.getKey();
+            Pending seed = entry.getValue().peekFirst();
+            if (seed == null) continue;
+            int capacity = maxChunksPerDispatch(seed.grid);
+            int centerX = (int) (entry.getKey().region >> 32);
+            int centerZ = (int) entry.getKey().region;
+            int count = 0;
+            for (int dx = -1; dx <= 1 && count < capacity; dx++) {
+                for (int dz = -1; dz <= 1 && count < capacity; dz++) {
+                    long region = ((long) (centerX + dx) << 32) ^ ((centerZ + dz) & 0xffffffffL);
+                    ArrayDeque<Pending> nearby = pendingByRegion.get(
+                            new BatchKey(region, entry.getKey().layout));
+                    if (nearby != null) count = Math.min(capacity, count + nearby.size());
+                }
+            }
+            if (count > bestCount) {
+                bestCount = count;
+                bestKey = entry.getKey();
             }
         }
-        return bestRegion;
-    }
-
-    private int largestNearbyCount() {
-        BatchKey center = largestRegion();
-        if (center == null) return 0;
-        ArrayDeque<Pending> seedRegion = pendingByRegion.get(center);
-        Pending seed = seedRegion == null ? null : seedRegion.peekFirst();
-        if (seed == null) return 0;
-        int capacity = maxChunksPerDispatch(seed.grid);
-        int count = 0;
-        for (long region : nearbyRegions(center.region, center.layout)) {
-            ArrayDeque<Pending> candidates = pendingByRegion.get(new BatchKey(region, center.layout));
-            if (candidates == null) continue;
-            count = Math.min(capacity, count + candidates.size());
-            if (count == capacity) break;
-        }
-        return count;
+        if (bestKey == null) throw new IllegalStateException("terrain batch map is unexpectedly empty");
+        return new BatchCandidate(bestKey, bestCount);
     }
 
     private List<Long> nearbyRegions(long center, GridLayout layout) {
@@ -389,6 +389,8 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                            long enqueuedNanos) {}
 
     private record BatchKey(long region, GridLayout layout) {}
+
+    private record BatchCandidate(BatchKey key, int chunks) {}
 
     private record GridLayout(int gridX, int gridY, int gridZ, int cellWidth, int cellHeight) {
         static GridLayout of(GpuTerrainGrid grid) {
