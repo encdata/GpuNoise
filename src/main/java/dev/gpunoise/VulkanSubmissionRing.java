@@ -122,10 +122,17 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     CompletableFuture<float[]> submitInterpolation(float[] corners, ByteBuffer metadata,
                                                     int chunkCount, int blocksPerChunk) {
+        return submitInterpolation(corners, metadata, chunkCount, blocksPerChunk, 1, 1);
+    }
+
+    CompletableFuture<float[]> submitInterpolation(float[] corners, ByteBuffer metadata,
+                                                    int chunkCount, int blocksPerChunk,
+                                                    int rootStride, int outputStride) {
         PersistentVulkanNormalNoiseEngine slot = slots[Math.floorMod(next.getAndIncrement(), slots.length)];
         return CompletableFuture.supplyAsync(() -> {
             try {
-                return slot.submitInterpolation(corners, metadata, chunkCount, blocksPerChunk);
+                return slot.submitInterpolation(corners, metadata, chunkCount, blocksPerChunk,
+                        rootStride, outputStride);
             } catch (Exception failure) {
                 throw new IllegalStateException("GPU ring interpolation dispatch failed", failure);
             }

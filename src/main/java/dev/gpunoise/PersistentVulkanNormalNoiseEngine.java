@@ -574,9 +574,19 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     /** Executes the batched corner-to-block interpolation shader. */
     synchronized float[] submitInterpolation(float[] corners, ByteBuffer metadata,
                                               int chunkCount, int blocksPerChunk) throws Exception {
+        return submitInterpolation(corners, metadata, chunkCount, blocksPerChunk, 1, 1);
+    }
+
+    /** Tests the production interleaved-root lattice contract as well as compact smoke inputs. */
+    synchronized float[] submitInterpolation(float[] corners, ByteBuffer metadata,
+                                              int chunkCount, int blocksPerChunk,
+                                              int rootStride, int outputStride) throws Exception {
         int blockCount = Math.multiplyExact(chunkCount, blocksPerChunk);
-        if (corners.length * 4L > results.size || metadata.remaining() > interpolationMetadata.size
-                || blockCount * 4L > interpolationOutput.size) throw new IllegalArgumentException("interpolation batch exceeds GPU capacity");
+        if (rootStride <= 0 || outputStride <= 0 || outputStride > rootStride
+                || corners.length % rootStride != 0
+                || corners.length * 4L > results.size || metadata.remaining() > interpolationMetadata.size
+                || (long) blockCount * outputStride * 4L > interpolationOutput.size)
+            throw new IllegalArgumentException("interpolation batch exceeds GPU capacity or has invalid root strides");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ByteBuffer cornerBytes = stack.malloc(corners.length * Float.BYTES).order(ByteOrder.nativeOrder());
             cornerBytes.asFloatBuffer().put(corners); cornerBytes.position(0).limit(corners.length * Float.BYTES);
@@ -585,12 +595,13 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin interpolation command buffer");
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, interpolationPipeline);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, interpolationPipelineLayout, 0, stack.longs(interpolationDescriptorSet), null);
-            ByteBuffer push = stack.malloc(16).order(ByteOrder.nativeOrder()).putInt(chunkCount).putInt(blocksPerChunk).putInt(1).putInt(1).flip();
+            ByteBuffer push = stack.malloc(16).order(ByteOrder.nativeOrder())
+                    .putInt(chunkCount).putInt(blocksPerChunk).putInt(rootStride).putInt(outputStride).flip();
             vkCmdPushConstants(commandBuffer, interpolationPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
             vkCmdDispatch(commandBuffer, (blockCount + 63) / 64, 1, 1);
             VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
                     .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
-                    .buffer(interpolationOutput.buffer).size(blockCount * 4L);
+                    .buffer(interpolationOutput.buffer).size((long) blockCount * outputStride * 4L);
             vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, null, barrier, null);
             check(vkEndCommandBuffer(commandBuffer), "end interpolation command buffer");
             synchronized (queueSubmitLock) { check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default().pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit interpolation"); }
@@ -600,8 +611,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             FloatBuffer values = persistentMappings.get(interpolationOutput)
                     .duplicate().order(ByteOrder.nativeOrder()).asFloatBuffer();
             values.clear();
-            values.limit(blockCount);
-            float[] output = new float[blockCount];
+            values.limit(blockCount * outputStride);
+            float[] output = new float[blockCount * outputStride];
             values.get(output);
             return output;
         }

@@ -74,10 +74,34 @@ public final class VulkanCiSmoke {
                     .get(60, TimeUnit.SECONDS);
             System.out.println("Vulkan CI smoke: anisotropic terrain interpolation completed");
             assertAnisotropicInterpolationResults(anisotropicResults);
+
+            // Production chunks reuse shared lattice corners and interleave
+            // twelve terrain roots at each grid sample. Exercise both strides
+            // across multiple cells, including samples on cell boundaries.
+            int rootStride = 12;
+            float[] terrainCorners = new float[3 * 3 * 3 * rootStride];
+            for (int cornerY = 0; cornerY < 3; cornerY++) {
+                for (int cornerX = 0; cornerX < 3; cornerX++) {
+                    for (int cornerZ = 0; cornerZ < 3; cornerZ++) {
+                        int sample = (cornerY * 3 + cornerX) * 3 + cornerZ;
+                        int base = sample * rootStride;
+                        java.util.Arrays.fill(terrainCorners, base, base + rootStride, 100.0f);
+                        terrainCorners[base] = cornerX * 0.25f + cornerY + cornerZ * 2.0f;
+                    }
+                }
+            }
+            ByteBuffer terrainMetadata = GpuInterpolationBatch.metadata(
+                    1, 2, 2, 2, 2, 4, 27, 128);
+            System.out.println("Vulkan CI smoke: dispatching shared terrain lattice interpolation");
+            float[] terrainResults = ring.submitInterpolation(terrainCorners, terrainMetadata,
+                            1, 128, rootStride, 1)
+                    .get(60, TimeUnit.SECONDS);
+            System.out.println("Vulkan CI smoke: shared terrain lattice interpolation completed");
+            assertSharedLatticeInterpolationResults(terrainResults);
         }
 
         System.out.println("Vulkan CI smoke passed on " + device.name()
-                + ": coordinate and terrain grids passed; interpolation preserved axis-coded values for isotropic and anisotropic cells.");
+                + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, and shared 12-root terrain lattices.");
     }
 
     private static void assertConstantResults(String label, float[] values, int expectedCount) {
@@ -122,6 +146,23 @@ public final class VulkanCiSmoke {
             float expected = x * 0.125f + y * 0.25f + z;
             if (Math.abs(values[index] - expected) > 1.0e-6f) {
                 throw new IllegalStateException("anisotropic interpolation spacing mismatch at sample " + index
+                        + ": expected " + expected + ", got " + values[index]);
+            }
+        }
+    }
+
+    private static void assertSharedLatticeInterpolationResults(float[] values) {
+        if (values.length != 128) {
+            throw new IllegalStateException("shared-lattice interpolation returned " + values.length
+                    + " values; expected 128");
+        }
+        for (int index = 0; index < values.length; index++) {
+            int x = index & 3;
+            int z = (index >> 2) & 3;
+            int y = index >> 4;
+            float expected = x * 0.125f + y * 0.25f + z;
+            if (Math.abs(values[index] - expected) > 1.0e-6f) {
+                throw new IllegalStateException("shared-lattice interpolation mismatch at sample " + index
                         + ": expected " + expected + ", got " + values[index]);
             }
         }
