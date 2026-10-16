@@ -121,6 +121,12 @@ parity checks.
   through the Vulkan ring after pending graph-root work completes. The smoke
   also overlaps a graph-grid request with a nearest-center request to verify
   command-buffer serialization.
+- A block-substance shader now folds nearest statuses into vanilla's
+  solid/null, global-lava, closest-fluid, water-over-lava, pairwise pressure,
+  and fluid-update decisions. Its records carry registry state IDs and
+  pressure inputs. Near-zero results are marked for exact CPU resolution
+  because the shader uses float inputs while vanilla computes pressure in
+  double precision. The chunk writer does not consume this output yet.
 - Keep fluid picking, preliminary surface sampling, surface level selection,
   and fluid type selection as explicit inputs/operations. These consult
   `NoiseChunk`, density roots, and world settings; the shader must not infer
@@ -177,11 +183,13 @@ grid path, optional per-block density interpolation, and a new adapter that
 translates custom density functions into supported Minecraft density graphs.
 The GPU still does not choose final solid, air, fluid, or surface block states.
 Those remain the next major terrain-generation passes.
-Aquifer pressure and nearest-three candidate selection now have packed input
-records, persistent Vulkan buffers and pipelines, and differential Mesa smoke
-cases. Neither kernel is connected to `NoiseBasedAquifer.computeSubstance`;
-fluid status construction, final substance output, and chunk state writes
-remain CPU-owned.
+Aquifer pressure, nearest-three selection, and substance decisions now have
+packed input records, persistent Vulkan pipelines, and differential Mesa smoke
+cases. The nearest-center operation is available through the strict chunk
+dependency and is queued safely around graph-root submissions. The substance
+kernel is not yet called by `NoiseBasedAquifer.computeSubstance`; CPU fluid
+status preparation, integration of its output, and chunk state writes remain
+ahead.
 
 The first paired C2ME/Chunky CI run completed 289 chunks on each path: CPU
 36.125 CPS and Mesa Lavapipe 26.273 CPS (0.727x CPU), with 319 GPU caches

@@ -178,8 +178,45 @@ public final class VulkanCiSmoke {
                     .putInt(2).putInt(2).putInt(2).putInt(1).putInt(1).flip();
             var queuedGrid = ring.submitGraphRootsGrid(graph, queuedGridMetadata, 1, 8);
             System.out.println("Vulkan CI smoke: dispatching aquifer nearest-three selection");
-            int[] nearest = ring.submitAquiferNearestThree(nearestInput, queryCount)
-                    .get(60, TimeUnit.SECONDS);
+            var nearestFuture = ring.submitAquiferNearestThree(nearestInput, queryCount);
+            GpuAquiferSubstance.Input[] substanceCases = {
+                    new GpuAquiferSubstance.Input(0.2, 0.25, 50,
+                            40, 24, 12, 1, 10, 20,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.OTHER, 0, false, false, 400),
+                    new GpuAquiferSubstance.Input(-0.2, 0.25, 50,
+                            40, 24, 12, 1, 10, 20,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.OTHER, 77, true, false, 401),
+                    new GpuAquiferSubstance.Input(-0.2, 0.25, 50,
+                            40, 24, 12, 10, 35, 60,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.OTHER, 0, false, false, 402),
+                    new GpuAquiferSubstance.Input(-0.2, 0.25, 50,
+                            40, 24, 12, 10, 11, 12,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.OTHER, 0, false, false, 403),
+                    new GpuAquiferSubstance.Input(-0.2, 0.25, 50,
+                            40, 24, 12, 10, 11, 12,
+                            GpuAquiferSubstance.WATER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.OTHER, 0, false, true, 404),
+                    new GpuAquiferSubstance.Input(-0.1, 0.0, 33,
+                            40, 24, 10, 0, 1, 2,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.OTHER, 0, false, false, 405),
+                    new GpuAquiferSubstance.Input(-8.32, 0.0, 33,
+                            40, 24, 10, 0, 1, 2,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.OTHER, 0, false, false, 406),
+                    new GpuAquiferSubstance.Input(-0.25, 0.3, 30,
+                            30, 30, 30, 10, 11, 12,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.OTHER, 0, false, false, 407)
+            };
+            var substanceFuture = ring.submitAquiferSubstance(
+                    GpuAquiferSubstance.pack(substanceCases), substanceCases.length);
+            int[] nearest = nearestFuture.get(60, TimeUnit.SECONDS);
+            int[] substanceResults = substanceFuture.get(60, TimeUnit.SECONDS);
             assertConstantResults("queued terrain grid", queuedGrid.get(60, TimeUnit.SECONDS), 8);
             System.out.println("Vulkan CI smoke: aquifer nearest-three selection completed");
             for (int q = 0; q < queryCount; q++) {
@@ -192,10 +229,21 @@ public final class VulkanCiSmoke {
                     }
                 }
             }
+            System.out.println("Vulkan CI smoke: aquifer substance decisions completed");
+            for (int i = 0; i < substanceCases.length; i++) {
+                int[] expected = GpuAquiferSubstance.evaluate(substanceCases[i]);
+                for (int field = 0; field < GpuAquiferSubstance.OUTPUT_INTS; field++) {
+                    int actual = substanceResults[i * GpuAquiferSubstance.OUTPUT_INTS + field];
+                    if (actual != expected[field]) {
+                        throw new IllegalStateException("Aquifer substance mismatch at case " + i
+                                + ", field " + field + ": expected " + expected[field] + ", got " + actual);
+                    }
+                }
+            }
         }
 
         System.out.println("Vulkan CI smoke passed on " + device.name()
-                + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, and shared 12-root terrain lattices; aquifer pressure and nearest-three selection matched Java reference cases.");
+                + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, and shared 12-root terrain lattices; aquifer pressure, nearest-three selection, and substance decisions matched Java reference cases.");
     }
 
     private static void assertConstantResults(String label, float[] values, int expectedCount) {

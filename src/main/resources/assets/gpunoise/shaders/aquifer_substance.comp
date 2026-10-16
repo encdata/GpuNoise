@@ -1,0 +1,121 @@
+#version 450
+layout(local_size_x = 64) in;
+
+struct InputRecord {
+    float density;
+    float barrier;
+    int y;
+    int level0;
+    int level1;
+    int level2;
+    int distance0;
+    int distance1;
+    int distance2;
+    uint kind0;
+    uint kind1;
+    uint kind2;
+    uint globalStateId;
+    uint globalIsLava;
+    uint belowIsLava;
+    uint nearestStateId;
+};
+struct OutputRecord { uint action; uint stateId; uint schedule; uint reserved; };
+
+layout(std430, set = 0, binding = 0) readonly buffer Inputs { InputRecord items[]; };
+layout(std430, set = 0, binding = 1) writeonly buffer Outputs { OutputRecord values[]; };
+layout(push_constant) uniform Parameters { uint count; };
+
+const uint OTHER = 0u;
+const uint WATER = 1u;
+const uint LAVA = 2u;
+const uint RETURN_DEFAULT = 0u;
+const uint RETURN_STATE = 1u;
+const uint CPU_FALLBACK = 2u;
+const float PRECISION_EPSILON = 5.0e-3;
+
+float similarity(int firstDistance, int secondDistance) {
+    return 1.0 - float(abs(secondDistance - firstDistance)) / 25.0;
+}
+
+float pressure(int y, int levelA, int levelB, uint kindA, uint kindB, float barrier) {
+    if ((kindA == LAVA && kindB == WATER) || (kindA == WATER && kindB == LAVA)) return 2.0;
+    int levelDistance = abs(levelA - levelB);
+    if (levelDistance == 0) return 0.0;
+    float midpointDelta = float(y) + 0.5 - 0.5 * float(levelA + levelB);
+    float adjustment = 0.5 * float(levelDistance) - abs(midpointDelta);
+    if (midpointDelta > 0.0)
+        adjustment = adjustment > 0.0 ? adjustment / 1.5 : adjustment / 2.5;
+    else {
+        float shifted = 3.0 + adjustment;
+        adjustment = shifted > 0.0 ? shifted / 3.0 : shifted / 10.0;
+    }
+    float barrierValue = adjustment < -2.0 || adjustment > 2.0 ? 0.0 : barrier;
+    return 2.0 * (barrierValue + adjustment);
+}
+
+void emit(uint i, uint action, uint stateId, uint schedule) {
+    values[i].action = action;
+    values[i].stateId = stateId;
+    values[i].schedule = schedule;
+    values[i].reserved = 0u;
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= count) return;
+    InputRecord r = items[i];
+    if (isnan(r.density) || isinf(r.density)) {
+        emit(i, CPU_FALLBACK, 0u, 0u);
+        return;
+    }
+    if (r.density > 0.0) {
+        emit(i, RETURN_DEFAULT, 0u, 0u);
+        return;
+    }
+    if (isnan(r.barrier) || isinf(r.barrier) || abs(r.density) <= PRECISION_EPSILON) {
+        emit(i, CPU_FALLBACK, 0u, 0u);
+        return;
+    }
+    if (r.globalIsLava != 0u) {
+        emit(i, RETURN_STATE, r.globalStateId, 0u);
+        return;
+    }
+
+    float similarity01 = similarity(r.distance0, r.distance1);
+    if (similarity01 <= 0.0) {
+        emit(i, RETURN_STATE, r.nearestStateId, similarity01 >= 0.96 ? 1u : 0u);
+        return;
+    }
+    if (r.kind0 == WATER && r.belowIsLava != 0u) {
+        emit(i, RETURN_STATE, r.nearestStateId, 1u);
+        return;
+    }
+
+    float contribution01 = similarity01 * pressure(r.y, r.level0, r.level1,
+            r.kind0, r.kind1, r.barrier);
+    float firstResult = r.density + contribution01;
+    if (abs(firstResult) <= PRECISION_EPSILON) {
+        emit(i, CPU_FALLBACK, 0u, 0u);
+        return;
+    }
+    if (firstResult > 0.0) {
+        emit(i, RETURN_DEFAULT, 0u, 0u);
+        return;
+    }
+
+    float similarity12 = similarity(r.distance1, r.distance2);
+    if (similarity12 > 0.0) {
+        float contribution12 = similarity01 * similarity12 * pressure(r.y,
+                r.level1, r.level2, r.kind1, r.kind2, r.barrier);
+        float secondResult = r.density + contribution12;
+        if (abs(secondResult) <= PRECISION_EPSILON) {
+            emit(i, CPU_FALLBACK, 0u, 0u);
+            return;
+        }
+        if (secondResult > 0.0) {
+            emit(i, RETURN_DEFAULT, 0u, 0u);
+            return;
+        }
+    }
+    emit(i, RETURN_STATE, r.nearestStateId, 1u);
+}
