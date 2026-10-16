@@ -49,11 +49,11 @@ public final class VulkanCiSmoke {
             // Exercise the cell-grid to block-density interpolation shader
             // used by the per-block terrain output path.
             float[] corners = new float[8];
-            for (int y = 0; y < 2; y++) {
-                for (int z = 0; z < 2; z++) {
-                    for (int x = 0; x < 2; x++) {
-                        int corner = (y * 2 + z) * 2 + x;
-                        corners[corner] = x * 0.25f + y + z * 2.0f;
+            for (int cornerY = 0; cornerY < 2; cornerY++) {
+                for (int cornerZ = 0; cornerZ < 2; cornerZ++) {
+                    for (int cornerX = 0; cornerX < 2; cornerX++) {
+                        int corner = (cornerY * 2 + cornerZ) * 2 + cornerX;
+                        corners[corner] = cornerX * 0.25f + cornerY + cornerZ * 2.0f;
                     }
                 }
             }
