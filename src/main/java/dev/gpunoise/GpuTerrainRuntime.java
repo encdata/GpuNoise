@@ -173,6 +173,7 @@ public final class GpuTerrainRuntime {
         }
         int minX = chunk.getPos().getMinBlockX();
         int minZ = chunk.getPos().getMinBlockZ();
+        GpuChunkDensityCache.prefetch5x5ForChunk(minX, minZ, settings);
         GpuChunkDensityCache cache = GpuTerrainAreaRegistry.claim(minX, minZ,
                 () -> GpuChunkDensityCache.create(minX, minZ, settings));
         if (cache.markSubmitted()) gpuChunksSubmitted.incrementAndGet();
@@ -194,6 +195,7 @@ public final class GpuTerrainRuntime {
         }
         int minX = chunk.getPos().getMinBlockX();
         int minZ = chunk.getPos().getMinBlockZ();
+        GpuChunkDensityCache.prefetch5x5ForChunk(minX, minZ, settings);
         GpuChunkDensityCache cache = GpuTerrainAreaRegistry.claim(minX, minZ,
                 () -> GpuChunkDensityCache.create(minX, minZ, settings));
         if (cache.markSubmitted()) gpuChunksSubmitted.incrementAndGet();

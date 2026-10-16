@@ -153,5 +153,8 @@ The first adaptive-capacity run completed 1,089 chunks at 42.533 CPU CPS and
 32.510 Lavapipe CPS (0.764x CPU), with zero fallbacks. Despite raising the
 dispatch ceiling to 100 chunks and bounding it by output-buffer capacity, the
 scheduler averaged only 1.82 chunks per dispatch. Queue arrival timing, rather
-than Vulkan buffer capacity, is currently preventing large batches; the
-coalescing window is being increased from 20 ms to 60 ms for the next CI run.
+than Vulkan buffer capacity, is currently preventing large batches. A follow-up
+60 ms coalescing window raised the average to 2.72 chunks but measured 22.783
+Lavapipe CPS, so the longer wait was removed. The current pass prefetches each
+aligned 5x5 chunk tile once, then batches those ready grids with a 20 ms window;
+tile bookkeeping is bounded to 4,096 entries.

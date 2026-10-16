@@ -114,6 +114,19 @@ public final class GpuChunkDensityCache {
         }
     }
 
+    /** Enqueues one aligned 5x5 terrain tile the first time any tile chunk is requested. */
+    public static void prefetch5x5ForChunk(int minX, int minZ, NoiseSettings settings) {
+        int chunksPerTile = GpuTerrainAreaRegistry.RADIUS * 2 + 1;
+        int chunkX = minX >> 4;
+        int chunkZ = minZ >> 4;
+        int tileX = Math.floorDiv(chunkX, chunksPerTile);
+        int tileZ = Math.floorDiv(chunkZ, chunksPerTile);
+        if (!GpuTerrainAreaRegistry.claimPrefetchTile(tileX, tileZ)) return;
+        int centerChunkX = tileX * chunksPerTile + GpuTerrainAreaRegistry.RADIUS;
+        int centerChunkZ = tileZ * chunksPerTile + GpuTerrainAreaRegistry.RADIUS;
+        prefetch5x5(centerChunkX << 4, centerChunkZ << 4, settings);
+    }
+
     int minX() { return minX; }
     int minZ() { return minZ; }
 
