@@ -60,6 +60,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private CompletableFuture<float[]> inFlightGraphRoots;
     private int inFlightSamples;
     private int inFlightRoots;
+    private long inFlightFenceSubmittedNanos;
+    private long completedGraphFenceSamples;
+    private long totalGraphFenceNanos;
 
     PersistentVulkanNormalNoiseEngine(GpuDevice expected) throws Exception {
         Configuration.STACK_SIZE.set(64 * 1_048_576);
@@ -346,6 +349,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default()
                         .pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit async graph roots");
             }
+            inFlightFenceSubmittedNanos = System.nanoTime();
             inFlightSamples = sampleCount;
             inFlightRoots = rootCount;
             inFlightGraphRoots = new CompletableFuture<>();
@@ -402,6 +406,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default()
                         .pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit grid roots");
             }
+            inFlightFenceSubmittedNanos = System.nanoTime();
             inFlightSamples = sampleCount; inFlightRoots = rootCount;
             inFlightGraphRoots = new CompletableFuture<>();
             return inFlightGraphRoots;
@@ -415,6 +420,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         if (status == VK_NOT_READY) return;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             check(status, "poll graph-roots fence");
+            long fenceDuration = System.nanoTime() - inFlightFenceSubmittedNanos;
+            recordGraphFenceDuration(fenceDuration);
             float[] output = readResults(inFlightSamples, inFlightRoots, stack);
             check(vkResetFences(device, fence), "reset async graph-roots fence");
             inFlightGraphRoots = null;
@@ -422,6 +429,15 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         } catch (Throwable failure) {
             inFlightGraphRoots = null;
             future.completeExceptionally(failure);
+        }
+    }
+
+    private void recordGraphFenceDuration(long durationNanos) {
+        totalGraphFenceNanos += durationNanos;
+        long completed = ++completedGraphFenceSamples;
+        if ((completed & 7L) == 0L) {
+            GpuNoise.LOGGER.info("GPU terrain graph fence: completedDispatches={}, avgSubmitToFenceMs={}",
+                    completed, totalGraphFenceNanos / (double) completed / 1_000_000.0);
         }
     }
 

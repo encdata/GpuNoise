@@ -67,6 +67,10 @@ GPU_BATCHING = re.compile(
     r"GPU terrain roots batching: avgChunksPerDispatch=([\d.]+), "
     r"avgSamplesPerDispatch=([\d.]+),"
 )
+GPU_GRAPH_FENCE = re.compile(
+    r"GPU terrain graph fence: completedDispatches=(\d+), "
+    r"avgSubmitToFenceMs=([\d.]+)"
+)
 GPU_SHADER_VARIANT = re.compile(r"GPU density shader variant: registers=(\d+), fastMath=(true|false)")
 GPU_CHUNK_LATENCY = re.compile(
     r"GPU terrain roots latency: completedChunks=(\d+), "
@@ -277,6 +281,14 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
             print(
                 f"CI_GPU_BATCHING mode={mode} avg_chunks_per_dispatch={batch_samples[-1][0]} "
                 f"avg_samples_per_dispatch={batch_samples[-1][1]}", flush=True,
+            )
+            fence_samples = GPU_GRAPH_FENCE.findall(run_log)
+            if not fence_samples:
+                raise RuntimeError("GPU submit-to-fence timing was not recorded")
+            latest_fence = fence_samples[-1]
+            print(
+                f"CI_GPU_FENCE mode={mode} dispatches={latest_fence[0]} "
+                f"avg_submit_to_fence_ms={latest_fence[1]}", flush=True,
             )
             batch_window = GPU_BATCH_WINDOW.search(run_log)
             if (batch_window is None or int(batch_window.group(1)) != BATCH_WINDOW_MS
