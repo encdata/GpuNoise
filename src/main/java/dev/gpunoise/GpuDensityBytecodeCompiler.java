@@ -746,9 +746,8 @@ final class GpuDensityBytecodeCompiler {
             }
             if (owner.equals("net/minecraft/util/Mth") && name.equals("lerp2")
                     && descriptor.equals("(DDDDDD)D") && arguments.length == 6) {
-                Value low = lerpValue(arguments[1], arguments[2], arguments[3]);
-                Value high = lerpValue(arguments[1], arguments[4], arguments[5]);
-                stack.add(lerpValue(arguments[0], low, high));
+                stack.add(lerp2Value(arguments[0], arguments[1], arguments[2], arguments[3],
+                        arguments[4], arguments[5]));
                 return;
             }
             if (owner.equals("net/minecraft/util/Mth") && name.equals("lerp3")
