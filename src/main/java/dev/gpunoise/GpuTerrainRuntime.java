@@ -108,6 +108,12 @@ public final class GpuTerrainRuntime {
         return graph != null && graph.supportsRouterRoot(root);
     }
 
+    /** Immutable graph capability snapshot for per-chunk hot-path caches. */
+    static int supportedTerrainRootMask() {
+        GpuDensityGraph graph = terrainGraph;
+        return graph == null ? 0 : graph.supportedRouterRootMask();
+    }
+
     /**
      * The old DensityFunctions.Noise hook submits one Vulkan job per leaf
      * noise node, then immediately waits for it.  That is the opposite of the

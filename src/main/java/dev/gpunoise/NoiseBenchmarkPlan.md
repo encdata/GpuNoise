@@ -51,6 +51,11 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   Each report includes call totals and average nanoseconds, alongside whole
   fill latency percentiles, to show whether hot-path lookup and write overhead
   offsets the GPU's grid-evaluation work.
+- Each chunk cache snapshots the installed graph's immutable root-support mask
+  once at construction. Per-block and per-aquifer lookups then test a local
+  integer bit instead of repeatedly loading the global volatile graph reference
+  on the terrain hot path. The cache is created only after graph installation;
+  server shutdown clears the graph and all prefetched caches together.
 - The C2ME + Chunky CI scenario is configured for a 1,600-block radius, or
   100 chunks in each direction (40,401 chunks per square pregen), in three
   paired repetitions. It checks Vulkan smoke/parity and captures dispatch and
