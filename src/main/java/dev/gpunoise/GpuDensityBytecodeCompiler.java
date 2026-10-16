@@ -582,6 +582,56 @@ final class GpuDensityBytecodeCompiler {
         }
 
         private void mathCall(String owner, String name, String descriptor, Value[] arguments) {
+            if (owner.equals("net/minecraft/util/Mth") && arguments.length == 1
+                    && descriptor.equals("(F)F")
+                    && (name.equals("sin") || name.equals("cos"))) {
+                Value input = arguments[0];
+                GpuDensityExpression.Mapping mapping = name.equals("sin")
+                        ? GpuDensityExpression.Mapping.SIN : GpuDensityExpression.Mapping.COS;
+                int result = builder.map(mapping, input.expression());
+                Double constant = input.constant() == null ? null
+                        : (double) (float) (name.equals("sin")
+                                ? Math.sin((float) (double) input.constant())
+                                : Math.cos((float) (double) input.constant()));
+                stack.add(Value.value(result, constant));
+                return;
+            }
+            if (owner.equals("net/minecraft/util/Mth") && arguments.length == 1
+                    && (descriptor.equals("(F)I") || descriptor.equals("(D)I"))
+                    && (name.equals("floor") || name.equals("ceil"))) {
+                Value input = arguments[0];
+                GpuDensityExpression.Mapping mapping = name.equals("floor")
+                        ? GpuDensityExpression.Mapping.FLOOR : GpuDensityExpression.Mapping.CEIL;
+                int rounded = builder.map(mapping, input.expression());
+                boolean floatInput = descriptor.equals("(F)I");
+                int result = builder.cast(floatInput ? "F2I" : "D2I", rounded);
+                Double constant = input.constant() == null ? null
+                        : (double) (int) (name.equals("floor")
+                                ? Math.floor(input.constant()) : Math.ceil(input.constant()));
+                stack.add(Value.value(result, constant));
+                return;
+            }
+            if (owner.equals("net/minecraft/util/Mth") && name.equals("abs")
+                    && descriptor.equals("(I)I") && arguments.length == 1) {
+                Value input = arguments[0];
+                int zero = builder.constant(0.0);
+                int negative = builder.compare("LT", input.expression(), zero);
+                int absolute = builder.integerNegate(input.expression());
+                int result = builder.select(negative, absolute, input.expression());
+                Double constant = input.constant() == null ? null
+                        : (double) Math.abs((int) (double) input.constant());
+                stack.add(Value.value(result, constant));
+                return;
+            }
+            if (owner.equals("net/minecraft/util/Mth") && name.equals("square")
+                    && descriptor.equals("(I)I") && arguments.length == 1) {
+                Value input = arguments[0];
+                int result = builder.integerOperation("IMUL", input.expression(), input.expression());
+                Double constant = input.constant() == null ? null
+                        : (double) ((int) (double) input.constant() * (int) (double) input.constant());
+                stack.add(Value.value(result, constant));
+                return;
+            }
             if ((owner.equals("java/lang/Math") || owner.equals("java/lang/StrictMath"))
                     && (descriptor.equals("(DD)D") || descriptor.equals("(FF)F"))
                     && arguments.length == 2

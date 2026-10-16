@@ -71,6 +71,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new InterpolationMathDensity());
     }
 
+    static VulkanBranchFixture minecraftMathOverloadsFixture() {
+        return graphFixture(new MinecraftMathOverloadsDensity());
+    }
+
     private static VulkanBranchFixture graphFixture(DensityFunction function) {
         return new VulkanBranchFixture(GpuDensityGraphLowerer.lower(
                 GpuDensityGraphCompiler.compileDensityFunction(function, true)), function);
@@ -438,6 +442,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new PowerMathDensity(), "pow, atan2, and signum");
         verifyStandaloneMath(new MapMathDensity(), "Mth mapping functions");
         verifyStandaloneMath(new InterpolationMathDensity(), "Mth interpolation functions");
+        verifyStandaloneMath(new MinecraftMathOverloadsDensity(), "Mth float and integer overloads");
         verifyStandaloneMath(new DynamicClampDensity(), "dynamic Mth.clamp overloads");
 
         DynamicPowerDensity dynamicPower = new DynamicPowerDensity();
@@ -913,6 +918,20 @@ final class GpuDensityExpressionSmoke {
                             -3.0, 1.0, 2.0, -1.0) * 0.02
                     + net.minecraft.util.Mth.lerp3(x / 64.0, y / 32.0, z / 64.0,
                             -2.0, 1.0, 0.5, 3.0, 4.0, -1.5, 2.5, -3.0) * 0.01;
+        }
+    }
+
+    private static final class MinecraftMathOverloadsDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            int x = context.blockX();
+            float fx = x * 0.125F;
+            double z = context.blockZ();
+            return net.minecraft.util.Mth.floor(fx * 0.7F) * 0.01
+                    + net.minecraft.util.Mth.ceil(z * 0.1) * 0.01
+                    + net.minecraft.util.Mth.sin(fx) * 0.1F
+                    + net.minecraft.util.Mth.cos(fx) * 0.1F
+                    + net.minecraft.util.Mth.abs(x) * 1.0e-9
+                    + net.minecraft.util.Mth.square(x) * 1.0e-12;
         }
     }
 

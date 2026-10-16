@@ -99,7 +99,9 @@ parity checks.
   actual compatibility gaps.
   It also lowers double and float `Math.min`/`Math.max`/`Math.abs`, preserves
   float `Mth.square` rounding, and handles `Mth.clamp` with dynamic float or
-  double bounds through compare/select nodes.
+  double bounds through compare/select nodes. Minecraft `Mth` float sine and
+  cosine, float/double floor and ceiling to saturated Java integers, integer
+  absolute value, and wrapping integer square overloads are lowered explicitly.
   Java double division and double/float remainder are represented explicitly;
   integer division and remainder require a compile-time nonzero divisor. Java
   32-bit arithmetic, bitwise AND/OR/XOR, signed/unsigned shifts, and
