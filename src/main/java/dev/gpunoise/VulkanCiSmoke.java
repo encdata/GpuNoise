@@ -560,12 +560,13 @@ public final class VulkanCiSmoke {
             double expected = fixture.javaFunction().compute(
                     new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(
                             (int) x[sample], (int) y[sample], (int) z[sample]));
+            float expectedGpuValue = (float) expected;
             boolean mismatch = Double.isNaN(expected) ? !Float.isNaN(actual[sample])
-                    : Double.isInfinite(expected) ? actual[sample] != (float) expected
-                    : expected == 0.0 ? actual[sample] != 0.0f
+                    : Double.isInfinite(expected) ? actual[sample] != expectedGpuValue
+                    : expectedGpuValue == 0.0f ? actual[sample] != 0.0f
                             || (Double.doubleToRawLongBits(expected) < 0)
                                     != (Float.floatToRawIntBits(actual[sample]) < 0)
-                    : Math.abs(actual[sample] - expected) > 0.005;
+                    : Math.abs(actual[sample] - expectedGpuValue) > 0.005f;
             if (mismatch) {
                 throw new IllegalStateException(label + " Vulkan mismatch at sample " + sample
                         + ": expected " + expected + ", got " + actual[sample]);
