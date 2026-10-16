@@ -17,10 +17,10 @@ import java.util.concurrent.atomic.AtomicLong;
 /** Batches the small NoiseChunk corner grids into one graph dispatch. */
 final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     /** Spatial batch footprint requested for terrain generation. */
-    private static final int BATCH_SIZE_CHUNKS = 5;
-    private static final int MAX_CHUNKS = BATCH_SIZE_CHUNKS * BATCH_SIZE_CHUNKS;
+    private static final int BATCH_SIZE_CHUNKS = 10;
+    private static final int MAX_CHUNKS = 100;
     private static final int MAX_INPUT = PersistentVulkanNormalNoiseEngine.CAPACITY;
-    // Give C2ME enough time to enqueue the rest of the local 5x5 area. The
+    // Give C2ME enough time to enqueue the rest of the local 10x10 area. The
     // deadline is still bounded, so an isolated request is dispatched
     // promptly instead of waiting for neighbors that may never arrive.
     private static final long BATCH_WINDOW_NANOS = 20_000_000L;
@@ -45,6 +45,13 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         CompletableFuture<GpuTerrainBatchResult> future = new CompletableFuture<>();
         if (grid.sampleCount() > MAX_INPUT) {
             future.completeExceptionally(new IllegalArgumentException("invalid GPU terrain roots batch"));
+            return future;
+        }
+        if (GpuTerrainRuntime.terrainBlockOutputEnabled()
+                && (long) blocksPerChunk(grid) * GpuTerrainRuntime.terrainBlockOutputRootCount()
+                > PersistentVulkanNormalNoiseEngine.INTERPOLATION_OUTPUT_FLOATS) {
+            future.completeExceptionally(new IllegalArgumentException(
+                    "one chunk exceeds GPU terrain block-output capacity"));
             return future;
         }
         if (closed || !queue.offer(new Pending(grid, future)))
@@ -73,8 +80,10 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 ArrayDeque<Pending> region = pendingByRegion.get(batchRegion);
                 Pending seed = region.peekFirst();
                 int samplesPerChunk = seed.grid.sampleCount();
-                List<Pending> batch = new ArrayList<>(MAX_CHUNKS);
+                int maxChunks = maxChunksPerDispatch(seed.grid);
+                List<Pending> batch = new ArrayList<>(maxChunks);
                 int input = 0;
+                long outputFloats = 0;
                 // Prefer the selected aligned 5x5 bucket, then borrow from
                 // adjacent buckets when it is underfilled.  Chunk grids are
                 // self-describing, so this keeps one dispatch useful even
@@ -83,21 +92,27 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 for (long candidateRegion : nearbyRegions(batchRegion)) {
                     ArrayDeque<Pending> candidate = pendingByRegion.get(candidateRegion);
                     if (candidate == null) continue;
-                    while (!candidate.isEmpty() && batch.size() < MAX_CHUNKS) {
+                    while (!candidate.isEmpty() && batch.size() < maxChunks) {
                         Pending item = candidate.peekFirst();
-                        if (item.grid.sampleCount() != samplesPerChunk
+                        if (!sameLayout(seed.grid, item.grid)
                                 || (long) input + item.grid.sampleCount() > MAX_INPUT) break;
+                        long itemOutputFloats = (long) blocksPerChunk(item.grid)
+                                * GpuTerrainRuntime.terrainBlockOutputRootCount();
+                        if (GpuTerrainRuntime.terrainBlockOutputEnabled()
+                                && outputFloats + itemOutputFloats
+                                        > PersistentVulkanNormalNoiseEngine.INTERPOLATION_OUTPUT_FLOATS) break;
                         candidate.removeFirst();
                         batch.add(item);
                         input += item.grid.sampleCount();
+                        outputFloats += itemOutputFloats;
                     }
                     if (candidate.isEmpty()) pendingByRegion.remove(candidateRegion);
-                    if (batch.size() == MAX_CHUNKS) break;
+                    if (batch.size() == maxChunks) break;
                 }
                 dispatchCount.incrementAndGet();
                 totalChunksDispatched.addAndGet(batch.size());
                 totalSamplesDispatched.addAndGet(input);
-                if ((dispatchCount.get() & 63L) == 0L) {
+                if ((dispatchCount.get() & 7L) == 0L) {
                     GpuNoise.LOGGER.info("GPU terrain roots batching: avgChunksPerDispatch={}, avgSamplesPerDispatch={}",
                             (double) totalChunksDispatched.get() / dispatchCount.get(),
                             (double) totalSamplesDispatched.get() / dispatchCount.get());
@@ -131,6 +146,24 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
             count += region.size();
         }
         return count;
+    }
+
+    private static int maxChunksPerDispatch(GpuTerrainGrid grid) {
+        int maxChunks = Math.min(MAX_CHUNKS, MAX_INPUT / grid.sampleCount());
+        if (GpuTerrainRuntime.terrainBlockOutputEnabled()) {
+            long floatsPerChunk = (long) blocksPerChunk(grid)
+                    * GpuTerrainRuntime.terrainBlockOutputRootCount();
+            maxChunks = Math.min(maxChunks,
+                    (int) (PersistentVulkanNormalNoiseEngine.INTERPOLATION_OUTPUT_FLOATS / floatsPerChunk));
+        }
+        if (maxChunks <= 0) throw new IllegalArgumentException("terrain grid exceeds GPU dispatch capacity");
+        return maxChunks;
+    }
+
+    private static boolean sameLayout(GpuTerrainGrid first, GpuTerrainGrid next) {
+        return first.gridX() == next.gridX() && first.gridY() == next.gridY()
+                && first.gridZ() == next.gridZ() && first.cellWidth() == next.cellWidth()
+                && first.cellHeight() == next.cellHeight();
     }
 
     private long largestRegion() {
