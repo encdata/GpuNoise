@@ -49,6 +49,7 @@ not claim full chunk generation is GPU-only yet.
 ## CI and benchmarks
 
 GitHub Actions builds the mod, compiles GLSL with `glslc`, runs a Vulkan smoke
-dispatch on Mesa Lavapipe, and starts paired NeoForge dedicated servers with
-C2ME and Chunky for CPU and GPU terrain measurements. The Lavapipe result is a
+dispatch on Mesa Lavapipe, and starts three fresh same-seed pairs of NeoForge
+dedicated servers with C2ME and Chunky. CPU/GPU order alternates between pairs;
+CI reports each run and the median throughput ratio. The Lavapipe result is a
 correctness and software-overhead check, not a discrete-GPU performance claim.

@@ -10,6 +10,7 @@ import re
 import shutil
 import signal
 import socket
+import statistics
 import struct
 import subprocess
 import sys
@@ -38,6 +39,7 @@ RCON_PASSWORD = "gpunoise-ci-only"
 SERVER_START_TIMEOUT = 900
 SHUTDOWN_TIMEOUT = 90
 CHUNKY_RADIUS = 256
+BENCHMARK_REPETITIONS = 3
 TASK_DONE = re.compile(
     r"Task finished for .*?Processed:\s*([\d,]+) chunks \(([^)]+)%\), "
     r"Total time:\s*(\d+):(\d+):(\d+)"
@@ -110,14 +112,17 @@ def prepare_run_directory(run_dir: Path, downloaded_mods: Path) -> None:
     )
 
 
-def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool) -> tuple[int, float]:
-    run_dir = ROOT / "run" / f"ci-{mode}"
+def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
+                  repetition: int) -> tuple[int, float]:
+    run_name = f"ci-{mode}-r{repetition}"
+    run_dir = ROOT / "run" / run_name
+    shutil.rmtree(run_dir, ignore_errors=True)
     prepare_run_directory(run_dir, downloaded_mods)
-    log_path = ROOT / "build" / "reports" / "ci" / f"runserver-{mode}.log"
+    log_path = ROOT / "build" / "reports" / "ci" / f"runserver-{mode}-r{repetition}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     command = [
         "./gradlew", "--no-daemon", "runServer",
-        f"-PgpunoiseRunDir=run/ci-{mode}",
+        f"-PgpunoiseRunDir=run/{run_name}",
         # Radius 256 covers 1,089 chunks, giving a steadier throughput sample
         # than a small smoke-sized region and exercising the 1,000-chunk scale.
         f"-Dgpunoise.chunkyRadius={CHUNKY_RADIUS}",
@@ -237,14 +242,36 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool) -> tuple[in
 def main() -> int:
     downloaded_mods = ROOT / "build" / "ci-mods"
     fetch_mods(downloaded_mods)
-    cpu_count, cpu_cps = run_benchmark("cpu", downloaded_mods, force_cpu=True)
-    gpu_count, gpu_cps = run_benchmark("gpu", downloaded_mods, force_cpu=False)
-    if cpu_count != gpu_count:
-        raise RuntimeError(f"Benchmark areas differ: CPU={cpu_count} chunks, GPU={gpu_count} chunks")
+    measurements: dict[str, list[tuple[int, float]]] = {"cpu": [], "gpu": []}
+    for repetition in range(1, BENCHMARK_REPETITIONS + 1):
+        order = ("cpu", "gpu") if repetition % 2 else ("gpu", "cpu")
+        for mode in order:
+            measurements[mode].append(run_benchmark(
+                mode, downloaded_mods, force_cpu=mode == "cpu", repetition=repetition))
+        cpu_count = measurements["cpu"][-1][0]
+        gpu_count = measurements["gpu"][-1][0]
+        if cpu_count != gpu_count:
+            raise RuntimeError(f"Benchmark areas differ in repetition {repetition}: "
+                               f"CPU={cpu_count} chunks, GPU={gpu_count} chunks")
+        pair_cpu_cps = measurements["cpu"][-1][1]
+        pair_gpu_cps = measurements["gpu"][-1][1]
+        print(
+            f"CI_WORLDGEN_REPETITION repetition={repetition} chunks={cpu_count} "
+            f"cpu_cps={pair_cpu_cps:.3f} lavapipe_cps={pair_gpu_cps:.3f} "
+            f"ratio={pair_gpu_cps / pair_cpu_cps if pair_cpu_cps else 0.0:.3f}",
+            flush=True,
+        )
+    cpu_cps = statistics.median(cps for _, cps in measurements["cpu"])
+    gpu_cps = statistics.median(cps for _, cps in measurements["gpu"])
+    chunk_counts = {count for runs in measurements.values() for count, _ in runs}
+    if len(chunk_counts) != 1:
+        raise RuntimeError(f"Benchmark areas differed across repetitions: {sorted(chunk_counts)}")
+    count = chunk_counts.pop()
     ratio = gpu_cps / cpu_cps if cpu_cps else 0.0
     print(
-        f"CI_WORLDGEN_COMPARISON chunks={cpu_count} cpu_cps={cpu_cps:.3f} "
-        f"lavapipe_cps={gpu_cps:.3f} ratio={ratio:.3f}",
+        f"CI_WORLDGEN_COMPARISON repetitions={BENCHMARK_REPETITIONS} chunks={count} "
+        f"cpu_median_cps={cpu_cps:.3f} lavapipe_median_cps={gpu_cps:.3f} "
+        f"median_ratio={ratio:.3f}",
         flush=True,
     )
     print("Lavapipe results validate correctness and overhead only; they do not represent a discrete GPU.")
