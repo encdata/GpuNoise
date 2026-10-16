@@ -150,7 +150,7 @@ double javaNumericCast(uint operation,double value){
     if(operation==4u)return javaDoubleToInt(value);
     return value;
 }
-bool negativeDouble(double value){return (doubleBitsToUint(value).y&0x80000000u)!=0u;}
+bool negativeDouble(double value){return (unpackDouble2x32(value).y&0x80000000u)!=0u;}
 double javaAtan2(double y,double x){
     const double pi=3.1415926535897932384626433832795;
     bool negativeY=negativeDouble(y),negativeX=negativeDouble(x);
