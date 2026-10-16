@@ -104,7 +104,9 @@ parity checks.
   absolute value, and wrapping integer square overloads are lowered explicitly.
   `Mth.sin` and `Mth.cos` use dedicated float-rounded IR mappings, distinct
   from double `Math` operations; `Mth.sqrt(float)` has its own float-rounded
-  mapping. `Math.signum(float)` and
+  mapping. Float `Mth.lerp`, `clampedLerp`, `inverseLerp`, `map`, and
+  `clampedMap` lower each JVM float arithmetic step with explicit rounding.
+  `Math.signum(float)` and
   `Math.signum(double)` retain their respective input precision.
   Minecraft's indexed sine table is generated once and uploaded to persistent
   graph storage, preserving vanilla's angle quantization without per-dispatch

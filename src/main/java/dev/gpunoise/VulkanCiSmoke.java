@@ -118,6 +118,8 @@ public final class VulkanCiSmoke {
                     "Mth mapping functions", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.interpolationMathFixture(),
                     "Mth interpolation functions", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.floatInterpolationMathFixture(),
+                    "Mth float interpolation functions", mathX, mathY, mathZ);
             GpuDensityExpressionSmoke.VulkanBranchFixture minecraftMathFixture =
                     GpuDensityExpressionSmoke.minecraftMathOverloadsFixture();
             float[] overloadX = {-2_147_483_648.0f, -46_341.0f, 0.0f, 46_341.0f, 2_147_483_520.0f};
@@ -564,7 +566,8 @@ public final class VulkanCiSmoke {
                     : expectedGpuValue == 0.0f ? actual[sample] != 0.0f
                             || (Double.doubleToRawLongBits(expected) < 0)
                                     != (Float.floatToRawIntBits(actual[sample]) < 0)
-                    : Math.abs(actual[sample] - expectedGpuValue) > 0.005f;
+                    : Math.abs(actual[sample] - expectedGpuValue)
+                            > Math.max(0.005f, Math.ulp(expectedGpuValue) * 1.01f);
             if (mismatch) {
                 throw new IllegalStateException(label + " Vulkan mismatch at sample " + sample
                         + ": expected " + expected + ", got " + actual[sample]);

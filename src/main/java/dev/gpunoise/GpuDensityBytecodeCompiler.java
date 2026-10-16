@@ -808,6 +808,11 @@ final class GpuDensityBytecodeCompiler {
                 stack.add(mathBinary(GpuDensityExpression.Operation.DIVIDE, numerator, denominator));
                 return;
             }
+            if (owner.equals("net/minecraft/util/Mth") && descriptor.equals("(FFF)F")
+                    && arguments.length == 3 && name.equals("inverseLerp")) {
+                stack.add(floatInverseLerp(arguments[0], arguments[1], arguments[2]));
+                return;
+            }
             if (owner.equals("net/minecraft/util/Mth") && descriptor.equals("(DDDDD)D")
                     && arguments.length == 5 && (name.equals("map") || name.equals("clampedMap"))) {
                 Value tNumerator = mathBinary(GpuDensityExpression.Operation.SUBTRACT,
@@ -822,9 +827,23 @@ final class GpuDensityBytecodeCompiler {
                 stack.add(mathBinary(GpuDensityExpression.Operation.ADD, arguments[3], scaled));
                 return;
             }
+            if (owner.equals("net/minecraft/util/Mth") && descriptor.equals("(FFFFF)F")
+                    && arguments.length == 5 && (name.equals("map") || name.equals("clampedMap"))) {
+                Value delta = floatInverseLerp(arguments[0], arguments[1], arguments[2]);
+                Value mapped = name.equals("map")
+                        ? floatLerpValue(delta, arguments[3], arguments[4])
+                        : floatClampedLerp(arguments[3], arguments[4], delta);
+                stack.add(mapped);
+                return;
+            }
             if (owner.equals("net/minecraft/util/Mth") && name.equals("lerp")
                     && descriptor.equals("(DDD)D") && arguments.length == 3) {
                 stack.add(lerpValue(arguments[0], arguments[1], arguments[2]));
+                return;
+            }
+            if (owner.equals("net/minecraft/util/Mth") && name.equals("lerp")
+                    && descriptor.equals("(FFF)F") && arguments.length == 3) {
+                stack.add(floatLerpValue(arguments[0], arguments[1], arguments[2]));
                 return;
             }
             if (owner.equals("net/minecraft/util/Mth") && name.equals("lerp2")
@@ -855,6 +874,11 @@ final class GpuDensityBytecodeCompiler {
                         : delta.constant() < 0.0 ? start.constant()
                         : delta.constant() > 1.0 ? end.constant() : interpolated.constant();
                 stack.add(Value.value(result, constant));
+                return;
+            }
+            if (owner.equals("net/minecraft/util/Mth") && name.equals("clampedLerp")
+                    && descriptor.equals("(FFF)F") && arguments.length == 3) {
+                stack.add(floatClampedLerp(arguments[0], arguments[1], arguments[2]));
                 return;
             }
             if (owner.equals("net/minecraft/util/Mth") && name.equals("clamp")
@@ -897,6 +921,48 @@ final class GpuDensityBytecodeCompiler {
             Value difference = mathBinary(GpuDensityExpression.Operation.SUBTRACT, end, start);
             Value scaled = mathBinary(GpuDensityExpression.Operation.MULTIPLY, delta, difference);
             return mathBinary(GpuDensityExpression.Operation.ADD, start, scaled);
+        }
+
+        private Value floatMathBinary(String operation, Value left, Value right) {
+            int expression = builder.floatOperation(operation, left.expression(), right.expression());
+            Double constant = null;
+            if (left.constant() != null && right.constant() != null) {
+                float a = left.constant().floatValue(), b = right.constant().floatValue();
+                float result = switch (operation) {
+                    case "FADD" -> a + b;
+                    case "FSUB" -> a - b;
+                    case "FMUL" -> a * b;
+                    case "FDIV" -> a / b;
+                    default -> throw new AssertionError(operation);
+                };
+                if (Float.isFinite(result)) constant = (double) result;
+            }
+            return Value.value(expression, constant);
+        }
+
+        private Value floatLerpValue(Value delta, Value start, Value end) {
+            Value difference = floatMathBinary("FSUB", end, start);
+            Value scaled = floatMathBinary("FMUL", delta, difference);
+            return floatMathBinary("FADD", start, scaled);
+        }
+
+        private Value floatInverseLerp(Value value, Value start, Value end) {
+            Value numerator = floatMathBinary("FSUB", value, start);
+            Value denominator = floatMathBinary("FSUB", end, start);
+            return floatMathBinary("FDIV", numerator, denominator);
+        }
+
+        private Value floatClampedLerp(Value start, Value end, Value delta) {
+            int zero = builder.constant(0.0), one = builder.constant(1.0);
+            int below = builder.compare("LT", delta.expression(), zero);
+            int above = builder.compare("GT", delta.expression(), one);
+            Value interpolated = floatLerpValue(delta, start, end);
+            int highResult = builder.select(above, end.expression(), interpolated.expression());
+            int result = builder.select(below, start.expression(), highResult);
+            Double constant = delta.constant() == null ? null
+                    : delta.constant() < 0.0 ? start.constant()
+                    : delta.constant() > 1.0 ? end.constant() : interpolated.constant();
+            return Value.value(result, constant);
         }
 
         private Value floorDivision(Value dividend, Value divisor) {

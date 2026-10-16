@@ -87,6 +87,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new InterpolationMathDensity());
     }
 
+    static VulkanBranchFixture floatInterpolationMathFixture() {
+        return graphFixture(new FloatInterpolationMathDensity());
+    }
+
     static VulkanBranchFixture minecraftMathOverloadsFixture() {
         return graphFixture(new MinecraftMathOverloadsDensity());
     }
@@ -462,6 +466,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new SignumMathDensity(), "signum");
         verifyStandaloneMath(new MapMathDensity(), "Mth mapping functions");
         verifyStandaloneMath(new InterpolationMathDensity(), "Mth interpolation functions");
+        verifyStandaloneMath(new FloatInterpolationMathDensity(), "Mth float interpolation functions");
         verifyStandaloneMath(new MinecraftMathOverloadsDensity(), "Mth float and integer overloads");
         verifyStandaloneMath(new DynamicClampDensity(), "dynamic Mth.clamp overloads");
 
@@ -971,6 +976,18 @@ final class GpuDensityExpressionSmoke {
                             -3.0, 1.0, 2.0, -1.0) * 0.02
                     + net.minecraft.util.Mth.lerp3(x / 64.0, y / 32.0, z / 64.0,
                             -2.0, 1.0, 0.5, 3.0, 4.0, -1.5, 2.5, -3.0) * 0.01;
+        }
+    }
+
+    private static final class FloatInterpolationMathDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            float x = context.blockX() * 0.01F;
+            float y = context.blockY() * 0.02F;
+            return net.minecraft.util.Mth.lerp(x, -3.0F, 4.0F) * 0.1F
+                    + net.minecraft.util.Mth.clampedLerp(-2.0F, 5.0F, y) * 0.1F
+                    + net.minecraft.util.Mth.inverseLerp(x, -1.0F, 1.0F) * 0.1F
+                    + net.minecraft.util.Mth.map(x, -1.0F, 1.0F, -2.0F, 4.0F) * 0.1F
+                    + net.minecraft.util.Mth.clampedMap(y, -1.0F, 1.0F, -2.0F, 4.0F) * 0.1F;
         }
     }
 
