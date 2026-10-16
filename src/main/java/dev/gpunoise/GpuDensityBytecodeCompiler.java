@@ -1076,27 +1076,31 @@ final class GpuDensityBytecodeCompiler {
     }
 
     private static Field findField(Class<?> type, String owner, String name) {
-        for (Class<?> current = type; current != null; current = current.getSuperclass()) {
-            if (Type.getInternalName(current).equals(owner)) {
-                try { return current.getDeclaredField(name); }
-                catch (NoSuchFieldException missing) { return null; }
-            }
-            Field interfaceField = findInterfaceField(current.getInterfaces(), owner, name);
-            if (interfaceField != null) return interfaceField;
-        }
-        return null;
+        Class<?> symbolicOwner = findOwnerType(type, owner);
+        return symbolicOwner == null ? null : resolveField(symbolicOwner, name);
     }
 
-    private static Field findInterfaceField(Class<?>[] interfaces, String owner, String name) {
-        for (Class<?> type : interfaces) {
-            if (Type.getInternalName(type).equals(owner)) {
-                try { return type.getDeclaredField(name); }
-                catch (NoSuchFieldException missing) { return null; }
-            }
-            Field parentField = findInterfaceField(type.getInterfaces(), owner, name);
-            if (parentField != null) return parentField;
+    private static Class<?> findOwnerType(Class<?> type, String owner) {
+        if (Type.getInternalName(type).equals(owner)) return type;
+        for (Class<?> implemented : type.getInterfaces()) {
+            Class<?> match = findOwnerType(implemented, owner);
+            if (match != null) return match;
         }
-        return null;
+        Class<?> parent = type.getSuperclass();
+        return parent == null ? null : findOwnerType(parent, owner);
+    }
+
+    /** Resolves a JVM field reference through the symbolic owner's interfaces and superclass. */
+    private static Field resolveField(Class<?> owner, String name) {
+        try { return owner.getDeclaredField(name); }
+        catch (NoSuchFieldException missing) {
+            for (Class<?> implemented : owner.getInterfaces()) {
+                Field inherited = resolveField(implemented, name);
+                if (inherited != null) return inherited;
+            }
+            Class<?> parent = owner.getSuperclass();
+            return parent == null ? null : resolveField(parent, name);
+        }
     }
 
     private static void reject(String reason) { throw new UnsupportedBytecode(reason); }
