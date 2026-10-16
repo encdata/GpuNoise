@@ -91,6 +91,13 @@ GPU_CHUNK_LATENCY = re.compile(
     r"GPU terrain roots latency: completedChunks=(\d+), "
     r"p50BucketMs=([\d>]+), p95BucketMs=([\d>]+), p99BucketMs=([\d>]+)"
 )
+GPU_HOT_PATH_PROFILE = re.compile(
+    r"GPU terrain profile: fills=(\d+), observedCps=([\d.]+), avgFillMs=([\d.]+), "
+    r"p50FillMs=([\d.]+), p95FillMs=([\d.]+), p99FillMs=([\d.]+), "
+    r"finalDensityCalls=(\d+) avgNs=([\d.]+), initialDensityCalls=(\d+) avgNs=([\d.]+), "
+    r"climateCalls=(\d+) avgNs=([\d.]+), aquiferCalls=(\d+) avgNs=([\d.]+), "
+    r"blockWrites=(\d+) avgNs=([\d.]+)"
+)
 
 
 def fetch_mods(destination: Path) -> None:
@@ -196,6 +203,7 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
         command.append(f"-Dgpunoise.terrainBatchWindowMs={BATCH_WINDOW_MS}")
         command.append(f"-Dgpunoise.terrainBatchTargetChunks={BATCH_TARGET_CHUNKS}")
         command.append(f"-Dgpunoise.terrainBatchRegionRadius={BATCH_REGION_RADIUS}")
+        command.append("-Dgpunoise.profileTerrain=true")
     print(f"Starting {mode} Chunky benchmark (full_block_output={FULL_BLOCK_OUTPUT}): {' '.join(command)}", flush=True)
     process = subprocess.Popen(
         command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -328,6 +336,20 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
                 f"avg_readback_ms={latest_profile[3]} "
                 f"avg_gpu_command_ms={latest_profile[4] or 'unavailable'} "
                 f"gpu_timing_samples={latest_profile[5] or '0'}", flush=True,
+            )
+            hot_path_profiles = GPU_HOT_PATH_PROFILE.findall(run_log)
+            if not hot_path_profiles:
+                raise RuntimeError("GPU terrain hot-path timings were not recorded")
+            latest_hot_path = hot_path_profiles[-1]
+            print(
+                f"CI_GPU_HOT_PATH_PROFILE mode={mode} fills={latest_hot_path[0]} "
+                f"observed_cps={latest_hot_path[1]} avg_fill_ms={latest_hot_path[2]} "
+                f"final_density_calls={latest_hot_path[6]} final_density_avg_ns={latest_hot_path[7]} "
+                f"initial_density_calls={latest_hot_path[8]} initial_density_avg_ns={latest_hot_path[9]} "
+                f"climate_calls={latest_hot_path[10]} climate_avg_ns={latest_hot_path[11]} "
+                f"aquifer_calls={latest_hot_path[12]} aquifer_avg_ns={latest_hot_path[13]} "
+                f"block_writes={latest_hot_path[14]} block_write_avg_ns={latest_hot_path[15]}",
+                flush=True,
             )
             batch_window = GPU_BATCH_WINDOW.search(run_log)
             if (batch_window is None or int(batch_window.group(1)) != BATCH_WINDOW_MS
