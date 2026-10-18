@@ -299,10 +299,14 @@ tasks.named('jar', Jar).configure {
     // Restrict the outer jar to bootstrap classes/resources and the embedded
     // mod payload. In particular, no mixin or Minecraft-facing classes live in
     // the early service module.
-    include 'dev/gpunoise/loader/**'
-    include 'META-INF/services/net.neoforged.neoforgespi.locating.IModFileCandidateLocator'
-    include 'META-INF/gpunoise/server-libraries/**'
-    include 'META-INF/gpunoise/gpunoise-mod.jar'
+    eachFile { details ->
+        def path = details.path
+        def keep = path.startsWith('dev/gpunoise/loader/')
+                || path == 'META-INF/services/net.neoforged.neoforgespi.locating.IModFileCandidateLocator'
+                || path.startsWith('META-INF/gpunoise/server-libraries/')
+                || path == 'META-INF/gpunoise/gpunoise-mod.jar'
+        if (!keep) details.exclude()
+    }
     from(embeddedModJar) {
         into 'META-INF/gpunoise'
     }
