@@ -51,7 +51,9 @@ def verify(path: Path) -> None:
         )
         if "META-INF/neoforge.mods.toml" in entries or duplicate_packages:
             raise ValueError(
-                "Loader shell contains mod metadata or non-loader classes; those must live only in the payload"
+                "Loader shell contains mod metadata or non-loader classes; "
+                f"metadata={('META-INF/neoforge.mods.toml' in entries)}, "
+                f"sample duplicate entries={duplicate_packages[:12]}"
             )
 
         with zipfile.ZipFile(io.BytesIO(artifact.read(MOD_PAYLOAD))) as mod:
