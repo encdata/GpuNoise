@@ -44,18 +44,18 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
             return;
         }
 
-        // In a dedicated NeoGradle run the release jar is also staged in the
-        // game directory's mods folder. Some userdev launch configurations
-        // scan that folder for early services but omit the project's own jar
-        // from normal mod candidates. Register this exact packaged jar so its
-        // @Mod lifecycle and server worldgen hooks actually run.
-        var modCandidate = pipeline.addPath(sourceJar,
+        // Early service discovery has already seen sourceJar, which can make
+        // the normal mods-folder path appear as a duplicate without adding it
+        // as a mod. Register an identical bootstrap copy under a distinct path
+        // so its @Mod lifecycle and server worldgen hooks enter mod discovery.
+        Path modDiscoveryJar = copyForModDiscovery(sourceJar);
+        var modCandidate = pipeline.addPath(modDiscoveryJar,
                 ModFileDiscoveryAttributes.DEFAULT.withLocator(this),
                 IncompatibleFileReporting.ERROR);
         if (modCandidate.isPresent()) {
-            LOGGER.info("Registered packaged GPU Noise mod {} for dedicated-server discovery", sourceJar);
+            LOGGER.info("Registered packaged GPU Noise mod {} for dedicated-server discovery", modDiscoveryJar);
         } else {
-            LOGGER.debug("Packaged GPU Noise mod was already registered for dedicated-server discovery");
+            LOGGER.warn("NeoForge did not create a dedicated-server mod candidate from {}", modDiscoveryJar);
         }
 
         boolean lwjglCoreAvailable = lwjglCoreAvailable();
@@ -166,6 +166,22 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
         } catch (Exception failure) {
             LOGGER.error("Failed to extract embedded server LWJGL library", failure);
             return null;
+        }
+    }
+
+    private static Path copyForModDiscovery(Path sourceJar) {
+        try {
+            Path modsDirectory = sourceJar.getParent();
+            Path gameDirectory = modsDirectory != null && modsDirectory.getParent() != null
+                    ? modsDirectory.getParent()
+                    : Paths.get(".").toAbsolutePath().normalize();
+            Path cacheDirectory = gameDirectory.resolve(".gpunoise/bootstrap");
+            Files.createDirectories(cacheDirectory);
+            Path destination = cacheDirectory.resolve("gpunoise-dedicated-server.jar");
+            Files.copy(sourceJar, destination, StandardCopyOption.REPLACE_EXISTING);
+            return destination;
+        } catch (Exception failure) {
+            throw new IllegalStateException("Failed to stage GPU Noise for dedicated-server mod discovery", failure);
         }
     }
 
