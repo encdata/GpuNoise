@@ -12,8 +12,10 @@ import net.minecraft.core.Holder;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.levelgen.NoiseSettings;
 import net.minecraft.SharedConstants;
+import net.neoforged.fml.ModList;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -44,6 +46,9 @@ abstract class NoiseChunkGeneratorWriteMixin {
      */
     @org.spongepowered.asm.mixin.Unique
     private static final ThreadLocal<GpuFillState> gpunoise$fillState = new ThreadLocal<>();
+
+    @org.spongepowered.asm.mixin.Unique
+    private static final AtomicBoolean gpunoise$loggedPaletteCompatibility = new AtomicBoolean();
 
     @WrapMethod(method = "fillFromNoise")
     private CompletableFuture<ChunkAccess> gpunoise$asyncBatchFill(
@@ -98,7 +103,18 @@ abstract class NoiseChunkGeneratorWriteMixin {
         }
         try {
             GpuFillState state = new GpuFillState();
-            state.directWritesSafe = true;
+            // Byepregen replaces the normal PalettedContainer resize path
+            // with its own raw-ID palette handling. Our direct section writer
+            // calls PalettedContainer.set directly, which can reach a
+            // SingleValuePalette with no resize callback and crash while a
+            // new chunk is upgraded. Keep GPU density generation enabled,
+            // but let the normal chunk writer handle block states there.
+            boolean byepregenLoaded = ModList.get().isLoaded("byepregen");
+            state.directWritesSafe = !byepregenLoaded;
+            if (byepregenLoaded && gpunoise$loggedPaletteCompatibility.compareAndSet(false, true)) {
+                dev.gpunoise.GpuNoise.LOGGER.info(
+                        "Byepregen palette compatibility detected; using normal block writes while GPU density generation remains active.");
+            }
             for (int sectionIndex = top; sectionIndex >= bottom; sectionIndex--) {
                 if (!sections[sectionIndex].hasOnlyAir()) {
                     state.directWritesSafe = false;
