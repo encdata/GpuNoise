@@ -76,8 +76,7 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   the oldest queued chunk, so Java map iteration order cannot arbitrarily pick
   which spatial region gets serviced first; a stable layout/region order breaks
   any remaining ties for reproducible scheduling.
-- The C2ME + Chunky CI scenario is configured for a 1,600-block radius, or
-  100 chunks in each direction (40,401 chunks per square pregen), in three
+- The C2ME + Chunky CI scenario is configured for a 250-block radius in three
   paired repetitions. It checks Vulkan smoke/parity and captures dispatch and
   chunk latency metrics. The paired CPS benchmark uses the production cell-grid
   output mode by default. Full-block GPU materialization can be selected with

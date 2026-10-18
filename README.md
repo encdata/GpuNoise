@@ -65,9 +65,11 @@ not claim full chunk generation is GPU-only yet.
 ## Mod jar
 
 Use the single `gpunoise-*-all.jar` artifact from GitHub Actions for both
-client/integrated-server and dedicated-server installs. It contains the pinned
-LWJGL core and Vulkan Java libraries, plus the supported native payloads. The
-LWJGL core version is pinned to the version used by Minecraft 1.21.1.
+client/integrated-server and dedicated-server installs. It bundles the Vulkan
+Java bindings and native payloads. The early NeoForge locator uses Minecraft's
+LWJGL core on clients and adds the bundled LWJGL core plus native resources as
+game libraries on dedicated servers. Both use the version pinned for Minecraft
+1.21.1.
 
 ## CI and benchmarks
 
@@ -78,5 +80,6 @@ order alternates between pairs; CI reports each run and the median throughput
 ratio. The Lavapipe result is a correctness and software-overhead check, not a
 discrete-GPU performance claim. Actions uploads the mod jar and the pinned
 C2ME/Chunky jars before either benchmark server starts.
-Manual workflow runs can select the radius, batch window, target size, and
-spatial search radius for controlled follow-up measurements.
+The default Chunky radius is 250 blocks. Manual workflow runs can select the
+radius, batch window, target size, and spatial search radius for controlled
+follow-up measurements.

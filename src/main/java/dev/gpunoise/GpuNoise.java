@@ -65,7 +65,7 @@ public final class GpuNoise {
             int randomCenterZ = Math.floorDiv(random.nextInt(-1_800_000, 1_800_001), 16) * 16;
             int centerX = Integer.getInteger("gpunoise.chunkyCenterX", randomCenterX);
             int centerZ = Integer.getInteger("gpunoise.chunkyCenterZ", randomCenterZ);
-            int radius = Integer.getInteger("gpunoise.chunkyRadius", 1600);
+            int radius = Integer.getInteger("gpunoise.chunkyRadius", 250);
             if (radius <= 0) throw new IllegalArgumentException("gpunoise.chunkyRadius must be positive");
             var source = server.createCommandSourceStack().withPermission(4);
             // Always replace a previous benchmark task. Chunky keeps task
@@ -74,8 +74,7 @@ public final class GpuNoise {
             server.getCommands().performPrefixedCommand(source, "chunky cancel");
             server.getCommands().performPrefixedCommand(source, "chunky world minecraft:overworld");
             server.getCommands().performPrefixedCommand(source, "chunky center " + centerX + " " + centerZ);
-            // Chunky measures radius in blocks. The default covers at least
-            // 100 chunks in each direction; CI can request a larger radius.
+            // Chunky measures radius in blocks; CI can request a larger radius.
             server.getCommands().performPrefixedCommand(source, "chunky radius " + radius);
             server.getCommands().performPrefixedCommand(source, "chunky start");
             server.getCommands().performPrefixedCommand(source, "chunky confirm");

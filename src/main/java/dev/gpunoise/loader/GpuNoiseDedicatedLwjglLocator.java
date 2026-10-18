@@ -1,0 +1,138 @@
+package dev.gpunoise.loader;
+
+import java.io.InputStream;
+import java.net.URI;
+import java.net.URL;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.util.Locale;
+import net.neoforged.api.distmarker.Dist;
+import net.neoforged.fml.loading.FMLLoader;
+import net.neoforged.neoforgespi.ILaunchContext;
+import net.neoforged.neoforgespi.locating.IDiscoveryPipeline;
+import net.neoforged.neoforgespi.locating.IModFileCandidateLocator;
+import net.neoforged.neoforgespi.locating.IncompatibleFileReporting;
+import net.neoforged.neoforgespi.locating.ModFileDiscoveryAttributes;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/** Adds the embedded LWJGL core to the game libraries on dedicated servers only. */
+public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLocator {
+    private static final String SERVER_LIBRARY_DIRECTORY = "META-INF/gpunoise/server-libraries/";
+    private static final String[] SERVER_LIBRARIES = {
+            "lwjgl-core-gpunoise-server.jar",
+            "lwjgl-natives-gpunoise-server.jar"
+    };
+    private static final Logger LOGGER = LoggerFactory.getLogger("GpuNoiseLwjglLocator");
+
+    @Override
+    public void findCandidates(ILaunchContext context, IDiscoveryPipeline pipeline) {
+        if (FMLLoader.getDist() != Dist.DEDICATED_SERVER) {
+            LOGGER.debug("Skipping embedded LWJGL core on client; Minecraft supplies its own copy");
+            return;
+        }
+
+        Path sourceJar = resolveSourceJar();
+        if (sourceJar == null) {
+            // Development runs get LWJGL from localRunRuntime instead.
+            LOGGER.debug("Cannot locate packaged GpuNoise jar; skipping server LWJGL extraction");
+            return;
+        }
+
+        for (String libraryName : SERVER_LIBRARIES) {
+            Path libraryJar = extractEmbeddedLibrary(sourceJar, libraryName);
+            if (libraryJar == null || !Files.isRegularFile(libraryJar)) {
+                LOGGER.error("Could not extract embedded server library {} from {}", libraryName, sourceJar);
+                continue;
+            }
+            if (context.isLocated(libraryJar)) {
+                LOGGER.debug("Server library is already registered: {}", libraryJar);
+                continue;
+            }
+
+            try {
+                var added = pipeline.addPath(libraryJar,
+                        ModFileDiscoveryAttributes.DEFAULT.withLocator(this),
+                        IncompatibleFileReporting.ERROR);
+                if (added.isPresent()) {
+                    LOGGER.info("Added bundled {} to dedicated server runtime", libraryName);
+                } else {
+                    LOGGER.error("NeoForge did not accept dedicated-server library {}", libraryJar);
+                }
+            } catch (Exception failure) {
+                LOGGER.error("Failed to register dedicated-server library {}", libraryName, failure);
+            }
+        }
+    }
+
+    private static Path extractEmbeddedLibrary(Path sourceJar, String libraryName) {
+        String resourcePath = SERVER_LIBRARY_DIRECTORY + libraryName;
+        try (InputStream input = GpuNoiseDedicatedLwjglLocator.class.getClassLoader().getResourceAsStream(resourcePath)) {
+            if (input == null) {
+                LOGGER.error("Missing embedded server library resource {}", resourcePath);
+                return null;
+            }
+
+            byte[] bytes = input.readAllBytes();
+            String digest = sha256(bytes);
+            Path modsDirectory = sourceJar.getParent();
+            Path gameDirectory = modsDirectory != null && modsDirectory.getParent() != null
+                    ? modsDirectory.getParent()
+                    : Paths.get(".").toAbsolutePath().normalize();
+            Path cacheDirectory = gameDirectory.resolve(".gpunoise/bootstrap");
+            Files.createDirectories(cacheDirectory);
+            String cacheName = libraryName.substring(0, libraryName.length() - ".jar".length());
+            Path destination = cacheDirectory.resolve(cacheName + "-" + digest.substring(0, 16) + ".jar");
+            if (Files.isRegularFile(destination) && Files.size(destination) == bytes.length) {
+                return destination;
+            }
+
+            Path temporary = Files.createTempFile(cacheDirectory, "lwjgl-core-", ".jar.tmp");
+            try {
+                Files.write(temporary, bytes);
+                try {
+                    Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING,
+                            StandardCopyOption.ATOMIC_MOVE);
+                } catch (AtomicMoveNotSupportedException ignored) {
+                    Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING);
+                }
+            } finally {
+                Files.deleteIfExists(temporary);
+            }
+            return destination;
+        } catch (Exception failure) {
+            LOGGER.error("Failed to extract embedded server LWJGL library", failure);
+            return null;
+        }
+    }
+
+    private static Path resolveSourceJar() {
+        try {
+            URL location = GpuNoiseDedicatedLwjglLocator.class.getProtectionDomain().getCodeSource().getLocation();
+            if (location == null) return null;
+            String source = location.toExternalForm();
+            int jarEnd = source.toLowerCase(Locale.ROOT).indexOf(".jar");
+            if (jarEnd < 0) return null;
+            String jarLocation = source.substring(0, jarEnd + 4);
+            while (jarLocation.startsWith("union:") || jarLocation.startsWith("jar:")) {
+                jarLocation = jarLocation.substring(jarLocation.indexOf(':') + 1);
+            }
+            if (jarLocation.startsWith("file:")) return Paths.get(URI.create(jarLocation));
+            return Paths.get(jarLocation);
+        } catch (Exception failure) {
+            LOGGER.warn("Could not resolve GpuNoise source jar", failure);
+            return null;
+        }
+    }
+
+    private static String sha256(byte[] bytes) throws Exception {
+        byte[] hash = MessageDigest.getInstance("SHA-256").digest(bytes);
+        StringBuilder result = new StringBuilder(hash.length * 2);
+        for (byte value : hash) result.append(String.format("%02x", value));
+        return result.toString();
+    }
+}

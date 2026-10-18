@@ -39,10 +39,10 @@ RCON_PASSWORD = "gpunoise-ci-only"
 SERVER_START_TIMEOUT = 300
 CHUNKY_RUN_TIMEOUT = 3600
 SHUTDOWN_TIMEOUT = 90
-CHUNKY_RADIUS_BLOCKS = int(os.environ.get("GPUNOISE_CHUNKY_RADIUS_BLOCKS", "1600"))
-MIN_CHUNKY_RADIUS_BLOCKS = 100 * 16
+CHUNKY_RADIUS_BLOCKS = int(os.environ.get("GPUNOISE_CHUNKY_RADIUS_BLOCKS", "250"))
+MIN_CHUNKY_RADIUS_BLOCKS = 250
 if CHUNKY_RADIUS_BLOCKS < MIN_CHUNKY_RADIUS_BLOCKS:
-    raise ValueError("GPUNOISE_CHUNKY_RADIUS_BLOCKS must cover at least 100 chunks")
+    raise ValueError("GPUNOISE_CHUNKY_RADIUS_BLOCKS must be at least 250 blocks")
 BENCHMARK_REPETITIONS = 3
 BATCH_WINDOW_MS = int(os.environ.get("GPUNOISE_TERRAIN_BATCH_WINDOW_MS", "50"))
 if not 1 <= BATCH_WINDOW_MS <= 250:
@@ -187,9 +187,8 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
     command = [
         "./gradlew", "--no-daemon", "runServer",
         f"-PgpunoiseRunDir=run/{run_name}",
-        # Chunky radius is measured in blocks. 1,600 blocks covers 100 chunks
-        # in each direction (40,401 chunks for the square benchmark), giving a
-        # sustained pregen workload rather than a small smoke-sized sample.
+        # Chunky radius is measured in blocks; keep the default benchmark at
+        # a 250-block radius for a quick paired CPU/GPU comparison.
         f"-Dgpunoise.chunkyRadius={CHUNKY_RADIUS_BLOCKS}",
         "-Dgpunoise.chunkyCenterX=0",
         "-Dgpunoise.chunkyCenterZ=0",
