@@ -1,7 +1,6 @@
 package dev.gpunoise.loader;
 
 import java.io.InputStream;
-import java.net.URI;
 import java.net.URL;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -9,8 +8,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
-import java.util.jar.JarFile;
 import java.util.Locale;
+import java.util.jar.JarFile;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.fml.loading.FMLLoader;
 import net.neoforged.neoforgespi.ILaunchContext;
@@ -208,12 +207,7 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
             String source = location.toExternalForm();
             int jarEnd = source.toLowerCase(Locale.ROOT).indexOf(".jar");
             if (jarEnd < 0) return null;
-            String jarLocation = source.substring(0, jarEnd + 4);
-            while (jarLocation.startsWith("union:") || jarLocation.startsWith("jar:")) {
-                jarLocation = jarLocation.substring(jarLocation.indexOf(':') + 1);
-            }
-            if (jarLocation.startsWith("file:")) return Paths.get(URI.create(jarLocation));
-            return Paths.get(jarLocation);
+            return CodeSourcePathResolver.resolve(source.substring(0, jarEnd + 4));
         } catch (Exception failure) {
             LOGGER.warn("Could not resolve GpuNoise source jar", failure);
             return null;

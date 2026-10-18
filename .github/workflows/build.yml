@@ -55,6 +55,14 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Verify Windows ModLauncher code-source paths
+        run: |
+          mkdir -p build/ci-path-check
+          javac -d build/ci-path-check \
+            src/main/java/dev/gpunoise/loader/CodeSourcePathResolver.java \
+            tools/ci/CodeSourcePathResolverCheck.java
+          java -cp build/ci-path-check dev.gpunoise.loader.CodeSourcePathResolverCheck
+
       - name: Install GLSL compiler
         run: |
           sudo apt-get update
