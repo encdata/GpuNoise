@@ -135,9 +135,21 @@ def artifactBackedRunServer = providers.gradleProperty('gpunoiseRunFromArtifact'
 def artifactBackedRunDirectory = layout.projectDirectory.dir(
         providers.gradleProperty('gpunoiseRunDir').orElse('run/server'))
 def releaseArtifactDirectory = layout.buildDirectory.dir('libs')
+def developmentModOutputs = sourceSets.main.output
 tasks.matching { it.name == 'runServer' }.configureEach {
-    doFirst {
+    doFirst { serverTask ->
         if (artifactBackedRunServer) {
+            // The userdev server launcher can retain the main source-set
+            // output on its module path even when the run's mod source is the
+            // empty artifactServerRun set. The packaged all-jar is staged
+            // below and already contains these classes, so keeping both
+            // creates two JPMS modules exporting dev.gpunoise.mixin.
+            def mainOutputFiles = developmentModOutputs.files
+            def launchClasspath = serverTask.classpath.files
+            def filteredClasspath = launchClasspath.findAll { !mainOutputFiles.contains(it) }
+            serverTask.classpath.setFrom(filteredClasspath)
+            logger.lifecycle("Removed ${launchClasspath.size() - filteredClasspath.size()} development GPU Noise output(s) from artifact-backed server classpath")
+
             def artifactMods = artifactBackedRunDirectory.get().asFile.toPath().resolve('mods')
             def artifacts = []
             def artifactFiles = java.nio.file.Files.newDirectoryStream(
