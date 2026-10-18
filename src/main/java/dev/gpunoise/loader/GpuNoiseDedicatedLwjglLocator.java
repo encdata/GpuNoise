@@ -44,6 +44,20 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
             return;
         }
 
+        // In a dedicated NeoGradle run the release jar is also staged in the
+        // game directory's mods folder. Some userdev launch configurations
+        // scan that folder for early services but omit the project's own jar
+        // from normal mod candidates. Register this exact packaged jar so its
+        // @Mod lifecycle and server worldgen hooks actually run.
+        var modCandidate = pipeline.addPath(sourceJar,
+                ModFileDiscoveryAttributes.DEFAULT.withLocator(this),
+                IncompatibleFileReporting.ERROR);
+        if (modCandidate.isPresent()) {
+            LOGGER.info("Registered packaged GPU Noise mod {} for dedicated-server discovery", sourceJar);
+        } else {
+            LOGGER.debug("Packaged GPU Noise mod was already registered for dedicated-server discovery");
+        }
+
         boolean lwjglCoreAvailable = lwjglCoreAvailable();
         for (String libraryName : SERVER_LIBRARIES) {
             if (libraryName.equals("lwjgl-core-gpunoise-server.jar") && lwjglCoreAvailable) {

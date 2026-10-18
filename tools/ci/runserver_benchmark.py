@@ -39,6 +39,7 @@ RCON_PASSWORD = "gpunoise-ci-only"
 SERVER_START_TIMEOUT = 300
 CHUNKY_RUN_TIMEOUT = 3600
 SHUTDOWN_TIMEOUT = 90
+GPU_NOISE_MOD_LIST = re.compile(r"(?m)^\s*GPU Noise [^\r\n]*\(gpunoise\)\s*$")
 CHUNKY_RADIUS_BLOCKS = int(os.environ.get("GPUNOISE_CHUNKY_RADIUS_BLOCKS", "250"))
 MIN_CHUNKY_RADIUS_BLOCKS = 250
 if CHUNKY_RADIUS_BLOCKS < MIN_CHUNKY_RADIUS_BLOCKS:
@@ -292,6 +293,11 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
                 break
             line, observed_at = event
             if not chunky_start_requested and SERVER_READY.search(line):
+                server_log = log_path.read_text(encoding="utf-8", errors="replace")
+                if not GPU_NOISE_MOD_LIST.search(server_log):
+                    raise RuntimeError(
+                        f"{mode} dedicated server reached ready state without GPU Noise in NeoForge's mod list"
+                    )
                 start_chunky_with_rcon()
                 chunky_start_requested = True
             if TASK_STARTED.search(line):
