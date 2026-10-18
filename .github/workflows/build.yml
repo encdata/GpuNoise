@@ -73,6 +73,13 @@ jobs:
       - name: Build with Gradle
         run: ./gradlew --no-daemon build
 
+      - name: Upload Vulkan mod before worldgen benchmark
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpunoise-all-vulkan-${{ github.sha }}
+          path: build/libs/*-all-vulkan.jar
+          if-no-files-found: error
+
       - name: Download and verify benchmark mods
         run: python3 tools/ci/runserver_benchmark.py --prepare-mods
 
