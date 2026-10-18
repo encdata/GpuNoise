@@ -100,7 +100,7 @@ GPU_HOT_PATH_PROFILE = re.compile(
     r"aquiferCalls=(\d+) sampled=(\d+) avgNs=([\d.]+), "
     r"blockWrites=(\d+) sampled=(\d+) avgNs=([\d.]+)"
 )
-GPU_ROOT_FALLBACKS = re.compile(r"GPU terrain Java root fallback calls: ([\d=,]+)")
+GPU_ROOT_FALLBACKS = re.compile(r"GPU terrain Java root fallback calls: ([A-Za-z]+=[\d]+(?:,[A-Za-z]+=[\d]+)*)")
 
 
 def fetch_mods(destination: Path) -> None:
@@ -415,8 +415,14 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
 
 
 def main() -> int:
+    prepare_only = sys.argv[1:] == ["--prepare-mods"]
+    if sys.argv[1:] and not prepare_only:
+        raise ValueError("usage: runserver_benchmark.py [--prepare-mods]")
     downloaded_mods = ROOT / "build" / "ci-mods"
     fetch_mods(downloaded_mods)
+    if prepare_only:
+        print(f"CI_BENCHMARK_MODS_READY path={downloaded_mods} files={len(MODS)}", flush=True)
+        return 0
     measurements: dict[str, list[tuple[int, float]]] = {"cpu": [], "gpu": []}
     for repetition in range(1, BENCHMARK_REPETITIONS + 1):
         order = ("cpu", "gpu") if repetition % 2 else ("gpu", "cpu")

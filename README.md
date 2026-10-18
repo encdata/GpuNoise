@@ -53,3 +53,5 @@ dispatch on Mesa Lavapipe, and starts three fresh same-seed pairs of NeoForge
 dedicated servers with C2ME and Chunky. CPU/GPU order alternates between pairs;
 CI reports each run and the median throughput ratio. The Lavapipe result is a
 correctness and software-overhead check, not a discrete-GPU performance claim.
+Actions downloads and verifies the pinned C2ME and Chunky jars, then uploads
+them as a workflow artifact before either benchmark server starts.

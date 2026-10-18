@@ -169,14 +169,11 @@ public final class GpuNoise {
                 GpuDensityGraph sourceTerrainGraph = GpuDensityGraphCompiler.compileTerrain(router);
                 GpuDensityGraph terrainGraph = GpuDensityGraphLowerer.lower(sourceTerrainGraph);
                 final GpuDensityGraph validationGraph = terrainGraph;
-                String[] terrainRootNames = {"finalDensity", "initialDensity", "barrier", "floodedness",
-                        "spread", "lava", "erosion", "depth", "temperature", "vegetation",
-                        "continents", "ridges"};
                 String[] rootRejections = terrainGraph.unsupportedRouterRootReasons();
                 for (int root = 0; root < rootRejections.length; root++) {
                     if (rootRejections[root] != null) {
                         LOGGER.warn("GPU terrain root '{}' remains on vanilla Java: {}",
-                                terrainRootNames[root], rootRejections[root]);
+                                GpuTerrainRoots.name(root), rootRejections[root]);
                     }
                 }
                 LOGGER.info("GPU terrain runtime graph: {} nodes, {} required terrain/aquifer roots.",
@@ -208,8 +205,15 @@ public final class GpuNoise {
                             Integer.toHexString(verifiedRootMask));
                     GpuTerrainRuntime.installTerrainGraph(activeTerrainGraph, router);
                 }
-                if (terrainSettings != null) GpuTerrainRuntime.warmTerrainGpu(terrainSettings);
-                installedGraph = activeTerrainGraph;
+                if (verifiedRootMask != 0) {
+                    if (terrainSettings != null) GpuTerrainRuntime.warmTerrainGpu(terrainSettings);
+                    installedGraph = activeTerrainGraph;
+                    LOGGER.info("GPU terrain roots enabled: {}/{} passed runtime parity checks; mask=0x{}.",
+                            Integer.bitCount(verifiedRootMask), GpuTerrainRoots.COUNT,
+                            Integer.toHexString(verifiedRootMask));
+                } else {
+                    LOGGER.warn("GPU terrain graph compiled, but no roots passed parity; terrain remains CPU-owned.");
+                }
             } catch (RuntimeException terrainFailure) {
                 LOGGER.warn("GPU terrain graph unavailable; vanilla terrain remains enabled: {}", terrainFailure.getMessage());
             }

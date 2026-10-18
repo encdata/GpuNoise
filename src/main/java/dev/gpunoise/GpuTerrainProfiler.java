@@ -145,7 +145,7 @@ public final class GpuTerrainProfiler {
         StringBuilder counts = new StringBuilder();
         for (int root = 0; root < javaRootFallbackCalls.length; root++) {
             if (root > 0) counts.append(',');
-            counts.append(root).append('=').append(javaRootFallbackCalls[root].sum());
+            counts.append(GpuTerrainRoots.name(root)).append('=').append(javaRootFallbackCalls[root].sum());
         }
         return counts.toString();
     }

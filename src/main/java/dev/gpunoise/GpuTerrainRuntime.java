@@ -557,8 +557,8 @@ public final class GpuTerrainRuntime {
                     rootWorst = Math.max(rootWorst, Math.abs(gpu[i * cpu.length + root] - (float) expected));
                 }
                 if (rootWorst < GRAPH_PARITY_EPSILON) verifiedRoots |= 1 << root;
-                GpuNoise.LOGGER.info("GPU compact terrain root {} parity: maxError={}, parity={}",
-                        root, rootWorst, rootWorst < GRAPH_PARITY_EPSILON);
+                GpuNoise.LOGGER.info("GPU compact terrain root '{}' parity: maxError={}, parity={}",
+                        GpuTerrainRoots.name(root), rootWorst, rootWorst < GRAPH_PARITY_EPSILON);
             }
             verifiedTerrainRootMask = verifiedRoots;
             GpuNoise.LOGGER.info("GPU compact terrain graph parity: {} samples, {}/{} roots verified, "
@@ -622,8 +622,8 @@ public final class GpuTerrainRuntime {
                         && rootWorst[root] < GRAPH_PARITY_EPSILON;
                 if (passes) gridVerifiedRoots |= 1 << root;
                 if (graph.supportsRouterRoot(root)) {
-                    GpuNoise.LOGGER.info("GPU terrain grid root {} parity: maxError={}, at ({},{},{}), parity={}",
-                            root, rootWorst[root], worstX[root], worstY[root], worstZ[root], passes);
+                    GpuNoise.LOGGER.info("GPU terrain grid root '{}' parity: maxError={}, at ({},{},{}), parity={}",
+                            GpuTerrainRoots.name(root), rootWorst[root], worstX[root], worstY[root], worstZ[root], passes);
                 }
             }
             verifiedTerrainRootMask &= gridVerifiedRoots;

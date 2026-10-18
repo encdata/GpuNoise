@@ -52,6 +52,16 @@ jobs:
       - name: Build with Gradle
         run: ./gradlew --no-daemon build
 
+      - name: Download and verify benchmark mods
+        run: python3 tools/ci/runserver_benchmark.py --prepare-mods
+
+      - name: Upload benchmark mods
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpunoise-benchmark-mods-${{ github.sha }}
+          path: build/ci-mods/*.jar
+          if-no-files-found: error
+
       - name: Run C2ME Chunky CPU and GPU worldgen benchmark
         env:
           GPUNOISE_TERRAIN_BATCH_WINDOW_MS: 50
