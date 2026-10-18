@@ -23,6 +23,7 @@ import org.slf4j.LoggerFactory;
 /** Registers GPU Noise on both sides and adds bundled LWJGL only to dedicated servers. */
 public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLocator {
     private static final String SERVER_LIBRARY_DIRECTORY = "META-INF/gpunoise/server-libraries/";
+    private static final String MOD_PAYLOAD = "META-INF/gpunoise/gpunoise-mod.jar";
     private static final String[] SERVER_LIBRARIES = {
             "lwjgl-core-gpunoise-server.jar",
             "lwjgl-natives-gpunoise-server.jar"
@@ -42,11 +43,10 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
             return;
         }
 
-        // Early service discovery has already seen sourceJar, which can make
-        // the normal mods-folder path appear as a duplicate without adding it
-        // as a mod. Register an identical bootstrap copy under a distinct path
-        // so its @Mod lifecycle and server worldgen hooks enter mod discovery.
-        Path modDiscoveryJar = copyForModDiscovery(sourceJar);
+        // The containing artifact is only an early-loader shell. Register the
+        // embedded mod jar, which is the sole jar containing worldgen and mixin
+        // packages, so it cannot collide with this service-provider module.
+        Path modDiscoveryJar = extractModForDiscovery(sourceJar);
         var modCandidate = pipeline.addPath(modDiscoveryJar,
                 ModFileDiscoveryAttributes.DEFAULT.withLocator(this),
                 IncompatibleFileReporting.ERROR);
@@ -177,19 +177,41 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
         }
     }
 
-    private static Path copyForModDiscovery(Path sourceJar) {
+    private static Path extractModForDiscovery(Path sourceJar) {
         try {
+            byte[] bytes;
+            try (InputStream input = GpuNoiseDedicatedLwjglLocator.class.getClassLoader()
+                    .getResourceAsStream(MOD_PAYLOAD)) {
+                if (input == null) {
+                    throw new IllegalStateException("Missing embedded GPU Noise mod payload " + MOD_PAYLOAD);
+                }
+                bytes = input.readAllBytes();
+            }
+            String digest = sha256(bytes);
             Path modsDirectory = sourceJar.getParent();
             Path gameDirectory = modsDirectory != null && modsDirectory.getParent() != null
                     ? modsDirectory.getParent()
                     : Paths.get(".").toAbsolutePath().normalize();
             Path cacheDirectory = gameDirectory.resolve(".gpunoise/bootstrap");
             Files.createDirectories(cacheDirectory);
-            Path destination = cacheDirectory.resolve("gpunoise-mod-discovery.jar");
-            Files.copy(sourceJar, destination, StandardCopyOption.REPLACE_EXISTING);
+            Path destination = cacheDirectory.resolve("gpunoise-mod-" + digest.substring(0, 16) + ".jar");
+            if (Files.isRegularFile(destination) && Files.size(destination) == bytes.length) return destination;
+
+            Path temporary = Files.createTempFile(cacheDirectory, "gpunoise-mod-", ".jar.tmp");
+            try {
+                Files.write(temporary, bytes);
+                try {
+                    Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING,
+                            StandardCopyOption.ATOMIC_MOVE);
+                } catch (AtomicMoveNotSupportedException ignored) {
+                    Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING);
+                }
+            } finally {
+                Files.deleteIfExists(temporary);
+            }
             return destination;
         } catch (Exception failure) {
-            throw new IllegalStateException("Failed to stage GPU Noise for dedicated-server mod discovery", failure);
+            throw new IllegalStateException("Failed to extract GPU Noise mod payload for discovery", failure);
         }
     }
 

@@ -15,6 +15,7 @@ LWJGL_VERSION = "3.3.3"
 VULKAN_LIBRARY = f"META-INF/jarjar/lwjgl-vulkan-{LWJGL_VERSION}.jar"
 SERVER_CORE_LIBRARY = "META-INF/gpunoise/server-libraries/lwjgl-core-gpunoise-server.jar"
 SERVER_NATIVES_LIBRARY = "META-INF/gpunoise/server-libraries/lwjgl-natives-gpunoise-server.jar"
+MOD_PAYLOAD = "META-INF/gpunoise/gpunoise-mod.jar"
 METADATA = "META-INF/jarjar/metadata.json"
 LOCATOR_SERVICE = "META-INF/services/net.neoforged.neoforgespi.locating.IModFileCandidateLocator"
 LOCATOR_CLASS = "dev/gpunoise/loader/GpuNoiseDedicatedLwjglLocator.class"
@@ -38,17 +39,39 @@ def verify(path: Path) -> None:
     with zipfile.ZipFile(path) as artifact:
         entries = set(artifact.namelist())
         required = {
-            "META-INF/neoforge.mods.toml", SERVER_CORE_LIBRARY, SERVER_NATIVES_LIBRARY, VULKAN_LIBRARY,
-            METADATA, LOCATOR_SERVICE, LOCATOR_CLASS,
-            "windows/x64/org/lwjgl/lwjgl.dll",
-            "linux/x64/org/lwjgl/liblwjgl.so",
-            "macos/x64/org/lwjgl/liblwjgl.dylib",
+            SERVER_CORE_LIBRARY, SERVER_NATIVES_LIBRARY, LOCATOR_SERVICE, LOCATOR_CLASS, MOD_PAYLOAD,
         }
         missing = sorted(required - entries)
         if missing:
-            raise ValueError(f"Universal mod artifact is missing required entries: {missing}")
+            raise ValueError(f"Universal loader artifact is missing required entries: {missing}")
 
-        metadata = json.loads(artifact.read(METADATA))
+        duplicate_packages = sorted(
+            name for name in entries
+            if name.startswith("dev/gpunoise/") and not name.startswith("dev/gpunoise/loader/")
+        )
+        if "META-INF/neoforge.mods.toml" in entries or duplicate_packages:
+            raise ValueError(
+                "Loader shell contains mod metadata or non-loader classes; those must live only in the payload"
+            )
+
+        with zipfile.ZipFile(io.BytesIO(artifact.read(MOD_PAYLOAD))) as mod:
+            mod_entries = set(mod.namelist())
+            mod_required = {
+                "META-INF/neoforge.mods.toml", VULKAN_LIBRARY, METADATA,
+                "dev/gpunoise/GpuNoise.class",
+                "windows/x64/org/lwjgl/lwjgl.dll",
+                "linux/x64/org/lwjgl/liblwjgl.so",
+                "macos/x64/org/lwjgl/liblwjgl.dylib",
+            }
+            missing_mod = sorted(mod_required - mod_entries)
+            if missing_mod:
+                raise ValueError(f"Embedded GPU Noise mod payload is missing required entries: {missing_mod}")
+            if LOCATOR_SERVICE in mod_entries or any(
+                name.startswith("dev/gpunoise/loader/") for name in mod_entries
+            ):
+                raise ValueError("Embedded mod payload repeats the early locator module")
+
+            metadata = json.loads(mod.read(METADATA))
         jars = metadata.get("jars")
         expected = [library_entry("lwjgl-vulkan")]
         if jars != expected:

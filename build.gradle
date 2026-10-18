@@ -244,6 +244,44 @@ tasks.named('jar', Jar).configure {
     }
 }
 
+// The distributable is a tiny early-loader shell around the actual mod jar.
+// ModLauncher sees the shell as a service-provider module; the embedded mod is
+// extracted and registered as the only module containing worldgen/mixin code.
+// Keeping those classes in separate jars avoids duplicate JPMS packages when
+// NeoForge creates the runtime mod layer.
+def embeddedModJar = layout.buildDirectory.file('intermediates/gpunoise/gpunoise-mod.jar')
+tasks.register('embeddedModJar', Jar) {
+    dependsOn tasks.named('classes'), tasks.named('jarJar'), serverLwjglCoreJarTask, serverLwjglNativesJarTask
+    archiveFileName = 'gpunoise-mod.jar'
+    destinationDirectory = layout.buildDirectory.dir('intermediates/gpunoise')
+
+    from(sourceSets.main.output) {
+        exclude 'dev/gpunoise/loader/**'
+        exclude 'META-INF/services/net.neoforged.neoforgespi.locating.IModFileCandidateLocator'
+        exclude 'META-INF/gpunoise/server-libraries/**'
+    }
+    // JarJar stages its dependency metadata, Vulkan binding and native payloads
+    // here; they belong to the actual mod module, not the loader shell.
+    from(tasks.named('jarJar').map { it.outputDirectory })
+    manifest {
+        attributes('Automatic-Module-Name': 'gpunoise')
+    }
+}
+
+tasks.named('jar', Jar).configure {
+    dependsOn tasks.named('embeddedModJar')
+    // Restrict the outer jar to bootstrap classes/resources and the embedded
+    // mod payload. In particular, no mixin or Minecraft-facing classes live in
+    // the early service module.
+    include 'dev/gpunoise/loader/**'
+    include 'META-INF/services/net.neoforged.neoforgespi.locating.IModFileCandidateLocator'
+    include 'META-INF/gpunoise/server-libraries/**'
+    include 'META-INF/gpunoise/gpunoise-mod.jar'
+    from(embeddedModJar) {
+        into 'META-INF/gpunoise'
+    }
+}
+
 // Include platform native resources without adding duplicate module entries
 // to META-INF/jarjar/metadata.json.
 tasks.named('jarJar') {
