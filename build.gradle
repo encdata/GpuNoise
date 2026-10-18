@@ -42,7 +42,6 @@ sourceSets {
     artifactServerRun {
     }
 }
-def artifactBackedRunServer = providers.gradleProperty('gpunoiseRunFromArtifact').isPresent()
 def releaseArtifactPath = layout.buildDirectory.file("libs/${mod_id}-${version}-all.jar")
 
 //minecraft.accessTransformers.file rootProject.file('src/main/resources/META-INF/accesstransformer.cfg')
@@ -95,7 +94,8 @@ runs {
             modSource project.sourceSets.artifactServerRun
         }
         systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
-        systemProperty 'gpunoise.artifactBackedRun', artifactBackedRunServer.toString()
+        systemProperty 'gpunoise.serverArtifactRun',
+                providers.gradleProperty('gpunoiseRunFromArtifact').isPresent().toString()
         systemProperty 'gpunoise.releaseArtifactPath', releaseArtifactPath.get().asFile.absolutePath
         systemProperty 'gpunoise.forceCpuTerrain', System.getProperty('gpunoise.forceCpuTerrain', 'false')
         systemProperty 'gpunoise.fullBlockOutput', System.getProperty('gpunoise.fullBlockOutput', 'false')

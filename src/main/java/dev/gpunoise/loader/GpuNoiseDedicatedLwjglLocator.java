@@ -31,13 +31,6 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
 
     @Override
     public void findCandidates(ILaunchContext context, IDiscoveryPipeline pipeline) {
-        if (Boolean.getBoolean("gpunoise.artifactBackedRun")) {
-            // NeoGradle CI provides a separate early locator from its library
-            // source set; registering a copy here would create a second JPMS
-            // module from the same release jar.
-            LOGGER.debug("Skipping packaged mod re-registration in artifact-backed runServer");
-            return;
-        }
         boolean dedicatedServer = FMLLoader.getDist() == Dist.DEDICATED_SERVER;
         boolean client = FMLLoader.getDist() == Dist.CLIENT;
         if (!dedicatedServer && !client) return;
