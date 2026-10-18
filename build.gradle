@@ -82,6 +82,10 @@ runs {
     client {
         if (providers.gradleProperty('gpunoiseClientFromArtifact').isPresent()) {
             modSource project.sourceSets.artifactClientRun
+            dependencies {
+                runtime files(project.file(
+                        "run/client-artifact/mods/${mod_id}-${version}-all.jar"))
+            }
         } else {
             modSource project.sourceSets.main
         }
