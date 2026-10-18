@@ -73,6 +73,9 @@ jobs:
       - name: Build with Gradle
         run: ./gradlew --no-daemon build jarJarVulkanOnly
 
+      - name: Verify Vulkan mod artifact
+        run: python3 tools/ci/verify_vulkan_artifact.py build/libs/*-all-vulkan.jar
+
       - name: Upload Vulkan mod before worldgen benchmark
         uses: actions/upload-artifact@v4
         with:
