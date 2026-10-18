@@ -250,8 +250,25 @@ tasks.named('jar', Jar).configure {
 // Keeping those classes in separate jars avoids duplicate JPMS packages when
 // NeoForge creates the runtime mod layer.
 def embeddedModJar = layout.buildDirectory.file('intermediates/gpunoise/gpunoise-mod.jar')
+def embeddedJarJarMetadata = layout.buildDirectory.file('generated/gpunoise-payload/META-INF/jarjar/metadata.json')
+tasks.register('generateEmbeddedJarJarMetadata') {
+    outputs.file(embeddedJarJarMetadata)
+    doLast {
+        def metadata = [jars: [[
+                identifier: [group: 'org.lwjgl', artifact: 'lwjgl-vulkan'],
+                version: [range: "[${lwjgl_version},3.3.4)", artifactVersion: lwjgl_version],
+                path: "META-INF/jarjar/lwjgl-vulkan-${lwjgl_version}.jar",
+                isObfuscated: false,
+        ]]]
+        def output = embeddedJarJarMetadata.get().asFile
+        output.parentFile.mkdirs()
+        output.text = groovy.json.JsonOutput.toJson(metadata) + System.lineSeparator()
+    }
+}
+
 tasks.register('embeddedModJar', Jar) {
-    dependsOn tasks.named('classes'), tasks.named('jarJar'), serverLwjglCoreJarTask, serverLwjglNativesJarTask
+    dependsOn tasks.named('classes'), tasks.named('generateEmbeddedJarJarMetadata'),
+            serverLwjglCoreJarTask, serverLwjglNativesJarTask
     archiveFileName = 'gpunoise-mod.jar'
     destinationDirectory = layout.buildDirectory.dir('intermediates/gpunoise')
 
@@ -260,9 +277,18 @@ tasks.register('embeddedModJar', Jar) {
         exclude 'META-INF/services/net.neoforged.neoforgespi.locating.IModFileCandidateLocator'
         exclude 'META-INF/gpunoise/server-libraries/**'
     }
-    // JarJar stages its dependency metadata, Vulkan binding and native payloads
-    // here; they belong to the actual mod module, not the loader shell.
-    from(tasks.named('jarJar').map { it.outputDirectory })
+    // Keep JarJar's declared binding and metadata in the payload module. The
+    // JarJar task itself consumes the ordinary jar task, so using it as an
+    // input here would create a task cycle with the loader-shell jar.
+    from(configurations.jarJar) {
+        into 'META-INF/jarjar'
+    }
+    from(embeddedJarJarMetadata) {
+        into 'META-INF/jarjar'
+    }
+    from(lwjglNativeTrees) {
+        include 'windows/**', 'linux/**', 'macos/**'
+    }
     manifest {
         attributes('Automatic-Module-Name': 'gpunoise')
     }
