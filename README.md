@@ -28,6 +28,22 @@ GpuDensityFunctionTranslators.registerForSubtypes(MyDensityApi.class,
         MyDensityApi::asGpuDensityFunction);
 ```
 
+For math that has no equivalent `DensityFunctions` node, an adapter can build
+the GPU expression directly. Its inputs must come from the expression builder;
+captured noise samplers and finite configuration values are packed with the
+graph and checked against the original Java function during parity validation.
+
+```java
+GpuDensityFunctionTranslators.register(MyWarp.class,
+        GpuDensityFunctionTranslator.expressionOnly(function -> {
+            GpuDensityExpression.Builder expression = new GpuDensityExpression.Builder();
+            int sample = expression.noise(function.noise(), 0.25, 0.5);
+            int scaled = expression.apply(GpuDensityExpression.Operation.MULTIPLY,
+                    sample, expression.constant(function.amplitude()));
+            return expression.build(scaled);
+        }));
+```
+
 An exact-class adapter takes precedence. Otherwise GPU Noise chooses the closest
 registered supertype and reports an error if two unrelated translators match
 equally well. This lets terrain mods cover implementation wrappers without

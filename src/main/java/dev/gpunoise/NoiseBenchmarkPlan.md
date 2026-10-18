@@ -65,6 +65,14 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   integer bit instead of repeatedly loading the global volatile graph reference
   on the terrain hot path. The cache is created only after graph installation;
   server shutdown clears the graph and all prefetched caches together.
+- Terrain scheduler pending queues are now partitioned by grid layout, with
+  packed region coordinates inside each layout. Neighbor offsets are computed
+  and distance-sorted once, then reused for candidate selection and dispatch;
+  this removes per-neighbor `BatchKey` construction and per-dispatch region-list
+  allocation/sorting. A worker-owned pending counter also replaces repeated
+  full queue-count scans while the coalescing window is open. The paired
+  benchmark must measure occupancy and queue latency before treating this as a
+  throughput gain.
 - The C2ME + Chunky CI scenario is configured for a 1,600-block radius, or
   100 chunks in each direction (40,401 chunks per square pregen), in three
   paired repetitions. It checks Vulkan smoke/parity and captures dispatch and
