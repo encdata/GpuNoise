@@ -192,7 +192,7 @@ dependencies {
 // The early IModFileCandidateLocator extracts and registers it on dedicated
 // servers before normal mod discovery. FMLModType marks it as a game library.
 def lwjglNativeTrees = configurations.lwjglNatives.collect { zipTree(it) }
-def serverLwjglCoreJar = tasks.register('serverLwjglCoreJar', Jar) {
+def serverLwjglCoreJarTask = tasks.register('serverLwjglCoreJar', Jar) {
     archiveFileName = 'lwjgl-core-gpunoise-server.jar'
     from({ zipTree(configurations.serverLwjglCore.singleFile) }) {
         exclude 'META-INF/MANIFEST.MF', 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA'
@@ -201,7 +201,7 @@ def serverLwjglCoreJar = tasks.register('serverLwjglCoreJar', Jar) {
         attributes('FMLModType': 'LIBRARY')
     }
 }
-def serverLwjglNativesJar = tasks.register('serverLwjglNativesJar', Jar) {
+def serverLwjglNativesJarTask = tasks.register('serverLwjglNativesJar', Jar) {
     archiveFileName = 'lwjgl-natives-gpunoise-server.jar'
     from(lwjglNativeTrees) {
         include 'windows/**', 'linux/**', 'macos/**'
@@ -212,8 +212,11 @@ def serverLwjglNativesJar = tasks.register('serverLwjglNativesJar', Jar) {
     }
 }
 tasks.named('jar', Jar).configure {
-    dependsOn serverLwjglCoreJar, serverLwjglNativesJar
-    from(serverLwjglCoreJar, serverLwjglNativesJar) {
+    dependsOn serverLwjglCoreJarTask, serverLwjglNativesJarTask
+    from(serverLwjglCoreJarTask.flatMap { it.archiveFile }) {
+        into 'META-INF/gpunoise/server-libraries'
+    }
+    from(serverLwjglNativesJarTask.flatMap { it.archiveFile }) {
         into 'META-INF/gpunoise/server-libraries'
     }
 }
