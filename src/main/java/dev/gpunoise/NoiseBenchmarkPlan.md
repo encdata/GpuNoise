@@ -176,7 +176,9 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   smoke now checks that invariant directly.
 - Terrain cache reads now reuse the already loaded root result, avoid a
   redundant root-mask/global-result lookup for final-density interpolation,
-  and skip repeated block-output checks unless diagnostic full-block mode is
+  and pass that result into initial-density, climate, aquifer, and general
+  interpolation instead of re-reading the volatile cache field. They also
+  skip repeated block-output checks unless diagnostic full-block mode is
   enabled. The next paired run must quantify this hot-path change after
   Vulkan parity is restored.
 - Terrain profiling now reports Java fallback evaluations per router root in

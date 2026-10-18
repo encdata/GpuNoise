@@ -212,7 +212,7 @@ public final class GpuChunkDensityCache {
             long interpolated = interpolatedReads.incrementAndGet();
             if ((interpolated & 0x3ffffL) == 0L) logReadStatistics();
         }
-        return sampleRoot(rx, ry, rz, GpuTerrainRoots.FINAL_DENSITY);
+        return sampleRoot(ready, rx, ry, rz, GpuTerrainRoots.FINAL_DENSITY);
     }
 
     /** Hot path used by NoiseChunk's final-density graph redirect. */
@@ -268,7 +268,7 @@ public final class GpuChunkDensityCache {
     public double initialDensity(int x, int y, int z) {
         if (!supportsRoot(GpuTerrainRoots.INITIAL_DENSITY)) return Double.NaN;
         if (exact != null) return exact.valueAt(GpuTerrainRoots.INITIAL_DENSITY, x, y, z);
-        return sampleRoot(x - minX, y - minY, z - minZ, GpuTerrainRoots.INITIAL_DENSITY);
+        return sampleRoot(readyRoots, x - minX, y - minY, z - minZ, GpuTerrainRoots.INITIAL_DENSITY);
     }
 
     public boolean contains(int x, int y, int z) {
@@ -315,7 +315,7 @@ public final class GpuChunkDensityCache {
     private double rootDensity(int x, int y, int z, int root) {
         if (!supportsRoot(root)) return Double.NaN;
         if (exact != null) return exact.valueAt(root, x, y, z);
-        return sampleRoot(x - minX, y - minY, z - minZ, root);
+        return sampleRoot(readyRoots, x - minX, y - minY, z - minZ, root);
     }
 
     private double sampleBlockRoot(int rx, int ry, int rz, int root) {
