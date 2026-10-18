@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
+import java.util.jar.JarFile;
 import java.util.Locale;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.fml.loading.FMLLoader;
@@ -43,7 +44,12 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
             return;
         }
 
+        boolean lwjglCoreAvailable = lwjglCoreAvailable();
         for (String libraryName : SERVER_LIBRARIES) {
+            if (libraryName.equals("lwjgl-core-gpunoise-server.jar") && lwjglCoreAvailable) {
+                LOGGER.info("Using the LWJGL core already present in the dedicated server runtime");
+                continue;
+            }
             Path libraryJar = extractEmbeddedLibrary(sourceJar, libraryName);
             if (libraryJar == null || !Files.isRegularFile(libraryJar)) {
                 LOGGER.error("Could not extract embedded server library {} from {}", libraryName, sourceJar);
@@ -67,6 +73,45 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
                 LOGGER.error("Failed to register dedicated-server library {}", libraryName, failure);
             }
         }
+    }
+
+    private static boolean lwjglCoreAvailable() {
+        if (ModuleLayer.boot().modules().stream().anyMatch(module -> module.getPackages().contains("org.lwjgl"))) {
+            return true;
+        }
+        try {
+            Class.forName("org.lwjgl.Version", false, Thread.currentThread().getContextClassLoader());
+            return true;
+        } catch (ClassNotFoundException | LinkageError ignored) {
+            // The game module layer may not be active yet; inspect launch paths below.
+        }
+
+        for (String property : new String[] {"jdk.module.path", "jdk.module.upgrade.path", "java.class.path"}) {
+            String value = System.getProperty(property, "");
+            for (String entry : value.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator))) {
+                if (entry.isBlank()) continue;
+                Path path;
+                try {
+                    path = Paths.get(entry);
+                } catch (RuntimeException ignored) {
+                    continue;
+                }
+                if (Files.isDirectory(path)) {
+                    if (Files.isRegularFile(path.resolve("org/lwjgl/Version.class"))) return true;
+                    continue;
+                }
+                if (!Files.isRegularFile(path)) continue;
+                try (JarFile jar = new JarFile(path.toFile())) {
+                    if (jar.getEntry("org/lwjgl/Version.class") != null
+                            || jar.getEntry("classes/org/lwjgl/Version.class") != null) {
+                        return true;
+                    }
+                } catch (Exception ignored) {
+                    // Ignore non-jar classpath entries.
+                }
+            }
+        }
+        return false;
     }
 
     private static Path extractEmbeddedLibrary(Path sourceJar, String libraryName) {
