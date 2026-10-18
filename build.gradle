@@ -131,17 +131,27 @@ runs {
 // artifact. Re-stage the built jar immediately before JavaExec launches so the
 // dedicated-server smoke test exercises the same distributable jar uploaded
 // by CI.
+def artifactBackedRunServer = providers.gradleProperty('gpunoiseRunFromArtifact').isPresent()
+def artifactBackedRunDirectory = layout.projectDirectory.dir(
+        providers.gradleProperty('gpunoiseRunDir').orElse('run/server'))
+def releaseArtifactDirectory = layout.buildDirectory.dir('libs')
 tasks.matching { it.name == 'runServer' }.configureEach {
     doFirst {
-        if (providers.gradleProperty('gpunoiseRunFromArtifact').isPresent()) {
-            def artifactMods = project.file(providers.gradleProperty('gpunoiseRunDir').getOrElse('run/server'))
-                    .toPath().resolve('mods')
-            def artifacts = fileTree('build/libs').matching { include '*-all.jar' }.files
+        if (artifactBackedRunServer) {
+            def artifactMods = artifactBackedRunDirectory.get().asFile.toPath().resolve('mods')
+            def artifacts = []
+            def artifactFiles = java.nio.file.Files.newDirectoryStream(
+                    releaseArtifactDirectory.get().asFile.toPath(), '*-all.jar')
+            try {
+                artifactFiles.each { artifacts.add(it) }
+            } finally {
+                artifactFiles.close()
+            }
             if (artifacts.size() != 1) {
                 throw new GradleException("Expected exactly one *-all.jar for artifact-backed runServer, found ${artifacts.size()}")
             }
             java.nio.file.Files.createDirectories(artifactMods)
-            java.nio.file.Files.copy(artifacts.first().toPath(), artifactMods.resolve(artifacts.first().name),
+            java.nio.file.Files.copy(artifacts.first(), artifactMods.resolve(artifacts.first().fileName),
                     java.nio.file.StandardCopyOption.REPLACE_EXISTING)
             logger.lifecycle("Staged GPU Noise release artifact into ${artifactMods}")
         }
