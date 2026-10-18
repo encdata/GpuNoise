@@ -147,9 +147,9 @@ final class GpuDensityExpressionSmoke {
                 || graph.unsupportedRouterRootReasons()[1] == null) {
             throw new AssertionError("unsupported custom terrain root should be isolated from its GPU sibling");
         }
-        if (graph.nodes().size() != baseline.nodes().size() + 1
+        if (graph.nodes().size() != baseline.nodes().size()
                 || graph.noises().size() != baseline.noises().size()) {
-            throw new AssertionError("failed root compilation leaked partial nodes or samplers into its GPU sibling");
+            throw new AssertionError("failed root compilation leaked nodes or samplers into its GPU sibling");
         }
         return new VulkanBranchFixture(graph, supported);
     }

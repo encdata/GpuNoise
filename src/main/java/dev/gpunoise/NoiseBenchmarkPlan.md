@@ -169,11 +169,20 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   unread placeholder. This targets wasted per-sample shader instructions from
   terrain roots that already fall back to Java, especially in custom modpack
   graphs with only partial Vulkan coverage.
+- The first CI run after that pruning change stopped in the CPU-side smoke
+  because an older assertion expected the unsupported root's placeholder node
+  to remain in the lowered graph. The new invariant is that the GPU sibling's
+  node and sampler counts match the graph compiled for that sibling alone; the
+  smoke now checks that invariant directly.
 - Terrain cache reads now reuse the already loaded root result, avoid a
   redundant root-mask/global-result lookup for final-density interpolation,
   and skip repeated block-output checks unless diagnostic full-block mode is
   enabled. The next paired run must quantify this hot-path change after
   Vulkan parity is restored.
+- Terrain profiling now reports Java fallback evaluations per router root in
+  addition to whole-chunk fallback counts. This distinguishes intentional
+  root-level CPU fallback in mixed modded graphs from GPU cache failures and
+  makes partial GPU coverage visible in Actions benchmark artifacts.
 
 ## Work passes
 

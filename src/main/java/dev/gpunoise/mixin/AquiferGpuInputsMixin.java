@@ -92,6 +92,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner {
                     GpuTerrainRuntime.markGpuCacheUsed(cache);
                     return gpu;
                 }
+                GpuTerrainProfiler.recordJavaRootFallback(root);
             }
         }
         return vanillaFunction.compute(context);

@@ -100,6 +100,7 @@ GPU_HOT_PATH_PROFILE = re.compile(
     r"aquiferCalls=(\d+) sampled=(\d+) avgNs=([\d.]+), "
     r"blockWrites=(\d+) sampled=(\d+) avgNs=([\d.]+)"
 )
+GPU_ROOT_FALLBACKS = re.compile(r"GPU terrain Java root fallback calls: ([\d=,]+)")
 
 
 def fetch_mods(destination: Path) -> None:
@@ -353,6 +354,10 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
                 f"block_writes={latest_hot_path[18]} sampled={latest_hot_path[19]} avg_ns={latest_hot_path[20]}",
                 flush=True,
             )
+            root_fallback_samples = GPU_ROOT_FALLBACKS.findall(run_log)
+            if not root_fallback_samples:
+                raise RuntimeError("GPU terrain per-root Java fallback counts were not recorded")
+            print(f"CI_GPU_ROOT_FALLBACKS mode={mode} calls={root_fallback_samples[-1]}", flush=True)
             batch_window = GPU_BATCH_WINDOW.search(run_log)
             if (batch_window is None or int(batch_window.group(1)) != BATCH_WINDOW_MS
                     or int(batch_window.group(2)) != BATCH_TARGET_CHUNKS

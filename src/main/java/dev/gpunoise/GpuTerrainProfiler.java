@@ -28,6 +28,7 @@ public final class GpuTerrainProfiler {
     private static final LongAdder climateSamples = new LongAdder();
     private static final LongAdder aquiferSamples = new LongAdder();
     private static final LongAdder blockWriteSamples = new LongAdder();
+    private static final LongAdder[] javaRootFallbackCalls = createRootFallbackCounters();
     private static final AtomicLong firstFillStartNanos = new AtomicLong();
     private static final AtomicLong latestFillEndNanos = new AtomicLong();
     private static final AtomicLongArray fillLatencyHistogram = new AtomicLongArray(LATENCY_BUCKETS);
@@ -57,6 +58,13 @@ public final class GpuTerrainProfiler {
 
     public static void recordGpuFinalDensity() {
         if (ENABLED) gpuFinalDensityCalls.increment();
+    }
+
+    /** Counts Java root evaluations after a chunk cache could not supply that root. */
+    public static void recordJavaRootFallback(int root) {
+        if (ENABLED && root >= 0 && root < javaRootFallbackCalls.length) {
+            javaRootFallbackCalls[root].increment();
+        }
     }
 
     public static long beginPhase() {
@@ -124,6 +132,22 @@ public final class GpuTerrainProfiler {
                 gpuClimateCalls.sum(), climateSamples.sum(), averageNanos(climateNanos, climateSamples),
                 aquiferCalls.sum(), aquiferSamples.sum(), averageNanos(aquiferNanos, aquiferSamples),
                 blockWrites.sum(), blockWriteSamples.sum(), averageNanos(blockWriteNanos, blockWriteSamples));
+        GpuNoise.LOGGER.info("GPU terrain Java root fallback calls: {}", formatRootFallbacks());
+    }
+
+    private static LongAdder[] createRootFallbackCounters() {
+        LongAdder[] counters = new LongAdder[GpuTerrainRoots.COUNT];
+        for (int root = 0; root < counters.length; root++) counters[root] = new LongAdder();
+        return counters;
+    }
+
+    private static String formatRootFallbacks() {
+        StringBuilder counts = new StringBuilder();
+        for (int root = 0; root < javaRootFallbackCalls.length; root++) {
+            if (root > 0) counts.append(',');
+            counts.append(root).append('=').append(javaRootFallbackCalls[root].sum());
+        }
+        return counts.toString();
     }
 
     private static double averageNanos(LongAdder nanos, LongAdder samples) {

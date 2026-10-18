@@ -163,6 +163,7 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
                 gpunoise$markGpuUse(cache);
                 return gpunoise$zeroBeardifier ? gpu : gpu + beardifier.compute(context);
             }
+            GpuTerrainProfiler.recordJavaRootFallback(GpuTerrainRoots.FINAL_DENSITY);
             if (cache.supportsRoot(GpuTerrainRoots.FINAL_DENSITY)
                     && cache.contains(context.blockX(), context.blockY(), context.blockZ())) {
                 throw new IllegalStateException("Authoritative GPU density cache returned NaN at "
@@ -184,6 +185,7 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
                 gpunoise$markGpuUse(cache);
                 return gpu;
             }
+            GpuTerrainProfiler.recordJavaRootFallback(GpuTerrainRoots.INITIAL_DENSITY);
         }
         return vanillaFunction.compute(context);
     }
@@ -227,6 +229,7 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
                     GpuTerrainRuntime.markGpuCacheUsed(activeCache);
                     return value;
                 }
+                GpuTerrainProfiler.recordJavaRootFallback(root);
             }
             return fallback.compute(context);
         }
