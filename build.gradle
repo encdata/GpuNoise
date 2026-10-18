@@ -42,7 +42,6 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 sourceSets {
     artifactServerRun {
         java.setSrcDirs([])
-        resources.setSrcDirs([])
     }
 }
 

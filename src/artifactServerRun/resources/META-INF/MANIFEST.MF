@@ -1,0 +1,4 @@
+Manifest-Version: 1.0
+FMLModType: LIBRARY
+Automatic-Module-Name: gpunoise.artifactserver.placeholder
+
