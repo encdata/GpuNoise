@@ -198,6 +198,7 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
     command = [
         "./gradlew", "--no-daemon", "runServer",
         f"-PgpunoiseRunDir=run/{run_name}",
+        "-PgpunoiseRunFromArtifact=true",
         # Chunky radius is measured in blocks; keep the default benchmark at
         # a 250-block radius for a quick paired CPU/GPU comparison.
         f"-Dgpunoise.chunkyRadius={CHUNKY_RADIUS_BLOCKS}",

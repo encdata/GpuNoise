@@ -63,7 +63,12 @@ runs {
                 .orElse("run/${name}")
         workingDirectory project.file(configuredRunDirectory.get())
 
-        modSource project.sourceSets.main
+        // CI's runServer benchmark installs the built distributable jar in
+        // its mods directory. Avoid also adding the dev source module there:
+        // the two copies share packages and JPMS rejects the duplicate.
+        if (!providers.gradleProperty('gpunoiseRunFromArtifact').isPresent()) {
+            modSource project.sourceSets.main
+        }
     }
 
     client {
