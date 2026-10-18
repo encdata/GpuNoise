@@ -47,7 +47,9 @@ def verify(path: Path) -> None:
 
         duplicate_packages = sorted(
             name for name in entries
-            if name.startswith("dev/gpunoise/") and not name.startswith("dev/gpunoise/loader/")
+            if name.endswith(".class")
+            and name.startswith("dev/gpunoise/")
+            and not name.startswith("dev/gpunoise/loader/")
         )
         if "META-INF/neoforge.mods.toml" in entries or duplicate_packages:
             raise ValueError(
