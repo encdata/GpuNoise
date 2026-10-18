@@ -21,7 +21,7 @@ import net.neoforged.neoforgespi.locating.ModFileDiscoveryAttributes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Adds the embedded LWJGL core to the game libraries on dedicated servers only. */
+/** Registers GPU Noise on both sides and adds bundled LWJGL only to dedicated servers. */
 public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLocator {
     private static final String SERVER_LIBRARY_DIRECTORY = "META-INF/gpunoise/server-libraries/";
     private static final String[] SERVER_LIBRARIES = {
@@ -39,15 +39,14 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
             LOGGER.debug("Skipping packaged mod re-registration in artifact-backed runServer");
             return;
         }
-        if (FMLLoader.getDist() != Dist.DEDICATED_SERVER) {
-            LOGGER.debug("Skipping embedded LWJGL core on client; Minecraft supplies its own copy");
-            return;
-        }
+        boolean dedicatedServer = FMLLoader.getDist() == Dist.DEDICATED_SERVER;
+        boolean client = FMLLoader.getDist() == Dist.CLIENT;
+        if (!dedicatedServer && !client) return;
 
         Path sourceJar = resolveSourceJar();
         if (sourceJar == null) {
-            // Development runs get LWJGL from localRunRuntime instead.
-            LOGGER.debug("Cannot locate packaged GpuNoise jar; skipping server LWJGL extraction");
+            // Development runs have classes directories rather than a release jar.
+            LOGGER.debug("Cannot locate packaged GPU Noise jar; skipping packaged mod registration");
             return;
         }
 
@@ -60,9 +59,19 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
                 ModFileDiscoveryAttributes.DEFAULT.withLocator(this),
                 IncompatibleFileReporting.ERROR);
         if (modCandidate.isPresent()) {
-            LOGGER.info("Registered packaged GPU Noise mod {} for dedicated-server discovery", modDiscoveryJar);
+            LOGGER.info("Registered packaged GPU Noise mod {} for {} discovery", modDiscoveryJar,
+                    dedicatedServer ? "dedicated-server" : "client");
         } else {
-            LOGGER.warn("NeoForge did not create a dedicated-server mod candidate from {}", modDiscoveryJar);
+            LOGGER.warn("NeoForge did not create a {} mod candidate from {}",
+                    dedicatedServer ? "dedicated-server" : "client", modDiscoveryJar);
+        }
+
+        // Minecraft already supplies LWJGL on clients. The client still needs
+        // the GPU Noise candidate above because early service discovery can
+        // consume the original mods-folder path before normal mod discovery.
+        if (!dedicatedServer) {
+            LOGGER.debug("Skipping embedded server LWJGL libraries on client; Minecraft supplies LWJGL");
+            return;
         }
 
         boolean lwjglCoreAvailable = lwjglCoreAvailable();
@@ -184,7 +193,7 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
                     : Paths.get(".").toAbsolutePath().normalize();
             Path cacheDirectory = gameDirectory.resolve(".gpunoise/bootstrap");
             Files.createDirectories(cacheDirectory);
-            Path destination = cacheDirectory.resolve("gpunoise-dedicated-server.jar");
+            Path destination = cacheDirectory.resolve("gpunoise-mod-discovery.jar");
             Files.copy(sourceJar, destination, StandardCopyOption.REPLACE_EXISTING);
             return destination;
         } catch (Exception failure) {
