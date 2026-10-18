@@ -41,11 +41,6 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 sourceSets {
     artifactServerRun {
     }
-    // Empty source set for validating the distributable from an ordinary
-    // client mods directory. Loading main sources alongside the release jar
-    // would recreate the duplicate JPMS packages this check is meant to catch.
-    artifactClientRun {
-    }
 }
 def artifactBackedRunServer = providers.gradleProperty('gpunoiseRunFromArtifact').isPresent()
 def releaseArtifactPath = layout.buildDirectory.file("libs/${mod_id}-${version}-all.jar")
@@ -81,11 +76,9 @@ runs {
 
     client {
         if (providers.gradleProperty('gpunoiseClientFromArtifact').isPresent()) {
-            modSource project.sourceSets.artifactClientRun
-            dependencies {
-                runtime files(project.file(
-                        "run/client-artifact-mod-input/${mod_id}-${version}-all.jar"))
-            }
+            modSource project.sourceSets.artifactServerRun
+            systemProperty 'gpunoise.clientArtifactRun', 'true'
+            systemProperty 'gpunoise.releaseArtifactPath', releaseArtifactPath.get().asFile.absolutePath
         } else {
             modSource project.sourceSets.main
         }
@@ -150,9 +143,6 @@ configurations {
     artifactServerRunImplementation.extendsFrom implementation
     artifactServerRunRuntimeOnly.extendsFrom runtimeOnly
     artifactServerRunCompileOnly.extendsFrom compileOnly
-    artifactClientRunImplementation.extendsFrom implementation
-    artifactClientRunRuntimeOnly.extendsFrom runtimeOnly
-    artifactClientRunCompileOnly.extendsFrom compileOnly
     lwjglNatives
     serverLwjglCore
 }

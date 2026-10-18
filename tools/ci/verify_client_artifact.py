@@ -57,10 +57,6 @@ def verify(artifact: Path) -> None:
     run_dir = ROOT / "run" / "client-artifact"
     shutil.rmtree(run_dir, ignore_errors=True)
     run_dir.mkdir(parents=True)
-    mod_input_dir = ROOT / "run" / "client-artifact-mod-input"
-    shutil.rmtree(mod_input_dir, ignore_errors=True)
-    mod_input_dir.mkdir(parents=True)
-    shutil.copy2(artifact, mod_input_dir / artifact.name)
     (run_dir / "options.txt").write_text("fullscreen:false\n", encoding="utf-8")
 
     log_path = ROOT / "build" / "reports" / "ci" / "client-artifact-discovery.log"
@@ -71,7 +67,7 @@ def verify(artifact: Path) -> None:
         "-PgpunoiseRunDir=run/client-artifact",
     ]
     print(
-        "Starting isolated NeoForge client with one copy of the exact release artifact: "
+        "Starting isolated NeoForge client with the exact release artifact registered once: "
         + " ".join(command),
         flush=True,
     )
