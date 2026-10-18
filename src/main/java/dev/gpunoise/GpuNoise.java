@@ -17,7 +17,6 @@ import net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator;
 import net.minecraft.world.level.levelgen.NoiseSettings;
 import java.util.LinkedHashSet;
 import java.util.Set;
-import java.util.concurrent.ThreadLocalRandom;
 
 /** Entry point for GPU Noise. The first milestone is a safe, CPU-backed noise boundary. */
 @Mod(GpuNoise.MOD_ID)
@@ -57,30 +56,6 @@ public final class GpuNoise {
                 throw new IllegalStateException("Vulkan CI smoke failed", exception);
             }
         }
-        if (!Boolean.getBoolean("gpunoise.chunkyBenchmark")) return;
-        var server = event.getServer();
-        server.execute(() -> {
-            var random = ThreadLocalRandom.current();
-            int randomCenterX = Math.floorDiv(random.nextInt(-1_800_000, 1_800_001), 16) * 16;
-            int randomCenterZ = Math.floorDiv(random.nextInt(-1_800_000, 1_800_001), 16) * 16;
-            int centerX = Integer.getInteger("gpunoise.chunkyCenterX", randomCenterX);
-            int centerZ = Integer.getInteger("gpunoise.chunkyCenterZ", randomCenterZ);
-            int radius = Integer.getInteger("gpunoise.chunkyRadius", 250);
-            if (radius <= 0) throw new IllegalArgumentException("gpunoise.chunkyRadius must be positive");
-            var source = server.createCommandSourceStack().withPermission(4);
-            // Always replace a previous benchmark task. Chunky keeps task
-            // state in the world, so start alone may only report that an old
-            // task is already active and never begin this benchmark.
-            server.getCommands().performPrefixedCommand(source, "chunky cancel");
-            server.getCommands().performPrefixedCommand(source, "chunky world minecraft:overworld");
-            server.getCommands().performPrefixedCommand(source, "chunky center " + centerX + " " + centerZ);
-            // Chunky measures radius in blocks; CI can request a larger radius.
-            server.getCommands().performPrefixedCommand(source, "chunky radius " + radius);
-            server.getCommands().performPrefixedCommand(source, "chunky start");
-            server.getCommands().performPrefixedCommand(source, "chunky confirm");
-            LOGGER.info("Started fresh development Chunky benchmark: radius={} blocks, center={},{}.",
-                    radius, centerX, centerZ);
-        });
     }
 
     private void onServerAboutToStart(ServerAboutToStartEvent event) {

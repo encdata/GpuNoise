@@ -62,6 +62,7 @@ TASK_DONE = re.compile(
     r"Total time:\s*(\d+):(\d+):(\d+)"
 )
 TASK_STARTED = re.compile(r"\[Chunky\] Task started in minecraft:overworld")
+SERVER_READY = re.compile(r"Done \([^)]*\)! For help, type")
 SERVER_CRASH = re.compile(
     r"Encountered an unexpected exception|Failed to start the minecraft server|server thread.*FATAL",
     re.IGNORECASE,
@@ -137,6 +138,36 @@ def rcon_packet(connection: socket.socket, request_id: int, packet_type: int, bo
     return response_id, response_type, response[8:-2].decode("utf-8", errors="replace")
 
 
+def start_chunky_with_rcon() -> None:
+    commands = (
+        "chunky cancel",
+        "chunky world minecraft:overworld",
+        "chunky center 0 0",
+        f"chunky radius {CHUNKY_RADIUS_BLOCKS}",
+        "chunky start",
+        "chunky confirm",
+    )
+    deadline = time.monotonic() + 30
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", 25575), timeout=5) as connection:
+                connection.settimeout(5)
+                response_id, _, _ = rcon_packet(connection, 1, 3, RCON_PASSWORD)
+                if response_id == -1:
+                    raise RuntimeError("RCON authentication failed")
+                for request_id, command in enumerate(commands, start=2):
+                    response_id, _, response = rcon_packet(connection, request_id, 2, command)
+                    if response_id != request_id:
+                        raise ConnectionError(f"RCON returned response id {response_id} for {command!r}")
+                    print(f"CI_CHUNKY_RCON command={command!r} response={response!r}", flush=True)
+                return
+        except (OSError, ConnectionError) as error:
+            last_error = error
+            time.sleep(0.5)
+    raise TimeoutError(f"RCON did not become ready to start Chunky within 30s: {last_error}")
+
+
 def stop_server_with_rcon() -> None:
     with socket.create_connection(("127.0.0.1", 25575), timeout=5) as connection:
         connection.settimeout(5)
@@ -199,11 +230,6 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
         "./gradlew", "--no-daemon", "runServer",
         f"-PgpunoiseRunDir=run/{run_name}",
         "-PgpunoiseRunFromArtifact=true",
-        # Chunky radius is measured in blocks; keep the default benchmark at
-        # a 250-block radius for a quick paired CPU/GPU comparison.
-        f"-Dgpunoise.chunkyRadius={CHUNKY_RADIUS_BLOCKS}",
-        "-Dgpunoise.chunkyCenterX=0",
-        "-Dgpunoise.chunkyCenterZ=0",
         f"-Dgpunoise.forceCpuTerrain={str(force_cpu).lower()}",
     ]
     run_vulkan_smoke = repetition == 1
@@ -243,6 +269,7 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
     reader.start()
     started = time.monotonic()
     chunky_started: float | None = None
+    chunky_start_requested = False
     chunky_elapsed: float | None = None
     completed: re.Match[str] | None = None
     gpu_counts: list[tuple[int, int, int, int]] = []
@@ -264,6 +291,9 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
             if event is None:
                 break
             line, observed_at = event
+            if not chunky_start_requested and SERVER_READY.search(line):
+                start_chunky_with_rcon()
+                chunky_start_requested = True
             if TASK_STARTED.search(line):
                 chunky_started = observed_at
             if SERVER_CRASH.search(line):

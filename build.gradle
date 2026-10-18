@@ -89,16 +89,6 @@ runs {
             modSource project.sourceSets.artifactServerRun
         }
         systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
-        // Enable manually for a fresh-coordinate Chunky benchmark; keep normal
-        // server starts focused on gameplay and terrain integration.
-        systemProperty 'gpunoise.chunkyBenchmark', 'true'
-        systemProperty 'gpunoise.chunkyRadius', System.getProperty('gpunoise.chunkyRadius', '250')
-        if (System.getProperty('gpunoise.chunkyCenterX') != null) {
-            systemProperty 'gpunoise.chunkyCenterX', System.getProperty('gpunoise.chunkyCenterX')
-        }
-        if (System.getProperty('gpunoise.chunkyCenterZ') != null) {
-            systemProperty 'gpunoise.chunkyCenterZ', System.getProperty('gpunoise.chunkyCenterZ')
-        }
         systemProperty 'gpunoise.forceCpuTerrain', System.getProperty('gpunoise.forceCpuTerrain', 'false')
         systemProperty 'gpunoise.fullBlockOutput', System.getProperty('gpunoise.fullBlockOutput', 'false')
         systemProperty 'gpunoise.profileTerrain', System.getProperty('gpunoise.profileTerrain', 'false')
