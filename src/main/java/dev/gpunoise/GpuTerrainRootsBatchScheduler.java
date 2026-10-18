@@ -220,8 +220,8 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 // Occupancy remains the primary goal; among equally full
                 // batches, dispatch the one whose oldest request has waited
                 // longest. HashMap iteration order must not decide fairness.
-                if (count > bestCount || (count == bestCount
-                        && oldestEnqueuedNanos < bestOldestEnqueuedNanos)) {
+                if (preferCandidate(count, oldestEnqueuedNanos, layoutEntry.getKey(), entry.getKey(),
+                        bestCount, bestOldestEnqueuedNanos, bestLayout, bestRegion)) {
                     bestLayout = layoutEntry.getKey();
                     bestRegion = entry.getKey();
                     bestCount = count;
@@ -232,6 +232,18 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         }
         if (bestLayout == null) throw new IllegalStateException("terrain batch map is unexpectedly empty");
         return new BatchCandidate(bestLayout, bestRegion, bestCount, bestCapacity);
+    }
+
+    private static boolean preferCandidate(int count, long oldestEnqueuedNanos,
+                                           GridLayout layout, long region,
+                                           int bestCount, long bestOldestEnqueuedNanos,
+                                           GridLayout bestLayout, long bestRegion) {
+        if (count != bestCount) return count > bestCount;
+        if (oldestEnqueuedNanos != bestOldestEnqueuedNanos)
+            return oldestEnqueuedNanos < bestOldestEnqueuedNanos;
+        if (bestLayout == null) return true;
+        int layoutOrder = layout.compareTo(bestLayout);
+        return layoutOrder < 0 || (layoutOrder == 0 && Long.compare(region, bestRegion) < 0);
     }
 
     private static Offset[] createNeighborOffsets() {
@@ -421,10 +433,20 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
 
     private record BatchCandidate(GridLayout layout, long region, int chunks, int capacity) {}
 
-    private record GridLayout(int gridX, int gridY, int gridZ, int cellWidth, int cellHeight) {
+    private record GridLayout(int gridX, int gridY, int gridZ, int cellWidth, int cellHeight)
+            implements Comparable<GridLayout> {
         static GridLayout of(GpuTerrainGrid grid) {
             return new GridLayout(grid.gridX(), grid.gridY(), grid.gridZ(),
                     grid.cellWidth(), grid.cellHeight());
+        }
+
+        @Override public int compareTo(GridLayout other) {
+            int order = Integer.compare(gridX, other.gridX);
+            if (order == 0) order = Integer.compare(gridY, other.gridY);
+            if (order == 0) order = Integer.compare(gridZ, other.gridZ);
+            if (order == 0) order = Integer.compare(cellWidth, other.cellWidth);
+            if (order == 0) order = Integer.compare(cellHeight, other.cellHeight);
+            return order;
         }
     }
 
