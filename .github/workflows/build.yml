@@ -29,12 +29,12 @@ on:
 permissions:
   contents: read
 
-# The server benchmark is CPU-heavy on Lavapipe. Running several revisions for
-# the same ref at once distorts paired CPS measurements and delays the newest
-# compiler/shader checks, so only the latest run for a ref remains active.
+# The server benchmark is CPU-heavy on Lavapipe. Serialize revisions for the
+# same ref so paired CPS measurements stay comparable without cancelling a run
+# that is already collecting benchmark data.
 concurrency:
   group: gpunoise-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
