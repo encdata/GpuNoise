@@ -143,6 +143,9 @@ runs {
 // "optional", meaning it will not be pulled by dependents of this mod.
 configurations {
     runtimeClasspath.extendsFrom localRuntime
+    artifactServerRunImplementation.extendsFrom implementation
+    artifactServerRunRuntimeOnly.extendsFrom runtimeOnly
+    artifactServerRunCompileOnly.extendsFrom compileOnly
     lwjglNatives
     serverLwjglCore
 }
