@@ -97,7 +97,8 @@ public final class VulkanCiSmoke {
             float[] remainderResults = ring.submitGraphRoots(remainderGraph, remainderX,
                     remainderZeros, remainderZeros).get(60, TimeUnit.SECONDS);
             for (int sample = 0; sample < remainderX.length; sample++) {
-                int expected = (int) remainderX[sample] % 3;
+                int remainder = (int) remainderX[sample] % 16;
+                double expected = remainder < 0 ? remainder - 0.5 : remainder + 0.5;
                 if (remainderResults[sample] != expected) {
                     throw new IllegalStateException("Signed integer remainder Vulkan mismatch at sample "
                             + sample + " (x=" + remainderX[sample] + "): expected " + expected

@@ -48,7 +48,13 @@ final class GpuDensityGraphLowerer {
             sourceFunctions.add(graph.sourceFunctions().get(old));
         }
         int[] roots = graph.routerRoots();
-        for (int i = 0; i < roots.length; i++) roots[i] = remap[roots[i]];
+        for (int i = 0; i < roots.length; i++) {
+            // Unsupported roots are never read by the runtime. Mapping them
+            // to a live placeholder lets the shader retain its stable router
+            // ABI without keeping their unreachable subgraphs in the hot
+            // per-sample instruction stream.
+            roots[i] = graph.supportsRouterRoot(i) ? remap[roots[i]] : 0;
+        }
         List<GpuDensityGraph.Spline> splines = new ArrayList<>(graph.splines().size());
         for (GpuDensityGraph.Spline spline : graph.splines()) {
             if (state[spline.coordinateNode()] != 2) continue;
@@ -82,6 +88,24 @@ final class GpuDensityGraphLowerer {
         return new GpuDensityGraph(registerNodes, roots, graph.noises(), registerSplines, graph.blended(),
                 sourceFunctions, registerCount, graph.supportedRouterRootMask(),
                 graph.unsupportedRouterRootReasons());
+    }
+
+    /** Re-lowers the source graph after parity removes one or more GPU roots. */
+    static GpuDensityGraph lowerVerifiedRoots(GpuDensityGraph source, int verifiedRootMask) {
+        int activeMask = source.supportedRouterRootMask() & verifiedRootMask;
+        if (activeMask == 0) {
+            throw new IllegalArgumentException("No terrain roots passed GPU parity verification");
+        }
+        String[] reasons = source.unsupportedRouterRootReasons();
+        for (int root = 0; root < reasons.length; root++) {
+            if ((activeMask & (1 << root)) == 0 && reasons[root] == null) {
+                reasons[root] = "terrain parity verification failed";
+            }
+        }
+        GpuDensityGraph filtered = new GpuDensityGraph(source.nodes(), source.routerRoots(),
+                source.noises(), source.splines(), source.blended(), source.sourceFunctions(),
+                source.registerCount(), activeMask, reasons);
+        return lower(filtered);
     }
 
     private static int[] allocateRegisters(List<GpuDensityGraph.Node> nodes, int[] roots) {
@@ -209,7 +233,10 @@ final class GpuDensityGraphLowerer {
         int[] nodeStack = new int[nodes.size()];
         int[] childStack = new int[nodes.size()];
         int count = 0;
-        for (int root : graph.routerRoots()) {
+        int[] roots = graph.routerRoots();
+        for (int rootIndex = 0; rootIndex < roots.length; rootIndex++) {
+            if (graph.supportedRouterRootMask() != 0 && !graph.supportsRouterRoot(rootIndex)) continue;
+            int root = roots[rootIndex];
             if (state[root] == 2) continue;
             int depth = 0;
             nodeStack[depth] = root;

@@ -96,7 +96,7 @@ public final class GpuTerrainRuntime {
         while (loader != null && loaders.add(loader)) loader = loader.getParent();
     }
 
-    /** Enables cell-grid input substitution only after graph parity passes. */
+    /** Enables cell-grid inputs when at least one root passes compact and grid parity. */
     public static boolean terrainInputsAvailable() {
         return !Boolean.getBoolean("gpunoise.forceCpuTerrain")
                 && device != null && terrainGraph != null && verifiedTerrainRootMask != 0;

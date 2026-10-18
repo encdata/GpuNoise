@@ -156,13 +156,19 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   x100 noise microbenchmark was 23.68 ms CPU versus 123.65 ms GPU including
   setup and dispatch, and must not be read as full-terrain throughput.
 - The latest Vulkan Actions run built successfully but its smoke failed on a
-  bounded loop with a dynamic switch (`x=-7`: CPU expected -0.625, Vulkan got
-  -0.875). Java expression parity passes, so the remaining defect is in
-  lowered graph or shader execution. A separate signed integer remainder
-  Vulkan smoke now runs before that fixture to distinguish selector arithmetic
-  from nested switch/loop graph lowering. Until the combined fixture passes,
-  dynamic switches inside bounded loops are not considered verified GPU
-  translation coverage.
+  signed integer remainder (`x=-7`: Java expected -7.5, Vulkan returned 9.5).
+  This isolated the bug to negative integer remainder in the GLSL path, before
+  the bounded dynamic-switch loop could run. The shader now computes Java
+  remainder from a truncation-toward-zero quotient instead of relying on GLSL
+  `%` lowering. The Actions smoke also covers that signed case before retrying
+  the combined bounded-switch-loop fixture; dynamic switches in loops remain
+  unverified until that passes.
+- Lowering now omits root subgraphs that the compiler cannot translate, and
+  startup re-lowers the source graph after parity removes failing roots. The
+  router output layout stays fixed, while unsupported slots point at an
+  unread placeholder. This targets wasted per-sample shader instructions from
+  terrain roots that already fall back to Java, especially in custom modpack
+  graphs with only partial Vulkan coverage.
 - Terrain cache reads now reuse the already loaded root result, avoid a
   redundant root-mask/global-result lookup for final-density interpolation,
   and skip repeated block-output checks unless diagnostic full-block mode is

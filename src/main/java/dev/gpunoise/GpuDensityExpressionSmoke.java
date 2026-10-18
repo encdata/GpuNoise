@@ -230,6 +230,7 @@ final class GpuDensityExpressionSmoke {
     }
 
     static void verify() {
+        verifyParityRootPruning();
         requireOpcode("EXPR_ADD", 1);
         requireOpcode("EXPR_SUBTRACT", 2);
         requireOpcode("EXPR_MULTIPLY", 3);
@@ -392,6 +393,23 @@ final class GpuDensityExpressionSmoke {
                 (double) (float) 1.00000006, "packed-float constant");
 
         verifyBytecodeFrontend();
+    }
+
+    private static void verifyParityRootPruning() {
+        DensityFunction first = DensityFunctions.constant(1.0);
+        DensityFunction second = DensityFunctions.constant(2.0);
+        GpuDensityGraph source = new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{1.0}, null),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{2.0}, null)),
+                new int[]{0, 1}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(first, second), 2, 0b11, new String[2]);
+        GpuDensityGraph filtered = GpuDensityGraphLowerer.lowerVerifiedRoots(source, 0b01);
+        if (filtered.nodes().size() != 1 || filtered.supportedRouterRootMask() != 0b01
+                || !filtered.supportsRouterRoot(0) || filtered.supportsRouterRoot(1)) {
+            throw new AssertionError("parity root pruning must remove only the failed root's graph");
+        }
+        GpuDensityGraphBuffer.pack(filtered);
     }
 
     private static void verifyBytecodeFrontend() {

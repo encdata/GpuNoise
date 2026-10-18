@@ -118,7 +118,11 @@ double javaIntOperation(uint operation,double leftValue,double rightValue){
     }
     if(operation==5u){
         if(left==(-2147483647-1)&&right==-1)return 0.0;
-        return double(left%right);
+        // Keep Java's signed remainder semantics explicit. Some GLSL
+        // compilers lower signed '%' through an unsigned remainder path for
+        // negative operands; Java instead truncates the quotient toward zero.
+        int quotient=int(double(left)/double(right));
+        return double(left-quotient*right);
     }
     return 0.0;
 }

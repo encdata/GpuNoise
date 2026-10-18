@@ -166,7 +166,9 @@ public final class GpuNoise {
             }
 
             try {
-                GpuDensityGraph terrainGraph = GpuDensityGraphLowerer.lower(GpuDensityGraphCompiler.compileTerrain(router));
+                GpuDensityGraph sourceTerrainGraph = GpuDensityGraphCompiler.compileTerrain(router);
+                GpuDensityGraph terrainGraph = GpuDensityGraphLowerer.lower(sourceTerrainGraph);
+                final GpuDensityGraph validationGraph = terrainGraph;
                 String[] terrainRootNames = {"finalDensity", "initialDensity", "barrier", "floodedness",
                         "spread", "lava", "erosion", "depth", "temperature", "vegetation",
                         "continents", "ridges"};
@@ -180,21 +182,34 @@ public final class GpuNoise {
                 LOGGER.info("GPU terrain runtime graph: {} nodes, {} required terrain/aquifer roots.",
                         terrainGraph.nodes().size(), terrainGraph.routerRoots().length);
                 VulkanBootstrapThread.callUnchecked(() -> {
-                    GpuTerrainRuntime.verifyCompactTerrainGraph(terrainGraph, router);
+                    GpuTerrainRuntime.verifyCompactTerrainGraph(validationGraph, router);
                     return null;
                 });
-                GpuTerrainRuntime.installTerrainGraph(terrainGraph, router);
-                installedGraph = terrainGraph;
-                if (server.overworld().getChunkSource().getGenerator()
-                        instanceof NoiseBasedChunkGenerator noiseGenerator) {
-                    NoiseSettings settings = noiseGenerator.generatorSettings().value().noiseSettings()
-                            .clampToHeightAccessor(server.overworld());
+                GpuTerrainRuntime.installTerrainGraph(validationGraph, router);
+                NoiseSettings terrainSettings = server.overworld().getChunkSource().getGenerator()
+                        instanceof NoiseBasedChunkGenerator noiseGenerator
+                        ? noiseGenerator.generatorSettings().value().noiseSettings()
+                                .clampToHeightAccessor(server.overworld())
+                        : null;
+                if (terrainSettings != null) {
                     VulkanBootstrapThread.callUnchecked(() -> {
-                        GpuTerrainRuntime.verifyTerrainGrid(terrainGraph, router, settings);
+                        GpuTerrainRuntime.verifyTerrainGrid(validationGraph, router, terrainSettings);
                         return null;
                     });
-                    GpuTerrainRuntime.warmTerrainGpu(settings);
                 }
+                int verifiedRootMask = GpuTerrainRuntime.supportedTerrainRootMask();
+                GpuDensityGraph activeTerrainGraph = validationGraph;
+                if (verifiedRootMask != 0
+                        && verifiedRootMask != validationGraph.supportedRouterRootMask()) {
+                    activeTerrainGraph = GpuDensityGraphLowerer.lowerVerifiedRoots(
+                            sourceTerrainGraph, verifiedRootMask);
+                    LOGGER.info("GPU terrain parity pruning: nodes {} -> {}, verifiedRoots=0x{}.",
+                            validationGraph.nodes().size(), activeTerrainGraph.nodes().size(),
+                            Integer.toHexString(verifiedRootMask));
+                    GpuTerrainRuntime.installTerrainGraph(activeTerrainGraph, router);
+                }
+                if (terrainSettings != null) GpuTerrainRuntime.warmTerrainGpu(terrainSettings);
+                installedGraph = activeTerrainGraph;
             } catch (RuntimeException terrainFailure) {
                 LOGGER.warn("GPU terrain graph unavailable; vanilla terrain remains enabled: {}", terrainFailure.getMessage());
             }
