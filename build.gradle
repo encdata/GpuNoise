@@ -63,20 +63,20 @@ runs {
                 .orElse("run/${name}")
         workingDirectory project.file(configuredRunDirectory.get())
 
-        // CI's runServer benchmark installs the built distributable jar in
-        // its mods directory. Avoid also adding the dev source module there:
-        // the two copies share packages and JPMS rejects the duplicate.
-        if (!providers.gradleProperty('gpunoiseRunFromArtifact').isPresent()) {
-            modSource project.sourceSets.main
-        }
     }
 
     client {
+        modSource project.sourceSets.main
         // Comma-separated list of namespaces to load gametests from. Empty = all namespaces.
         systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
     }
 
     server {
+        // CI installs the distributable jar in the server's mods directory.
+        // Do not also load the dev source module, which duplicates packages.
+        if (!providers.gradleProperty('gpunoiseRunFromArtifact').isPresent()) {
+            modSource project.sourceSets.main
+        }
         systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
         // Enable manually for a fresh-coordinate Chunky benchmark; keep normal
         // server starts focused on gameplay and terrain integration.
@@ -107,10 +107,12 @@ runs {
     // By default, the server will crash when no gametests are provided.
     // The gametest system is also enabled by default for other run configs under the /test command.
     gameTestServer {
+        modSource project.sourceSets.main
         systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
     }
 
     data {
+        modSource project.sourceSets.main
         // example of overriding the workingDirectory set in configureEach above, uncomment if you want to use it
         // workingDirectory project.file('run-data')
 
