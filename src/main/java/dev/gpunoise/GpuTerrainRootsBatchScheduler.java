@@ -198,6 +198,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         long bestRegion = 0L;
         int bestCount = 0;
         int bestCapacity = 0;
+        long bestOldestEnqueuedNanos = Long.MAX_VALUE;
         for (Map.Entry<GridLayout, Map<Long, ArrayDeque<Pending>>> layoutEntry : pendingByLayout.entrySet()) {
             Map<Long, ArrayDeque<Pending>> regions = layoutEntry.getValue();
             for (Map.Entry<Long, ArrayDeque<Pending>> entry : regions.entrySet()) {
@@ -205,16 +206,27 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 if (seed == null) continue;
                 int capacity = maxChunksPerDispatch(seed.grid);
                 int count = 0;
+                long oldestEnqueuedNanos = Long.MAX_VALUE;
                 for (Offset offset : NEIGHBOR_OFFSETS) {
                     if (count >= capacity) break;
                     ArrayDeque<Pending> nearby = regions.get(offsetRegion(entry.getKey(), offset.dx, offset.dz));
-                    if (nearby != null) count = Math.min(capacity, count + nearby.size());
+                    if (nearby != null) {
+                        Pending oldest = nearby.peekFirst();
+                        if (oldest != null) oldestEnqueuedNanos = Math.min(
+                                oldestEnqueuedNanos, oldest.enqueuedNanos);
+                        count = Math.min(capacity, count + nearby.size());
+                    }
                 }
-                if (count > bestCount) {
+                // Occupancy remains the primary goal; among equally full
+                // batches, dispatch the one whose oldest request has waited
+                // longest. HashMap iteration order must not decide fairness.
+                if (count > bestCount || (count == bestCount
+                        && oldestEnqueuedNanos < bestOldestEnqueuedNanos)) {
                     bestLayout = layoutEntry.getKey();
                     bestRegion = entry.getKey();
                     bestCount = count;
                     bestCapacity = capacity;
+                    bestOldestEnqueuedNanos = oldestEnqueuedNanos;
                 }
             }
         }

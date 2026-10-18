@@ -72,7 +72,9 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   allocation/sorting. A worker-owned pending counter also replaces repeated
   full queue-count scans while the coalescing window is open. The paired
   benchmark must measure occupancy and queue latency before treating this as a
-  throughput gain.
+  throughput gain. Equally occupied candidate batches now prefer the one with
+  the oldest queued chunk, so Java map iteration order cannot arbitrarily pick
+  which spatial region gets serviced first.
 - The C2ME + Chunky CI scenario is configured for a 1,600-block radius, or
   100 chunks in each direction (40,401 chunks per square pregen), in three
   paired repetitions. It checks Vulkan smoke/parity and captures dispatch and
