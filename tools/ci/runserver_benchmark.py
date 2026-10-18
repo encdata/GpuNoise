@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run paired NeoForge + C2ME + Chunky terrain benchmarks in GitHub Actions."""
+"""Run paired NeoForge + C2ME + Byepregen + Chunky terrain benchmarks in GitHub Actions."""
 
 from __future__ import annotations
 
@@ -34,12 +34,19 @@ MODS = {
         "2db769dd723f243a21e1881e7c9f825e9c193da6f2bed454b70cb6fa9e51c57f"
         "63fdcf017c0657bbd26f7bba30815413e27c74d3c7be0783390a96ee9baa4bf7",
     ),
+    "byepregen-1.21.1-1.1.2.4.jar": (
+        "https://www.cursemaven.com/curse/maven/bye-pregen-1567378/8858794/"
+        "bye-pregen-1567378-8858794.jar",
+        "63439774148dbc99a7ab6083417431137ebf9dead0d9b873236b6a31411970d4"
+        "834822da0df2f6494f0473c479e5dcedf68e35e3eae5c20020c3986e1cd53275",
+    ),
 }
 RCON_PASSWORD = "gpunoise-ci-only"
 SERVER_START_TIMEOUT = 300
 CHUNKY_RUN_TIMEOUT = 3600
 SHUTDOWN_TIMEOUT = 90
 GPU_NOISE_MOD_LIST = re.compile(r"(?m)^\s*GPU Noise [^\r\n]*\(gpunoise\)\s*$")
+BYEPREGEN_MOD_LIST = re.compile(r"(?m)^\s*ByePregen [^\r\n]*\(byepregen\)\s*$", re.IGNORECASE)
 CHUNKY_RADIUS_BLOCKS = int(os.environ.get("GPUNOISE_CHUNKY_RADIUS_BLOCKS", "250"))
 MIN_CHUNKY_RADIUS_BLOCKS = 250
 if CHUNKY_RADIUS_BLOCKS < MIN_CHUNKY_RADIUS_BLOCKS:
@@ -68,6 +75,7 @@ SERVER_CRASH = re.compile(
     r"Encountered an unexpected exception|Failed to start the minecraft server|server thread.*FATAL",
     re.IGNORECASE,
 )
+PALETTE_RESIZE_CRASH = re.compile(r"SingleValuePalette\.idFor|this\.resizeHandler is null")
 GPU_COUNTS = re.compile(
     r"GPU terrain: submitted=(\d+), completed=(\d+), consumed=(\d+), fallback=(\d+)"
 )
@@ -289,6 +297,10 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
                     raise RuntimeError(
                         f"{mode} dedicated server reached ready state without GPU Noise in NeoForge's mod list"
                     )
+                if not BYEPREGEN_MOD_LIST.search(server_log):
+                    raise RuntimeError(
+                        f"{mode} dedicated server reached ready state without Byepregen in NeoForge's mod list"
+                    )
                 start_chunky_with_rcon()
                 chunky_start_requested = True
             if TASK_STARTED.search(line):
@@ -296,6 +308,11 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
             if SERVER_CRASH.search(line):
                 raise RuntimeError(
                     f"{mode} server reported a fatal error before Chunky completed:\n"
+                    f"{crash_context(log_path)}"
+                )
+            if PALETTE_RESIZE_CRASH.search(line):
+                raise RuntimeError(
+                    f"{mode} server hit the Byepregen palette resize crash:\n"
                     f"{crash_context(log_path)}"
                 )
             match = TASK_DONE.search(line)
@@ -342,6 +359,10 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
                     f"GPU benchmark used CPU terrain fallback for {fallback_chunks} chunks"
                 )
             run_log = log_path.read_text(encoding="utf-8")
+            if "Byepregen palette compatibility detected; using normal block writes" not in run_log:
+                raise RuntimeError(
+                    "GPU worldgen did not activate the Byepregen palette compatibility path"
+                )
             if "GPU terrain grid parity:" not in run_log:
                 raise RuntimeError("GPU terrain grid parity check did not run")
             latency_samples = GPU_CHUNK_LATENCY.findall(run_log)
