@@ -58,7 +58,7 @@ jobs:
       - name: Install GLSL compiler
         run: |
           sudo apt-get update
-          sudo apt-get install --yes glslc mesa-vulkan-drivers vulkan-tools
+          sudo apt-get install --yes glslc mesa-vulkan-drivers vulkan-tools xvfb
 
       - name: Verify Mesa Lavapipe is available
         run: |
@@ -82,6 +82,9 @@ jobs:
           name: gpunoise-mod-${{ github.sha }}
           path: build/libs/*-all.jar
           if-no-files-found: error
+
+      - name: Verify release jar loads from a client mods folder
+        run: xvfb-run --auto-servernum python3 tools/ci/verify_client_artifact.py
 
       - name: Download and verify benchmark mods
         run: python3 tools/ci/runserver_benchmark.py --prepare-mods
