@@ -88,6 +88,23 @@ public final class VulkanCiSmoke {
                 }
             }
 
+            // Keep signed integer remainder parity isolated from switch
+            // control-flow lowering. This is also the selector operation
+            // used by the bounded switch-loop fixture below.
+            GpuDensityGraph remainderGraph = GpuDensityExpressionSmoke.remainderGraphForVulkanSmoke();
+            float[] remainderX = {-7.0f, -6.0f, -1.0f, 0.0f, 1.0f, 7.0f};
+            float[] remainderZeros = new float[remainderX.length];
+            float[] remainderResults = ring.submitGraphRoots(remainderGraph, remainderX,
+                    remainderZeros, remainderZeros).get(60, TimeUnit.SECONDS);
+            for (int sample = 0; sample < remainderX.length; sample++) {
+                int expected = (int) remainderX[sample] % 3;
+                if (remainderResults[sample] != expected) {
+                    throw new IllegalStateException("Signed integer remainder Vulkan mismatch at sample "
+                            + sample + " (x=" + remainderX[sample] + "): expected " + expected
+                            + ", got " + remainderResults[sample]);
+                }
+            }
+
             float[] mathX = {-81.0f, -1.0f, 0.0f, 17.0f, 192.0f};
             float[] mathY = {-17.0f, 0.0f, 1.0f, 9.0f, 80.0f};
             float[] mathZ = {-5.0f, 1.0f, 0.0f, 31.0f, -64.0f};

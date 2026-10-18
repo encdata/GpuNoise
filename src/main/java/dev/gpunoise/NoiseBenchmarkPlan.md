@@ -141,6 +141,34 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   Batch occupancy and p95/p99 latency still need to improve, and the next
   benchmark should run the same revision on actual GPU hardware.
 
+## Latest runtime evidence and implementation state
+
+- A real modpack log from an RTX 3050 Laptop showed Chunksmith rates around
+  25-40 CPS while generating a 32,768-block radius with C2ME, Voxy, and many
+  terrain and content mods. It is not a controlled CPU/GPU comparison. The
+  compact terrain graph had one root at max error 0.005861 against the 0.005
+  tolerance, causing the previous global parity boolean to disable all terrain
+  roots. The grid check also failed globally at 0.004871 due to that earlier
+  result. Runtime validation now keeps a bitmask of roots that pass compact and
+  grid parity independently; failed roots stay on Java while verified roots
+  may use the GPU. The old log therefore records CPU-owned terrain despite
+  graph installation and warmup messages. Its separate one-shot 65,536-sample
+  x100 noise microbenchmark was 23.68 ms CPU versus 123.65 ms GPU including
+  setup and dispatch, and must not be read as full-terrain throughput.
+- The latest Vulkan Actions run built successfully but its smoke failed on a
+  bounded loop with a dynamic switch (`x=-7`: CPU expected -0.625, Vulkan got
+  -0.875). Java expression parity passes, so the remaining defect is in
+  lowered graph or shader execution. A separate signed integer remainder
+  Vulkan smoke now runs before that fixture to distinguish selector arithmetic
+  from nested switch/loop graph lowering. Until the combined fixture passes,
+  dynamic switches inside bounded loops are not considered verified GPU
+  translation coverage.
+- Terrain cache reads now reuse the already loaded root result, avoid a
+  redundant root-mask/global-result lookup for final-density interpolation,
+  and skip repeated block-output checks unless diagnostic full-block mode is
+  enabled. The next paired run must quantify this hot-path change after
+  Vulkan parity is restored.
+
 ## Work passes
 
 ### Pass 1: establish a reliable terrain baseline

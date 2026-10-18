@@ -37,7 +37,8 @@ public final class GpuTerrainRuntime {
     private static final boolean FULL_BLOCK_OUTPUT = Boolean.getBoolean("gpunoise.fullBlockOutput");
     private static final GpuChunkPipelineGate chunkPipelineGate = new GpuChunkPipelineGate(
             Math.max(16, Runtime.getRuntime().availableProcessors() * 2));
-    private static volatile boolean graphParity;
+    /** Roots verified against both the compact graph and real cell-grid layout. */
+    private static volatile int verifiedTerrainRootMask;
     private static final ThreadLocal<Boolean> GPU_DENSITY_REQUIRED =
             ThreadLocal.withInitial(() -> Boolean.FALSE);
     private static final ThreadLocal<GpuChunkDensityCache> ACTIVE_FILL_CACHE =
@@ -98,20 +99,20 @@ public final class GpuTerrainRuntime {
     /** Enables cell-grid input substitution only after graph parity passes. */
     public static boolean terrainInputsAvailable() {
         return !Boolean.getBoolean("gpunoise.forceCpuTerrain")
-                && device != null && terrainGraph != null && graphParity
-                && terrainGraph.supportedRouterRootMask() != 0;
+                && device != null && terrainGraph != null && verifiedTerrainRootMask != 0;
     }
 
     /** Whether the installed terrain graph can supply this router root on the GPU. */
     public static boolean supportsTerrainRoot(int root) {
         GpuDensityGraph graph = terrainGraph;
-        return graph != null && graph.supportsRouterRoot(root);
+        return graph != null && graph.supportsRouterRoot(root) && root >= 0
+                && (verifiedTerrainRootMask & (1 << root)) != 0;
     }
 
-    /** Immutable graph capability snapshot for per-chunk hot-path caches. */
+    /** Immutable, parity-verified root snapshot for per-chunk hot-path caches. */
     static int supportedTerrainRootMask() {
         GpuDensityGraph graph = terrainGraph;
-        return graph == null ? 0 : graph.supportedRouterRootMask();
+        return graph == null ? 0 : graph.supportedRouterRootMask() & verifiedTerrainRootMask;
     }
 
     /**
@@ -517,11 +518,10 @@ public final class GpuTerrainRuntime {
                         root, rootWorst, (int) x[worstIndex], (int) y[worstIndex], (int) z[worstIndex],
                         worstGpu, worstCpu);
             }
-            graphParity = worst < GRAPH_PARITY_EPSILON;
+            boolean parity = worst < GRAPH_PARITY_EPSILON;
             GpuNoise.LOGGER.info("GPU terrain graph parity: {} samples, worstMaxError={}, parity={}",
-                    count, worst, graphParity);
+                    count, worst, parity);
         } catch (Throwable failure) {
-            graphParity = false;
             GpuNoise.LOGGER.warn("GPU terrain graph parity dispatch failed", failure);
         }
     }
@@ -535,7 +535,7 @@ public final class GpuTerrainRuntime {
                 router.lavaNoise(), router.erosion(), router.depth(), router.temperature(),
                 router.vegetation(), router.continents(), router.ridges()};
         if (graph.routerRoots().length != cpu.length) {
-            graphParity = false;
+            verifiedTerrainRootMask = 0;
             GpuNoise.LOGGER.warn("GPU compact terrain graph has {} roots; expected {}", graph.routerRoots().length, cpu.length);
             return;
         }
@@ -546,27 +546,26 @@ public final class GpuTerrainRuntime {
             y[i] = -64.0f + (i / 32 % 16) * 24.0f;
             z[i] = (i / 512) * 8.0f;
         }
-        int supportedRoots = 0;
+        int verifiedRoots = 0;
         try {
             float[] gpu = current.submitGraphRoots(graph, x, y, z);
-            float worst = 0.0f;
             for (int root = 0; root < cpu.length; root++) {
                 if (!graph.supportsRouterRoot(root)) continue;
-                supportedRoots++;
                 float rootWorst = 0.0f;
                 for (int i = 0; i < count; i++) {
                     double expected = cpu[root].compute(new DensityFunction.SinglePointContext((int) x[i], (int) y[i], (int) z[i]));
                     rootWorst = Math.max(rootWorst, Math.abs(gpu[i * cpu.length + root] - (float) expected));
                 }
-                worst = Math.max(worst, rootWorst);
-                GpuNoise.LOGGER.info("GPU compact terrain root {} parity: maxError={}", root, rootWorst);
+                if (rootWorst < GRAPH_PARITY_EPSILON) verifiedRoots |= 1 << root;
+                GpuNoise.LOGGER.info("GPU compact terrain root {} parity: maxError={}, parity={}",
+                        root, rootWorst, rootWorst < GRAPH_PARITY_EPSILON);
             }
-            graphParity = supportedRoots > 0 && worst < GRAPH_PARITY_EPSILON;
+            verifiedTerrainRootMask = verifiedRoots;
             GpuNoise.LOGGER.info("GPU compact terrain graph parity: {} samples, {}/{} roots verified, "
-                            + "worstMaxError={}, parity={}",
-                    count, supportedRoots, cpu.length, worst, graphParity);
+                            + "verifiedMask=0x{}",
+                    count, Integer.bitCount(verifiedRoots), cpu.length, Integer.toHexString(verifiedRoots));
         } catch (Throwable failure) {
-            graphParity = false;
+            verifiedTerrainRootMask = 0;
             GpuNoise.LOGGER.warn("GPU compact terrain graph parity dispatch failed", failure);
         }
     }
@@ -575,7 +574,7 @@ public final class GpuTerrainRuntime {
     static void verifyTerrainGrid(GpuDensityGraph graph, NoiseRouter router, NoiseSettings settings) {
         GpuTerrainRootsBatchScheduler scheduler = terrainRootsScheduler;
         if (scheduler == null) {
-            graphParity = false;
+            verifiedTerrainRootMask = 0;
             return;
         }
         int cellWidth = settings.getCellWidth();
@@ -593,8 +592,8 @@ public final class GpuTerrainRuntime {
                     router.depth(), router.temperature(), router.vegetation(),
                     router.continents(), router.ridges()
             };
-            float worst = 0.0f;
-            int worstRoot = -1, worstX = 0, worstY = 0, worstZ = 0;
+            float[] rootWorst = new float[cpu.length];
+            int[] worstX = new int[cpu.length], worstY = new int[cpu.length], worstZ = new int[cpu.length];
             int supportedRoots = Integer.bitCount(graph.supportedRouterRootMask());
             for (int gy = 0; gy < grid.gridY(); gy++) {
                 for (int gx = 0; gx < grid.gridX(); gx++) {
@@ -607,24 +606,32 @@ public final class GpuTerrainRuntime {
                             if (!graph.supportsRouterRoot(root)) continue;
                             float error = Math.abs(values.valueAt(sample, root)
                                     - (float) cpu[root].compute(new DensityFunction.SinglePointContext(x, y, z)));
-                            if (error > worst) {
-                                worst = error;
-                                worstRoot = root;
-                                worstX = x;
-                                worstY = y;
-                                worstZ = z;
+                            if (error > rootWorst[root]) {
+                                rootWorst[root] = error;
+                                worstX[root] = x;
+                                worstY[root] = y;
+                                worstZ[root] = z;
                             }
                         }
                     }
                 }
             }
-            graphParity = graphParity && supportedRoots > 0 && worst < GRAPH_PARITY_EPSILON;
-            GpuNoise.LOGGER.info("GPU terrain grid parity: {} samples, {}/{} roots verified, "
-                            + "worstMaxError={}, root={}, at ({},{},{}), parity={}",
-                    grid.sampleCount(), supportedRoots, cpu.length, worst, worstRoot,
-                    worstX, worstY, worstZ, graphParity);
+            int gridVerifiedRoots = 0;
+            for (int root = 0; root < cpu.length; root++) {
+                boolean passes = graph.supportsRouterRoot(root)
+                        && rootWorst[root] < GRAPH_PARITY_EPSILON;
+                if (passes) gridVerifiedRoots |= 1 << root;
+                if (graph.supportsRouterRoot(root)) {
+                    GpuNoise.LOGGER.info("GPU terrain grid root {} parity: maxError={}, at ({},{},{}), parity={}",
+                            root, rootWorst[root], worstX[root], worstY[root], worstZ[root], passes);
+                }
+            }
+            verifiedTerrainRootMask &= gridVerifiedRoots;
+            GpuNoise.LOGGER.info("GPU terrain grid parity: {} samples, {}/{} roots verified, verifiedMask=0x{}",
+                    grid.sampleCount(), Integer.bitCount(verifiedTerrainRootMask), supportedRoots,
+                    Integer.toHexString(verifiedTerrainRootMask));
         } catch (Throwable failure) {
-            graphParity = false;
+            verifiedTerrainRootMask = 0;
             GpuNoise.LOGGER.warn("GPU terrain grid parity dispatch failed; terrain remains CPU-owned.", failure);
         }
     }
@@ -679,11 +686,10 @@ public final class GpuTerrainRuntime {
                             names[root], (int) x[maxIndex], (int) y[maxIndex], (int) z[maxIndex], maxGpu, maxCpu);
                 }
             }
-            graphParity = worst < GRAPH_PARITY_EPSILON;
+            boolean parity = worst < GRAPH_PARITY_EPSILON;
             GpuNoise.LOGGER.info("GPU full-density graph test: {} samples, {} nodes, worstMaxError={}, epsilon={}, parity={}",
-                    count, graph.nodes().size(), worst, GRAPH_PARITY_EPSILON, graphParity);
+                    count, graph.nodes().size(), worst, GRAPH_PARITY_EPSILON, parity);
         } catch (Exception failure) {
-            graphParity = false;
             GpuNoise.LOGGER.warn("GPU full-density graph dispatch failed; terrain remains CPU-owned", failure);
         }
     }
@@ -777,7 +783,7 @@ public final class GpuTerrainRuntime {
         fusedChunkScheduler = null;
         terrainRootsScheduler = null;
         terrainProvider = null;
-        graphParity = false;
+        verifiedTerrainRootMask = 0;
         if (globalQueue != null) globalQueue.close();
         globalQueue = null;
         // The ring owns its primary engine. Close it through exactly one
