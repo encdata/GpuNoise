@@ -36,6 +36,16 @@ base {
 // Mojang ships Java 21 to end users in 1.21.1, so mods should target Java 21.
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
+// NeoGradle requires every run configuration to own a source set. The
+// artifact-backed CI server supplies GPU Noise from its mods directory, so
+// give that run an empty module instead of duplicating the main classes.
+sourceSets {
+    artifactServerRun {
+        java.setSrcDirs([])
+        resources.setSrcDirs([])
+    }
+}
+
 //minecraft.accessTransformers.file rootProject.file('src/main/resources/META-INF/accesstransformer.cfg')
 //minecraft.accessTransformers.entry public net.minecraft.client.Minecraft textureManager # textureManager
 
@@ -76,6 +86,8 @@ runs {
         // Do not also load the dev source module, which duplicates packages.
         if (!providers.gradleProperty('gpunoiseRunFromArtifact').isPresent()) {
             modSource project.sourceSets.main
+        } else {
+            modSource project.sourceSets.artifactServerRun
         }
         systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
         // Enable manually for a fresh-coordinate Chunky benchmark; keep normal
