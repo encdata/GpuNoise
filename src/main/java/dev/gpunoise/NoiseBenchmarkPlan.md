@@ -72,7 +72,9 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   output mode by default. Full-block GPU materialization can be selected with
   `GPUNOISE_BENCHMARK_FULL_BLOCK_OUTPUT=true` for diagnostic runs, but its
   additional output transfer must not be mixed into production throughput
-  comparisons. CI builds and tests use Mesa Lavapipe.
+  comparisons. Manual Actions runs can vary the radius, batch window, target,
+  and spatial search radius while keeping push and pull-request defaults fixed.
+  CI builds and tests use Mesa Lavapipe.
 - Two completed CI runs isolate the batch target change at the same 50 ms
   collection window. Target 32 measured median CPU 43.915 CPS and Lavapipe
   30.336 CPS (paired ratio 0.691), with 14.93 chunks per dispatch. Target 64

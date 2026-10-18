@@ -4,6 +4,27 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      chunky_radius_blocks:
+        description: Chunky radius in blocks (minimum 1,600 covers 100 chunks)
+        type: string
+        default: '1600'
+        required: true
+      terrain_batch_window_ms:
+        description: Maximum terrain batch collection window in milliseconds
+        type: string
+        default: '50'
+        required: true
+      terrain_batch_target_chunks:
+        description: Desired chunks in each compatible GPU dispatch
+        type: string
+        default: '96'
+        required: true
+      terrain_batch_region_radius:
+        description: Number of 10 by 10 chunk regions searched in each direction
+        type: string
+        default: '2'
+        required: true
 
 permissions:
   contents: read
@@ -64,8 +85,10 @@ jobs:
 
       - name: Run C2ME Chunky CPU and GPU worldgen benchmark
         env:
-          GPUNOISE_TERRAIN_BATCH_WINDOW_MS: 50
-          GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS: 96
+          GPUNOISE_CHUNKY_RADIUS_BLOCKS: ${{ inputs.chunky_radius_blocks || '1600' }}
+          GPUNOISE_TERRAIN_BATCH_WINDOW_MS: ${{ inputs.terrain_batch_window_ms || '50' }}
+          GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS: ${{ inputs.terrain_batch_target_chunks || '96' }}
+          GPUNOISE_TERRAIN_BATCH_REGION_RADIUS: ${{ inputs.terrain_batch_region_radius || '2' }}
           GPUNOISE_BENCHMARK_FULL_BLOCK_OUTPUT: false
         run: python3 tools/ci/runserver_benchmark.py
 

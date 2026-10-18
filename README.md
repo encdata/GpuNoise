@@ -55,3 +55,5 @@ CI reports each run and the median throughput ratio. The Lavapipe result is a
 correctness and software-overhead check, not a discrete-GPU performance claim.
 Actions downloads and verifies the pinned C2ME and Chunky jars, then uploads
 them as a workflow artifact before either benchmark server starts.
+Manual workflow runs can select the radius, batch window, target size, and
+spatial search radius for controlled follow-up measurements.

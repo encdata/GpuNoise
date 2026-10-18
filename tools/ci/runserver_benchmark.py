@@ -430,6 +430,13 @@ def main() -> int:
     if prepare_only:
         print(f"CI_BENCHMARK_MODS_READY path={downloaded_mods} files={len(MODS)}", flush=True)
         return 0
+    print(
+        f"CI_BENCHMARK_CONFIG radius_blocks={CHUNKY_RADIUS_BLOCKS} "
+        f"repetitions={BENCHMARK_REPETITIONS} batch_window_ms={BATCH_WINDOW_MS} "
+        f"batch_target_chunks={BATCH_TARGET_CHUNKS} "
+        f"batch_region_radius={BATCH_REGION_RADIUS} full_block_output={FULL_BLOCK_OUTPUT}",
+        flush=True,
+    )
     measurements: dict[str, list[tuple[int, float]]] = {"cpu": [], "gpu": []}
     for repetition in range(1, BENCHMARK_REPETITIONS + 1):
         order = ("cpu", "gpu") if repetition % 2 else ("gpu", "cpu")
