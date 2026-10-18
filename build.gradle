@@ -127,19 +127,6 @@ runs {
     }
 }
 
-// Some NeoGradle run providers attach the current project's main source set
-// lazily, independently of the explicit modSource call above. For the
-// artifact-backed benchmark, remove that source set after realizing the run's
-// mod sources so only the packaged release jar supplies GPU Noise classes.
-if (artifactBackedRunServer) {
-    def serverModSources = runs.server.modSources.all().get()
-    if (!serverModSources.values().remove(sourceSets.main)) {
-        logger.lifecycle('Artifact-backed run had no development main source set to remove')
-    } else {
-        logger.lifecycle('Removed development main source set from artifact-backed run')
-    }
-}
-
 // NeoGradle prepares the run directory as part of runServer. That setup can
 // replace its mods directory after the benchmark script stages the release
 // artifact. Re-stage the built jar immediately before JavaExec launches so the

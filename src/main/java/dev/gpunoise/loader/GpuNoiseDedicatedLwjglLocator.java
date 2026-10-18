@@ -44,6 +44,10 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
             return;
         }
 
+        LOGGER.info("Resolved packaged GPU Noise source jar: {}", sourceJar);
+        logGpuNoiseLaunchPaths("jdk.module.path");
+        logGpuNoiseLaunchPaths("java.class.path");
+
         // Early service discovery has already seen sourceJar, which can make
         // the normal mods-folder path appear as a duplicate without adding it
         // as a mod. Register an identical bootstrap copy under a distinct path
@@ -85,6 +89,15 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
                 }
             } catch (Exception failure) {
                 LOGGER.error("Failed to register dedicated-server library {}", libraryName, failure);
+            }
+        }
+    }
+
+    private static void logGpuNoiseLaunchPaths(String property) {
+        String value = System.getProperty(property, "");
+        for (String entry : value.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator))) {
+            if (!entry.isBlank() && entry.toLowerCase(Locale.ROOT).contains("gpunoise")) {
+                LOGGER.info("GPU Noise launch path {}: {}", property, entry);
             }
         }
     }
