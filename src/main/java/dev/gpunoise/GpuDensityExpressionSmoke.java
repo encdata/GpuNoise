@@ -535,7 +535,7 @@ final class GpuDensityExpressionSmoke {
         }
         for (int xValue : new int[]{-17, -3, -1, 0, 1, 3, 17}) {
             double expected = conditionalLoop.compute(new DensityFunction.SinglePointContext(xValue, 0, 0));
-            requireClose(conditionalLoopResult.expression().evaluate(xValue, 0, 0), expected,
+            requireClose(conditionalLoopResult.expression().evaluate(xValue, 0, 0), expected, 1.0e-7,
                     "dynamic branch inside bounded loop at x=" + xValue);
         }
         GpuDensityGraphBuffer.pack(boundedConditionalLoopFixture().graph());
@@ -548,7 +548,7 @@ final class GpuDensityExpressionSmoke {
         }
         for (int xValue : new int[]{-7, -3, -1, 0, 1, 2, 8}) {
             double expected = switchLoop.compute(new DensityFunction.SinglePointContext(xValue, 0, 0));
-            requireClose(switchLoopResult.expression().evaluate(xValue, 0, 0), expected,
+            requireClose(switchLoopResult.expression().evaluate(xValue, 0, 0), expected, 1.0e-7,
                     "dynamic switch inside bounded loop at x=" + xValue);
         }
         GpuDensityGraphBuffer.pack(boundedSwitchLoopFixture().graph());
