@@ -56,6 +56,7 @@ def verify(artifact: Path) -> None:
 
     run_dir = ROOT / "run" / "client-artifact"
     shutil.rmtree(run_dir, ignore_errors=True)
+    run_dir.mkdir(parents=True)
     mod_input_dir = ROOT / "run" / "client-artifact-mod-input"
     shutil.rmtree(mod_input_dir, ignore_errors=True)
     mod_input_dir.mkdir(parents=True)
