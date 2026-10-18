@@ -32,6 +32,13 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
 
     @Override
     public void findCandidates(ILaunchContext context, IDiscoveryPipeline pipeline) {
+        if (Boolean.getBoolean("gpunoise.artifactBackedRun")) {
+            // NeoGradle CI provides a separate early locator from its library
+            // source set; registering a copy here would create a second JPMS
+            // module from the same release jar.
+            LOGGER.debug("Skipping packaged mod re-registration in artifact-backed runServer");
+            return;
+        }
         if (FMLLoader.getDist() != Dist.DEDICATED_SERVER) {
             LOGGER.debug("Skipping embedded LWJGL core on client; Minecraft supplies its own copy");
             return;
@@ -43,10 +50,6 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
             LOGGER.debug("Cannot locate packaged GpuNoise jar; skipping server LWJGL extraction");
             return;
         }
-
-        LOGGER.info("Resolved packaged GPU Noise source jar: {}", sourceJar);
-        logGpuNoiseLaunchPaths("jdk.module.path");
-        logGpuNoiseLaunchPaths("java.class.path");
 
         // Early service discovery has already seen sourceJar, which can make
         // the normal mods-folder path appear as a duplicate without adding it
@@ -89,15 +92,6 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
                 }
             } catch (Exception failure) {
                 LOGGER.error("Failed to register dedicated-server library {}", libraryName, failure);
-            }
-        }
-    }
-
-    private static void logGpuNoiseLaunchPaths(String property) {
-        String value = System.getProperty(property, "");
-        for (String entry : value.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator))) {
-            if (!entry.isBlank() && entry.toLowerCase(Locale.ROOT).contains("gpunoise")) {
-                LOGGER.info("GPU Noise launch path {}: {}", property, entry);
             }
         }
     }
