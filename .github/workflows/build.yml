@@ -71,16 +71,16 @@ jobs:
           grep -Eqi 'llvmpipe|lavapipe' /tmp/vulkan-summary.txt
 
       - name: Build with Gradle
-        run: ./gradlew --no-daemon build jarJarVulkanOnly
+        run: ./gradlew --no-daemon build
 
-      - name: Verify Vulkan mod artifact
-        run: python3 tools/ci/verify_vulkan_artifact.py build/libs/*-all-vulkan.jar
+      - name: Verify single mod artifact
+        run: python3 tools/ci/verify_mod_artifact.py build/libs/*-all.jar
 
-      - name: Upload Vulkan mod before worldgen benchmark
+      - name: Upload mod before worldgen benchmark
         uses: actions/upload-artifact@v4
         with:
-          name: gpunoise-all-vulkan-${{ github.sha }}
-          path: build/libs/*-all-vulkan.jar
+          name: gpunoise-mod-${{ github.sha }}
+          path: build/libs/*-all.jar
           if-no-files-found: error
 
       - name: Download and verify benchmark mods
@@ -102,13 +102,12 @@ jobs:
           GPUNOISE_BENCHMARK_FULL_BLOCK_OUTPUT: false
         run: python3 tools/ci/runserver_benchmark.py
 
-      - name: Upload mod artifact
+      - name: Upload benchmark results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gpunoise-${{ github.sha }}
+          name: gpunoise-ci-results-${{ github.sha }}
           path: |
-            build/libs/*.jar
             build/reports/ci/*.log
             hs_err_pid*.log
           if-no-files-found: warn

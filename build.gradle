@@ -135,16 +135,16 @@ dependencies {
     // frontend. Directly declaring it avoids relying on NeoForge/Mixin's
     // transitive implementation details.
     implementation 'org.ow2.asm:asm-tree:9.7.1'
-    // Vulkan Java bindings for the dedicated-server compute backend. These are
-    // bundled in the legacy -all artifact for standalone servers.
+    // Vulkan Java bindings for the terrain compute backend. Bundle Vulkan and
+    // its core dependency in the one artifact for dedicated servers too.
     jarJar(implementation("org.lwjgl:lwjgl-vulkan:${lwjgl_version}")) {
         version {
             strictly "[${lwjgl_version},3.3.4)"
             prefer lwjgl_version
         }
     }
-    // lwjgl-vulkan depends on LWJGL core. Keep this in the legacy -all jar;
-    // clients should use the slim jar or the Vulkan-only variant below.
+    // lwjgl-vulkan depends on LWJGL core. Minecraft 1.21.1 uses the same
+    // pinned version, so the -all artifact can serve clients and servers.
     jarJar(implementation("org.lwjgl:lwjgl:${lwjgl_version}")) {
         version {
             strictly "[${lwjgl_version},3.3.4)"
@@ -199,42 +199,6 @@ tasks.named('jarJar') {
         include 'windows/**'
         include 'linux/**'
         include 'macos/**'
-    }
-}
-
-// Client/integrated-server variant: retain the Vulkan binding, but omit the
-// LWJGL core jar already supplied by Minecraft. The normal -all jar remains
-// the legacy dedicated-server artifact containing both libraries.
-tasks.register('jarJarVulkanOnly', Jar) {
-    dependsOn tasks.named('jarJar')
-    archiveClassifier = 'all-vulkan'
-
-    from({ zipTree(tasks.named('jarJar').get().archiveFile) }) {
-        exclude 'META-INF/jarjar/lwjgl-3.3.3.jar'
-        exclude 'META-INF/jarjar/metadata.json'
-    }
-
-    def metadataFile = layout.buildDirectory.file('generated/vulkanOnly/META-INF/jarjar/metadata.json')
-    into('META-INF/jarjar') {
-        from(metadataFile)
-    }
-    doFirst {
-        def output = metadataFile.get().asFile
-        output.parentFile.mkdirs()
-        output.text = '''{
-  "jars": [
-    {
-      "identifier": {"group": "org.lwjgl", "artifact": "lwjgl-vulkan"},
-      "version": {
-        "range": "[3.3.3,3.3.4)",
-        "artifactVersion": "3.3.3"
-      },
-      "path": "META-INF/jarjar/lwjgl-vulkan-3.3.3.jar",
-      "isObfuscated": false
-    }
-  ]
-}
-'''
     }
 }
 

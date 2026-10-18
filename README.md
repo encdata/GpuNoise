@@ -62,14 +62,21 @@ interpolation, surface rules, carvers, structures, and features. Moving those
 stages to the GPU requires separate semantics-preserving passes; GPU Noise does
 not claim full chunk generation is GPU-only yet.
 
+## Mod jar
+
+Use the single `gpunoise-*-all.jar` artifact from GitHub Actions for both
+client/integrated-server and dedicated-server installs. It contains the pinned
+LWJGL core and Vulkan Java libraries, plus the supported native payloads. The
+LWJGL core version is pinned to the version used by Minecraft 1.21.1.
+
 ## CI and benchmarks
 
-GitHub Actions builds the mod, compiles GLSL with `glslc`, runs a Vulkan smoke
-dispatch on Mesa Lavapipe, and starts three fresh same-seed pairs of NeoForge
-dedicated servers with C2ME and Chunky. CPU/GPU order alternates between pairs;
-CI reports each run and the median throughput ratio. The Lavapipe result is a
-correctness and software-overhead check, not a discrete-GPU performance claim.
-Actions downloads and verifies the pinned C2ME and Chunky jars, then uploads
-them as a workflow artifact before either benchmark server starts.
+GitHub Actions builds and validates the single mod jar, compiles GLSL with
+`glslc`, runs a Vulkan smoke dispatch on Mesa Lavapipe, and starts three fresh
+same-seed pairs of NeoForge dedicated servers with C2ME and Chunky. CPU/GPU
+order alternates between pairs; CI reports each run and the median throughput
+ratio. The Lavapipe result is a correctness and software-overhead check, not a
+discrete-GPU performance claim. Actions uploads the mod jar and the pinned
+C2ME/Chunky jars before either benchmark server starts.
 Manual workflow runs can select the radius, batch window, target size, and
 spatial search radius for controlled follow-up measurements.
