@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove NeoForge discovers the release jar from a normal client mods folder."""
+"""Prove NeoForge loads the release jar in an isolated client run."""
 
 from __future__ import annotations
 
@@ -56,9 +56,10 @@ def verify(artifact: Path) -> None:
 
     run_dir = ROOT / "run" / "client-artifact"
     shutil.rmtree(run_dir, ignore_errors=True)
-    mods_dir = run_dir / "mods"
-    mods_dir.mkdir(parents=True)
-    shutil.copy2(artifact, mods_dir / artifact.name)
+    mod_input_dir = ROOT / "run" / "client-artifact-mod-input"
+    shutil.rmtree(mod_input_dir, ignore_errors=True)
+    mod_input_dir.mkdir(parents=True)
+    shutil.copy2(artifact, mod_input_dir / artifact.name)
     (run_dir / "options.txt").write_text("fullscreen:false\n", encoding="utf-8")
 
     log_path = ROOT / "build" / "reports" / "ci" / "client-artifact-discovery.log"
@@ -69,7 +70,7 @@ def verify(artifact: Path) -> None:
         "-PgpunoiseRunDir=run/client-artifact",
     ]
     print(
-        "Starting isolated NeoForge client with only the exact release artifact in its mods folder: "
+        "Starting isolated NeoForge client with one copy of the exact release artifact: "
         + " ".join(command),
         flush=True,
     )
@@ -131,7 +132,7 @@ def verify(artifact: Path) -> None:
 
         if found_mod and constructed_mod:
             print(
-                "CLIENT_ARTIFACT_LOAD_OK: NeoForge discovered the jar from mods/ and ran GPU Noise's @Mod constructor.",
+                "CLIENT_ARTIFACT_LOAD_OK: NeoForge loaded the release jar and ran GPU Noise's @Mod constructor.",
                 flush=True,
             )
             return

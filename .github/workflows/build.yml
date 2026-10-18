@@ -83,7 +83,7 @@ jobs:
           path: build/libs/*-all.jar
           if-no-files-found: error
 
-      - name: Verify release jar loads from a client mods folder
+      - name: Verify release jar loads in isolated client
         run: xvfb-run --auto-servernum python3 tools/ci/verify_client_artifact.py
 
       - name: Download and verify benchmark mods

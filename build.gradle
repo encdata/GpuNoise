@@ -84,7 +84,7 @@ runs {
             modSource project.sourceSets.artifactClientRun
             dependencies {
                 runtime files(project.file(
-                        "run/client-artifact/mods/${mod_id}-${version}-all.jar"))
+                        "run/client-artifact-mod-input/${mod_id}-${version}-all.jar"))
             }
         } else {
             modSource project.sourceSets.main
