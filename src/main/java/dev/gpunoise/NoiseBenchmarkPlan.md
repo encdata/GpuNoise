@@ -184,9 +184,11 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
 - Terrain profiling now reports Java fallback evaluations per router root in
   addition to whole-chunk fallback counts. This distinguishes intentional
   root-level CPU fallback in mixed modded graphs from GPU cache failures and
-  makes partial GPU coverage visible in Actions benchmark artifacts. Root
-  labels are shared with parity and unsupported-root logs through
-  `GpuTerrainRoots`, avoiding a second handwritten mapping in runtime code.
+  makes partial GPU coverage visible in Actions benchmark artifacts. It also
+  reports successful GPU cache lookups per root as `gpu/java` counts, so a
+  fallback count has a useful per-root denominator. Root labels are shared
+  with parity and unsupported-root logs through `GpuTerrainRoots`, avoiding a
+  second handwritten mapping in runtime code.
 
 ## Work passes
 

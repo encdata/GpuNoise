@@ -28,6 +28,7 @@ public final class GpuTerrainProfiler {
     private static final LongAdder climateSamples = new LongAdder();
     private static final LongAdder aquiferSamples = new LongAdder();
     private static final LongAdder blockWriteSamples = new LongAdder();
+    private static final LongAdder[] gpuRootCalls = createRootFallbackCounters();
     private static final LongAdder[] javaRootFallbackCalls = createRootFallbackCounters();
     private static final AtomicLong firstFillStartNanos = new AtomicLong();
     private static final AtomicLong latestFillEndNanos = new AtomicLong();
@@ -57,7 +58,10 @@ public final class GpuTerrainProfiler {
     }
 
     public static void recordGpuFinalDensity() {
-        if (ENABLED) gpuFinalDensityCalls.increment();
+        if (ENABLED) {
+            gpuFinalDensityCalls.increment();
+            gpuRootCalls[GpuTerrainRoots.FINAL_DENSITY].increment();
+        }
     }
 
     /** Counts Java root evaluations after a chunk cache could not supply that root. */
@@ -75,14 +79,19 @@ public final class GpuTerrainProfiler {
     }
 
     public static void recordGpuFinalDensity(long start) {
+        recordGpuRoot(GpuTerrainRoots.FINAL_DENSITY);
         recordTimed(gpuFinalDensityCalls, finalDensityNanos, finalDensitySamples, start);
     }
 
     public static void recordGpuInitialDensity() {
-        if (ENABLED) gpuInitialDensityCalls.increment();
+        if (ENABLED) {
+            gpuInitialDensityCalls.increment();
+            gpuRootCalls[GpuTerrainRoots.INITIAL_DENSITY].increment();
+        }
     }
 
     public static void recordGpuInitialDensity(long start) {
+        recordGpuRoot(GpuTerrainRoots.INITIAL_DENSITY);
         recordTimed(gpuInitialDensityCalls, initialDensityNanos, initialDensitySamples, start);
     }
 
@@ -90,7 +99,8 @@ public final class GpuTerrainProfiler {
         if (ENABLED) gpuClimateCalls.increment();
     }
 
-    public static void recordGpuClimate(long start) {
+    public static void recordGpuClimate(int root, long start) {
+        recordGpuRoot(root);
         recordTimed(gpuClimateCalls, climateNanos, climateSamples, start);
     }
 
@@ -98,7 +108,8 @@ public final class GpuTerrainProfiler {
         if (ENABLED) aquiferCalls.increment();
     }
 
-    public static void recordAquifer(long start) {
+    public static void recordAquifer(int root, long start) {
+        recordGpuRoot(root);
         recordTimed(aquiferCalls, aquiferNanos, aquiferSamples, start);
     }
 
@@ -119,6 +130,10 @@ public final class GpuTerrainProfiler {
         }
     }
 
+    private static void recordGpuRoot(int root) {
+        if (ENABLED && root >= 0 && root < gpuRootCalls.length) gpuRootCalls[root].increment();
+    }
+
     private static void logSnapshot(long completed) {
         long totalNanos = fillNanos.sum();
         long wallNanos = Math.max(1L, latestFillEndNanos.get() - firstFillStartNanos.get());
@@ -133,6 +148,7 @@ public final class GpuTerrainProfiler {
                 aquiferCalls.sum(), aquiferSamples.sum(), averageNanos(aquiferNanos, aquiferSamples),
                 blockWrites.sum(), blockWriteSamples.sum(), averageNanos(blockWriteNanos, blockWriteSamples));
         GpuNoise.LOGGER.info("GPU terrain Java root fallback calls: {}", formatRootFallbacks());
+        GpuNoise.LOGGER.info("GPU terrain per-root cache calls: {}", formatRootCalls());
     }
 
     private static LongAdder[] createRootFallbackCounters() {
@@ -146,6 +162,17 @@ public final class GpuTerrainProfiler {
         for (int root = 0; root < javaRootFallbackCalls.length; root++) {
             if (root > 0) counts.append(',');
             counts.append(GpuTerrainRoots.name(root)).append('=').append(javaRootFallbackCalls[root].sum());
+        }
+        return counts.toString();
+    }
+
+    private static String formatRootCalls() {
+        StringBuilder counts = new StringBuilder();
+        for (int root = 0; root < gpuRootCalls.length; root++) {
+            if (root > 0) counts.append(',');
+            counts.append(GpuTerrainRoots.name(root)).append('=')
+                    .append(gpuRootCalls[root].sum()).append('/')
+                    .append(javaRootFallbackCalls[root].sum());
         }
         return counts.toString();
     }

@@ -88,7 +88,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner {
                     default -> Double.NaN;
                 };
                 if (!Double.isNaN(gpu)) {
-                    GpuTerrainProfiler.recordAquifer(lookupStart);
+                    GpuTerrainProfiler.recordAquifer(root, lookupStart);
                     GpuTerrainRuntime.markGpuCacheUsed(cache);
                     return gpu;
                 }

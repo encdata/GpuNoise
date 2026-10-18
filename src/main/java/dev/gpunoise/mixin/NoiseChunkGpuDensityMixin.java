@@ -225,7 +225,7 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
                 long lookupStart = GpuTerrainProfiler.beginPhase();
                 double value = activeCache.climate(context.blockX(), context.blockY(), context.blockZ(), root);
                 if (!Double.isNaN(value)) {
-                    GpuTerrainProfiler.recordGpuClimate(lookupStart);
+                    GpuTerrainProfiler.recordGpuClimate(root, lookupStart);
                     GpuTerrainRuntime.markGpuCacheUsed(activeCache);
                     return value;
                 }
