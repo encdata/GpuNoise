@@ -23,7 +23,17 @@ final class CodeSourcePathResolver {
             location = location.substring(location.indexOf(':') + 1);
         }
 
-        URI uri = URI.create(location);
+        URI uri;
+        try {
+            uri = URI.create(location);
+        } catch (IllegalArgumentException malformedUri) {
+            // A plain filesystem path may contain spaces that a URL would
+            // encode. In that case let Path.toUri perform the escaping.
+            if (location.startsWith("/")) {
+                return Paths.get(location).toAbsolutePath().normalize().toUri();
+            }
+            throw malformedUri;
+        }
         if ("file".equalsIgnoreCase(uri.getScheme())) {
             String rawPath = uri.getRawPath();
             // ModLauncher can report a Windows drive path as union:/C:/... .
@@ -39,6 +49,13 @@ final class CodeSourcePathResolver {
         }
 
         if (uri.getScheme() == null && isSlashPrefixedWindowsDrive(location)) {
+            return URI.create("file://" + location);
+        }
+        if (uri.getScheme() == null && location.startsWith("/")) {
+            // ModLauncher also emits union:/Users/... on macOS and Linux.
+            // Keeping it as a file URI decodes URL escapes such as %20 when
+            // Paths.get consumes it; Paths.get(rawString) would treat %20 as
+            // literal filename characters and fail while staging the jar.
             return URI.create("file://" + location);
         }
         if (uri.getScheme() == null) {
