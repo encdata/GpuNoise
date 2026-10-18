@@ -43,8 +43,7 @@ sourceSets {
     }
 }
 def artifactBackedRunServer = providers.gradleProperty('gpunoiseRunFromArtifact').isPresent()
-def releaseArtifactDirectory = layout.buildDirectory.dir('libs')
-def releaseArtifactPath = releaseArtifactDirectory.file("${mod_id}-${version}-all.jar")
+def releaseArtifactPath = layout.buildDirectory.file("libs/${mod_id}-${version}-all.jar")
 
 //minecraft.accessTransformers.file rootProject.file('src/main/resources/META-INF/accesstransformer.cfg')
 //minecraft.accessTransformers.entry public net.minecraft.client.Minecraft textureManager # textureManager
