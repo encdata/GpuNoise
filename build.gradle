@@ -111,6 +111,10 @@ runs {
         systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
     }
 
+    junit {
+        modSource project.sourceSets.main
+    }
+
     data {
         modSource project.sourceSets.main
         // example of overriding the workingDirectory set in configureEach above, uncomment if you want to use it
