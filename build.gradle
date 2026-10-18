@@ -146,6 +146,9 @@ configurations {
     artifactServerRunImplementation.extendsFrom implementation
     artifactServerRunRuntimeOnly.extendsFrom runtimeOnly
     artifactServerRunCompileOnly.extendsFrom compileOnly
+    artifactClientRunImplementation.extendsFrom implementation
+    artifactClientRunRuntimeOnly.extendsFrom runtimeOnly
+    artifactClientRunCompileOnly.extendsFrom compileOnly
     lwjglNatives
     serverLwjglCore
 }

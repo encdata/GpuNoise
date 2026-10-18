@@ -123,6 +123,12 @@ def verify(artifact: Path) -> None:
             if found_mod and constructed_mod:
                 break
 
+        if finished_output and process.poll() is None:
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+
         if found_mod and constructed_mod:
             print(
                 "CLIENT_ARTIFACT_LOAD_OK: NeoForge discovered the jar from mods/ and ran GPU Noise's @Mod constructor.",
