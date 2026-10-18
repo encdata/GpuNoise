@@ -71,7 +71,7 @@ jobs:
           grep -Eqi 'llvmpipe|lavapipe' /tmp/vulkan-summary.txt
 
       - name: Build with Gradle
-        run: ./gradlew --no-daemon build
+        run: ./gradlew --no-daemon build jarJarVulkanOnly
 
       - name: Upload Vulkan mod before worldgen benchmark
         uses: actions/upload-artifact@v4
