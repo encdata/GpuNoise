@@ -159,6 +159,15 @@ def prepare_run_directory(run_dir: Path, downloaded_mods: Path) -> None:
     mods_dir.mkdir(parents=True, exist_ok=True)
     for filename in MODS:
         shutil.copy2(downloaded_mods / filename, mods_dir / filename)
+    # runServer's dev source set is not listed in the mod discovery output on
+    # this NeoGradle version. Put the exact artifact being released into the
+    # isolated benchmark instance so the workload exercises GPU Noise itself.
+    project_jars = sorted((ROOT / "build" / "libs").glob("*-all.jar"))
+    if len(project_jars) != 1:
+        raise RuntimeError(
+            f"Expected exactly one *-all.jar mod artifact in build/libs, found {len(project_jars)}"
+        )
+    shutil.copy2(project_jars[0], mods_dir / project_jars[0].name)
     (run_dir / "eula.txt").write_text("eula=true\n", encoding="utf-8")
     properties = {
         "level-name": "world",
@@ -174,6 +183,8 @@ def prepare_run_directory(run_dir: Path, downloaded_mods: Path) -> None:
     (run_dir / "server.properties").write_text(
         "".join(f"{key}={value}\n" for key, value in properties.items()), encoding="utf-8"
     )
+    mod_names = ", ".join(sorted(path.name for path in mods_dir.glob("*.jar")))
+    print(f"Prepared benchmark mods: {mod_names}", flush=True)
 
 
 def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
