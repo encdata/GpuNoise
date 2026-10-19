@@ -36,11 +36,14 @@ public final class VulkanCiSmoke {
         verifyTerrainParityRules();
         GpuDensityExpressionSmoke.verify();
         verifyTranslatorRegistry();
-        GpuDevice device = GpuProbe.findPreferredDevice(GpuNoiseConfig.GpuVendorPreference.AUTO);
-        if (device == null) throw new IllegalStateException("No Vulkan compute device found");
-        if (!VulkanComputeProbe.verify(device)) {
-            throw new IllegalStateException("Vulkan compute queue probe failed on " + device.name());
+        GpuDevice device = null;
+        for (GpuDevice candidate : GpuProbe.findPreferredDevices(GpuNoiseConfig.GpuVendorPreference.AUTO)) {
+            if (VulkanComputeProbe.verify(candidate)) {
+                device = candidate;
+                break;
+            }
         }
+        if (device == null) throw new IllegalStateException("No Vulkan compute device passed initialization");
 
         // Supply an already-lowered one-node IR directly. This smoke test
         // exercises Vulkan shader dispatch without booting NeoForge registries.

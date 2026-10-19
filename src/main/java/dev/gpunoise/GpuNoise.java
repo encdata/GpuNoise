@@ -91,14 +91,24 @@ public final class GpuNoise {
             LOGGER.info("GPU Noise inactive: Vulkan/LWJGL bindings are not available; vanilla terrain remains unchanged.");
             return;
         }
-        GpuDevice device = GpuProbe.findPreferredDevice(preference);
-        if (device == null) {
+        var candidates = GpuProbe.findPreferredDevices(preference);
+        if (candidates.isEmpty()) {
             LOGGER.info("GPU Noise inactive: no supported server GPU detected; vanilla terrain remains unchanged.");
             return;
         }
-
-        if (!VulkanComputeProbe.verify(device)) {
-            LOGGER.info("GPU Noise inactive: selected GPU cannot create a Vulkan compute queue; vanilla terrain remains unchanged.");
+        GpuDevice device = null;
+        for (int index = 0; index < candidates.size(); index++) {
+            GpuDevice candidate = candidates.get(index);
+            if (VulkanComputeProbe.verify(candidate)) {
+                device = candidate;
+                if (index > 0) LOGGER.info("Preferred Vulkan device was unavailable; falling back to {} ({}).",
+                        candidate.name(), candidate.vendorName());
+                break;
+            }
+            LOGGER.warn("Vulkan compute setup failed on {}; trying the next supported device.", candidate.name());
+        }
+        if (device == null) {
+            LOGGER.info("GPU Noise inactive: no discovered GPU could create a Vulkan compute device; vanilla terrain remains unchanged.");
             return;
         }
 
@@ -129,7 +139,7 @@ public final class GpuNoise {
                 LOGGER.info("GPU density graph discovered: {} nodes, {} router roots, {} noise samplers; packed {} bytes for GPU lowering.",
                         fullGraph.nodes().size(), fullGraph.routerRootCount(), fullGraph.noises().size(),
                         packedGraph.nodes().capacity());
-                if (VulkanComputeProbe.supportsFloat64(device)) {
+                if (device.shaderFloat64()) {
                     VulkanBootstrapThread.callUnchecked(() -> {
                         GpuTerrainRuntime.verifyGraph(fullGraph, router);
                         return null;
