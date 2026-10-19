@@ -21,6 +21,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private static final boolean GPU_TIMING_ENABLED = Boolean.getBoolean("gpunoise.profileTerrain");
     static final int CAPACITY = 262_144;
     static final int GRAPH_NODE_CAPACITY = 2048;
+    /** Full per-block roots dominate output traffic; allow larger spatial batches without unbounded growth. */
+    private static final int INTERPOLATION_OUTPUT_MIB = (int) Math.max(16L,
+            Math.min(64L, Long.getLong("gpunoise.terrainOutputBufferMiB", 32L)));
     private static final int GRAPH_NODE_STORAGE_CAPACITY = GRAPH_NODE_CAPACITY * 2;
     private static final long AQUIFER_INPUT_BYTES = Math.max(
             GpuAquiferNearestThree.MAX_PACKED_BYTES,
@@ -29,8 +32,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             (long) GpuAquiferNearestThree.MAX_QUERIES * GpuAquiferNearestThree.OUTPUT_INTS,
             (long) GpuAquiferSubstance.MAX_QUERIES * GpuAquiferSubstance.OUTPUT_INTS)
             * Integer.BYTES;
-    // interpolationOutput stores the compact per-block final-density output.
-    static final int INTERPOLATION_OUTPUT_FLOATS = CAPACITY * 16;
+    // interpolationOutput stores the interleaved per-block terrain roots.
+    static final int INTERPOLATION_OUTPUT_FLOATS = INTERPOLATION_OUTPUT_MIB * 1024 * 1024 / Float.BYTES;
     private static final int MAX_INTERPOLATORS = 16;
     private static final int MAX_GRAPH_OUTPUTS = 32;
     private static final int[] GRAPH_DESCRIPTOR_BINDINGS = {0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14};
@@ -126,7 +129,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
             interpolatedInputs = deviceLocalBuffer((long) INTERPOLATED_INPUT_FLOATS * Float.BYTES, stack);
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
-            interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack); interpolationOutput = buffer((long) CAPACITY * 16L * Float.BYTES, stack);
+            interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack);
+            interpolationOutput = buffer((long) INTERPOLATION_OUTPUT_FLOATS * Float.BYTES, stack);
             aquiferPressureInputs = hostVisibleBuffer((long) CAPACITY * GpuAquiferPressure.RECORD_BYTES, stack);
             aquiferNearestInputs = hostVisibleBuffer(AQUIFER_INPUT_BYTES, stack);
             aquiferNearestOutput = buffer(AQUIFER_OUTPUT_BYTES, stack);
@@ -195,7 +199,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
             interpolatedInputs = deviceLocalBuffer((long) INTERPOLATED_INPUT_FLOATS * Float.BYTES, stack);
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
-            interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack); interpolationOutput = buffer((long) CAPACITY * 16L * Float.BYTES, stack);
+            interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack);
+            interpolationOutput = buffer((long) INTERPOLATION_OUTPUT_FLOATS * Float.BYTES, stack);
             aquiferPressureInputs = hostVisibleBuffer((long) CAPACITY * GpuAquiferPressure.RECORD_BYTES, stack);
             aquiferNearestInputs = hostVisibleBuffer(AQUIFER_INPUT_BYTES, stack);
             aquiferNearestOutput = buffer(AQUIFER_OUTPUT_BYTES, stack);

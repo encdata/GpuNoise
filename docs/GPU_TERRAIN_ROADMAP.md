@@ -136,7 +136,10 @@ parity checks.
   data. The single Vulkan device slot also has one aquifer decision-table
   producer at a time, preventing parallel worldgen workers from allocating
   duplicate chunk-sized decision and candidate buffers while all requests wait
-  for that same slot.
+  for that same slot. Full per-block output's mapped Vulkan buffer now defaults
+  to 32 MiB (tunable from 16–64 MiB with `gpunoise.terrainOutputBufferMiB`),
+  raising the dispatch ceiling above the previous three full-height chunks;
+  the effective capacity is logged at startup.
   An opt-in `gpunoise.fastMath` shader variant rounds generic density add,
   subtract, multiply, and divide through FP32 while keeping the default
   FP64 path intact. CI runs the full Vulkan parity fixtures and terrain-grid
