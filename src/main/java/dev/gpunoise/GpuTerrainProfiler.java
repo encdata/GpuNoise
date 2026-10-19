@@ -16,6 +16,9 @@ public final class GpuTerrainProfiler {
     private static final LongAdder gpuInitialDensityCalls = new LongAdder();
     private static final LongAdder gpuClimateCalls = new LongAdder();
     private static final LongAdder aquiferCalls = new LongAdder();
+    private static final LongAdder aquiferDecisionBuildCalls = new LongAdder();
+    private static final LongAdder aquiferDecisionBuildNanos = new LongAdder();
+    private static final LongAdder aquiferDecisionBuildSamples = new LongAdder();
     private static final LongAdder blockWrites = new LongAdder();
     private static final LongAdder finalDensityNanos = new LongAdder();
     private static final LongAdder initialDensityNanos = new LongAdder();
@@ -107,6 +110,16 @@ public final class GpuTerrainProfiler {
         recordTimed(aquiferCalls, aquiferNanos, aquiferSamples, start);
     }
 
+    /** Records the sampled cost of assembling and submitting one chunk's aquifer decision table. */
+    public static void recordAquiferDecisionBuild(long start) {
+        if (!ENABLED) return;
+        aquiferDecisionBuildCalls.increment();
+        if (start != 0L) {
+            aquiferDecisionBuildNanos.add(Math.max(0L, System.nanoTime() - start));
+            aquiferDecisionBuildSamples.increment();
+        }
+    }
+
     public static void recordBlockWrite() {
         if (ENABLED) blockWrites.increment();
     }
@@ -139,6 +152,9 @@ public final class GpuTerrainProfiler {
                 gpuClimateCalls.sum(), climateSamples.sum(), averageNanos(climateNanos, climateSamples),
                 aquiferCalls.sum(), aquiferSamples.sum(), averageNanos(aquiferNanos, aquiferSamples),
                 blockWrites.sum(), blockWriteSamples.sum(), averageNanos(blockWriteNanos, blockWriteSamples));
+        GpuNoise.LOGGER.info("GPU terrain aquifer decision preparation: calls={}, sampled={} avgNs={}",
+                aquiferDecisionBuildCalls.sum(), aquiferDecisionBuildSamples.sum(),
+                averageNanos(aquiferDecisionBuildNanos, aquiferDecisionBuildSamples));
         GpuNoise.LOGGER.info("GPU terrain Java root fallback calls: {}", formatRootFallbacks());
         GpuNoise.LOGGER.info("GPU terrain per-root cache calls: {}", formatRootCalls());
     }

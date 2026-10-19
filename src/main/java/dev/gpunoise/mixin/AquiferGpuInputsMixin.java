@@ -136,6 +136,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             return;
         }
         boolean acquired = false;
+        long decisionBuildStart = GpuTerrainProfiler.beginPhase();
         try {
             gpunoise$aquiferDecisionSlots.acquire();
             acquired = true;
@@ -151,6 +152,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             }
         } finally {
             if (acquired) gpunoise$aquiferDecisionSlots.release();
+            GpuTerrainProfiler.recordAquiferDecisionBuild(decisionBuildStart);
         }
     }
 
