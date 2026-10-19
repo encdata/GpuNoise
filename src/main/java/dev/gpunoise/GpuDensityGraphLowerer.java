@@ -103,6 +103,14 @@ final class GpuDensityGraphLowerer {
             splineRemap[splineIndex] = splines.size();
             splines.add(new GpuDensityGraph.Spline(remap[spline.coordinateNode()], spline.locations(), spline.derivatives(), values));
         }
+        // Constant folding and selector elimination can make nodes dead after
+        // the initial source-graph pruning pass. Compact again while treating
+        // spline coordinates and control-point values as additional roots.
+        CompactedGraph compacted = compactOptimizedGraph(nodes, sourceFunctions, roots, splines);
+        nodes = compacted.nodes();
+        sourceFunctions = compacted.sourceFunctions();
+        roots = compacted.roots();
+        splines = compacted.splines();
         // Root pruning can remove spline tables that appeared earlier in the
         // source graph. Rewrite each surviving Spline instruction's table ID
         // alongside the compacted spline-point array.
@@ -202,6 +210,84 @@ final class GpuDensityGraphLowerer {
         return Double.isFinite(precise) && Double.isFinite(fast)
                 && (double) (float) precise == precise
                 && Double.doubleToRawLongBits(precise) == Double.doubleToRawLongBits(fast);
+    }
+
+    private record CompactedGraph(List<GpuDensityGraph.Node> nodes,
+                                  List<net.minecraft.world.level.levelgen.DensityFunction> sourceFunctions,
+                                  int[] roots, List<GpuDensityGraph.Spline> splines) {}
+
+    private static CompactedGraph compactOptimizedGraph(List<GpuDensityGraph.Node> inputNodes,
+            List<net.minecraft.world.level.levelgen.DensityFunction> inputSources,
+            int[] inputRoots, List<GpuDensityGraph.Spline> inputSplines) {
+        int size = inputNodes.size();
+        boolean[] visited = new boolean[size];
+        boolean[] active = new boolean[size];
+        int[] order = new int[size];
+        int[] stack = new int[size];
+        int[] nextChild = new int[size];
+        int ordered = 0;
+        for (int startIndex = 0; startIndex < inputRoots.length + inputSplines.size() * 65; startIndex++) {
+            int start;
+            if (startIndex < inputRoots.length) {
+                start = inputRoots[startIndex];
+            } else {
+                int splineOffset = startIndex - inputRoots.length;
+                GpuDensityGraph.Spline spline = inputSplines.get(splineOffset / 65);
+                int point = splineOffset % 65;
+                int[] values = spline.valueNodes();
+                if (point == 0) start = spline.coordinateNode();
+                else if (point <= values.length) start = values[point - 1];
+                else continue;
+            }
+            if (visited[start]) continue;
+            int depth = 0;
+            stack[depth] = start;
+            nextChild[depth] = 0;
+            active[start] = true;
+            while (depth >= 0) {
+                int current = stack[depth];
+                int[] children = inputNodes.get(current).children();
+                if (nextChild[depth] < children.length) {
+                    int child = children[nextChild[depth]++];
+                    if (active[child]) {
+                        throw new IllegalArgumentException("optimized GPU density graph contains a cycle at node " + child);
+                    }
+                    if (!visited[child]) {
+                        depth++;
+                        stack[depth] = child;
+                        nextChild[depth] = 0;
+                        active[child] = true;
+                    }
+                } else {
+                    active[current] = false;
+                    visited[current] = true;
+                    order[ordered++] = current;
+                    depth--;
+                }
+            }
+        }
+        int[] remap = new int[size];
+        for (int index = 0; index < ordered; index++) remap[order[index]] = index;
+        List<GpuDensityGraph.Node> compactNodes = new ArrayList<>(ordered);
+        List<net.minecraft.world.level.levelgen.DensityFunction> compactSources = new ArrayList<>(ordered);
+        for (int index = 0; index < ordered; index++) {
+            int old = order[index];
+            GpuDensityGraph.Node node = inputNodes.get(old);
+            int[] children = node.children();
+            for (int child = 0; child < children.length; child++) children[child] = remap[children[child]];
+            compactNodes.add(new GpuDensityGraph.Node(node.opcode(), children, node.constants(), node.payload()));
+            compactSources.add(inputSources.get(old));
+        }
+        int[] compactRoots = inputRoots.clone();
+        for (int root = 0; root < compactRoots.length; root++) compactRoots[root] = remap[compactRoots[root]];
+        List<GpuDensityGraph.Spline> compactSplines = new ArrayList<>(inputSplines.size());
+        for (GpuDensityGraph.Spline spline : inputSplines) {
+            int[] values = spline.valueNodes();
+            for (int value = 0; value < values.length; value++) values[value] = remap[values[value]];
+            compactSplines.add(new GpuDensityGraph.Spline(remap[spline.coordinateNode()],
+                    spline.locations(), spline.derivatives(), values));
+        }
+        return new CompactedGraph(compactNodes, compactSources, compactRoots, compactSplines);
     }
 
     private static NodeKey nodeKey(String opcode, int[] children, double[] constants, String payload) {
