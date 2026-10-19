@@ -243,11 +243,13 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
         command.append(f"-Dgpunoise.terrainBatchRegionRadius={BATCH_REGION_RADIUS}")
     print(f"Starting {mode} dedicated Chunky worldgen check (full_block_output={FULL_BLOCK_OUTPUT})", flush=True)
     process_env = os.environ.copy()
-    c2me_override = (
+    jvm_overrides = [
         "-Dc2me.base.config.override.vanillaWorldGenOptimizations.optimizeAquifer=false"
-    )
+    ]
+    if not force_cpu:
+        jvm_overrides.append("-Dgpunoise.exactAquiferInputs=true")
     process_env["JAVA_TOOL_OPTIONS"] = " ".join(
-        value for value in (process_env.get("JAVA_TOOL_OPTIONS", ""), c2me_override) if value
+        value for value in (process_env.get("JAVA_TOOL_OPTIONS", ""), *jvm_overrides) if value
     )
     process = subprocess.Popen(
         command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -360,6 +362,9 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
             )
             if not gpu_counts:
                 raise RuntimeError("GPU server completed without reporting terrain cache state")
+            if ("GPU aquifer inputs use exact Java roots; Vulkan center selection and substance decisions "
+                    "remain enabled" not in run_log):
+                raise RuntimeError("GPU aquifer decisions did not use the exact Java input roots required for world parity")
             if max(counts[2] for counts in gpu_counts) <= 0:
                 if not c2me_java_fallback:
                     raise RuntimeError("GPU benchmark completed without any GPU terrain cache being consumed")

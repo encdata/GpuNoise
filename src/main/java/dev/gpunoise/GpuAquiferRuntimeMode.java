@@ -7,6 +7,7 @@ public final class GpuAquiferRuntimeMode {
     private static final String C2ME_CONFIG =
             "com.ishland.c2me.opts.worldgen.vanilla.common.Config";
     private static volatile Boolean c2meAquiferRewrite;
+    private static final boolean EXACT_AQUIFER_INPUTS = Boolean.getBoolean("gpunoise.exactAquiferInputs");
 
     private GpuAquiferRuntimeMode() {}
 
@@ -24,6 +25,11 @@ public final class GpuAquiferRuntimeMode {
             c2meAquiferRewrite = cached = detectC2meAquiferRewrite();
         }
         return cached;
+    }
+
+    /** Keeps discrete aquifer inputs on Java when exact parity is requested. */
+    public static boolean exactAquiferInputsEnabled() {
+        return EXACT_AQUIFER_INPUTS;
     }
 
     private static boolean detectC2meAquiferRewrite() {

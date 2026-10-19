@@ -76,6 +76,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private static final AtomicBoolean gpunoise$aquiferPreflightLogged = new AtomicBoolean();
 
     @org.spongepowered.asm.mixin.Unique
+    private static final AtomicBoolean gpunoise$exactAquiferInputsLogged = new AtomicBoolean();
+
+    @org.spongepowered.asm.mixin.Unique
     private static final boolean gpunoise$verifyAquifer = Boolean.getBoolean("gpunoise.verifyAquiferGpu");
 
     @Invoker("getAquiferStatus")
@@ -192,7 +195,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                 : GpuAquiferNearestThree.centersForQuery(randomFactory, new int[]{x, y, z});
                         neighborhoods.put(key, centers);
                     }
-                    double barrier = cache.aquiferBarrier(x, y, z);
+                    double barrier = GpuAquiferRuntimeMode.exactAquiferInputsEnabled()
+                            ? barrierNoise.compute(new DensityFunction.SinglePointContext(x, y, z))
+                            : cache.aquiferBarrier(x, y, z);
                     if (!Double.isFinite(barrier)) continue;
                     boolean belowIsLava = globalFluidPicker.computeFluid(x, y - 1, z)
                             .at(y - 1).is(Blocks.LAVA);
@@ -418,7 +423,13 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         // FluidStatus preparation is part of C2ME's rewritten aquifer
         // algorithm. Feed it the same Java values as the CPU reference until
         // the GPU roots can satisfy exact decision parity at this boundary.
-        if (GpuAquiferRuntimeMode.c2meAquiferRewriteEnabled()) {
+        if (GpuAquiferRuntimeMode.c2meAquiferRewriteEnabled()
+                || GpuAquiferRuntimeMode.exactAquiferInputsEnabled()) {
+            if (GpuAquiferRuntimeMode.exactAquiferInputsEnabled()
+                    && gpunoise$exactAquiferInputsLogged.compareAndSet(false, true)) {
+                dev.gpunoise.GpuNoise.LOGGER.info(
+                        "GPU aquifer inputs use exact Java roots; Vulkan center selection and substance decisions remain enabled");
+            }
             return vanillaFunction.compute(context);
         }
         if (noiseChunk instanceof GpuNoiseChunkAccess gpuNoiseChunk) {
