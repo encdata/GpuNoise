@@ -1128,7 +1128,7 @@ public final class VulkanCiSmoke {
                         new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(
                                 x, origin[1], origin[2]));
                 float expectedFloat = (float) expected;
-                if (GpuTerrainParity.error(actual[localX], expectedFloat) > 0.005f) {
+                if (GpuTerrainParity.decisionError(actual[localX], expectedFloat) > 0.005f) {
                     throw new IllegalStateException("double-coordinate NormalNoise parity mismatch at ("
                             + x + ", " + origin[1] + ", " + origin[2] + "): expected "
                             + expected + ", got " + actual[localX]);
