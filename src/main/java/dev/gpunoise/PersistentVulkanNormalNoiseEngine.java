@@ -984,13 +984,19 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         if (combinedBytes > AQUIFER_INPUT_BYTES)
             throw new IllegalArgumentException("combined aquifer input exceeds GPU capacity");
 
-        ByteBuffer combined = ByteBuffer.allocateDirect(Math.toIntExact(combinedBytes))
-                .order(ByteOrder.nativeOrder());
-        combined.put(nearestRecords.duplicate());
-        while (combined.position() < statusByteOffset) combined.put((byte) 0);
-        combined.put(statusRecords.duplicate()).flip();
+        ByteBuffer input = persistentMappings.get(aquiferNearestInputs);
+        if (input == null) {
+            input = ByteBuffer.allocateDirect(Math.toIntExact(combinedBytes))
+                    .order(ByteOrder.nativeOrder());
+        } else {
+            input.clear();
+        }
+        input.put(nearestRecords.duplicate());
+        while (input.position() < statusByteOffset) input.put((byte) 0);
+        input.put(statusRecords.duplicate()).flip();
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            put(aquiferNearestInputs, combined, stack);
+            if (persistentMappings.get(aquiferNearestInputs) == null)
+                put(aquiferNearestInputs, input, stack);
             check(vkResetCommandBuffer(commandBuffer, 0), "reset combined aquifer command buffer");
             check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()),
                     "begin combined aquifer command buffer");
