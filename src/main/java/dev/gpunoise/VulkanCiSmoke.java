@@ -648,6 +648,23 @@ public final class VulkanCiSmoke {
             }
             if (neighborhoodCache.get(Integer.MIN_VALUE, 0, Integer.MAX_VALUE) != null)
                 throw new IllegalStateException("Aquifer primitive neighborhood cache returned a false match");
+            GpuAquiferDecisionData.FluidStatusCache fluidStatusCache =
+                    new GpuAquiferDecisionData.FluidStatusCache(1);
+            net.minecraft.world.level.levelgen.Aquifer.FluidStatus[] cachedStatuses =
+                    new net.minecraft.world.level.levelgen.Aquifer.FluidStatus[128];
+            long[] cachedPositions = new long[cachedStatuses.length];
+            for (int i = 0; i < cachedStatuses.length; i++) {
+                cachedPositions[i] = i * 0x9E3779B97F4A7C15L;
+                cachedStatuses[i] = new net.minecraft.world.level.levelgen.Aquifer.FluidStatus(
+                        i - 64, net.minecraft.world.level.block.Blocks.WATER.defaultBlockState());
+                fluidStatusCache.put(cachedPositions[i], cachedStatuses[i]);
+            }
+            for (int i = 0; i < cachedStatuses.length; i++) {
+                if (fluidStatusCache.get(cachedPositions[i]) != cachedStatuses[i])
+                    throw new IllegalStateException("Aquifer fluid status cache lost an entry during growth");
+            }
+            if (fluidStatusCache.get(Long.MIN_VALUE) != null)
+                throw new IllegalStateException("Aquifer fluid status cache returned a false match");
             // Four equal-distance centers pin vanilla's inclusive tie order
             // across all three nearest slots.
             centers[0][0] = new int[]{queries[0][0] + 1, queries[0][1], queries[0][2]};
