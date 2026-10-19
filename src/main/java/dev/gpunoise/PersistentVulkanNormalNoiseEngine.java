@@ -219,7 +219,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         if (xs.length != ys.length || xs.length != zs.length || xs.length > CAPACITY) throw new IllegalArgumentException("invalid GPU sample batch");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             GpuGlobalNoiseBatch batch = new GpuGlobalNoiseBatch();
-            for (int i = 0; i < xs.length; i++) batch.add(new GpuGlobalNoiseBatch.Sample(data, xs[i], ys[i], zs[i]));
+            if (!batch.addAll(data, xs, ys, zs)) throw new IllegalArgumentException("invalid GPU sample batch");
             return submit(batch.pack(), stack);
         }
     }

@@ -72,9 +72,8 @@ final class GpuGlobalSamplerQueue implements AutoCloseable {
                 for (int r = 0; r < requests.size(); r++) {
                     Pending request = requests.get(r);
                     offsets[r] = batch.size();
-                    for (int i = 0; i < request.x.length; i++) {
-                        batch.add(new GpuGlobalNoiseBatch.Sample(request.sampler, request.x[i], request.y[i], request.z[i]));
-                    }
+                    if (!batch.addAll(request.sampler, request.x, request.y, request.z))
+                        throw new IllegalStateException("GPU noise batch exceeded sample capacity");
                 }
                 ring.submitNoise(batch.pack()).whenComplete((output, failure) -> {
                     if (failure != null) {

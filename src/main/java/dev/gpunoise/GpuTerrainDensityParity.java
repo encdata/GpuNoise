@@ -19,6 +19,7 @@ public final class GpuTerrainDensityParity {
     private static final DoubleAccumulator MAX_ABS_ERROR = new DoubleAccumulator(Math::max, 0.0);
     private static final AtomicReference<String> FIRST_SIGN_MISMATCH = new AtomicReference<>();
     private static final AtomicReference<String> FIRST_NEAR_ZERO = new AtomicReference<>();
+    private static final AtomicReference<ErrorSample> MAX_ERROR_SAMPLE = new AtomicReference<>();
     private static final AtomicBoolean LOGGED_DISABLED = new AtomicBoolean();
 
     private GpuTerrainDensityParity() {}
@@ -39,7 +40,9 @@ public final class GpuTerrainDensityParity {
         if (Double.doubleToLongBits(cpu) != Double.doubleToLongBits(gpu)) {
             EXACT_MISMATCHES.incrementAndGet();
             if (Double.isFinite(cpu) && Double.isFinite(gpu)) {
-                MAX_ABS_ERROR.accumulate(Math.abs(cpu - gpu));
+                double error = Math.abs(cpu - gpu);
+                MAX_ABS_ERROR.accumulate(error);
+                recordMaxError(x, y, z, cpu, gpu, error);
             }
         }
         if ((cpu > 0.0) != (gpu > 0.0)) {
@@ -69,12 +72,22 @@ public final class GpuTerrainDensityParity {
         GpuNoise.LOGGER.info(
                 "GPU terrain density differential: chunks={}, lastChunk=({},{}), samples={}, "
                         + "exactMismatches={}, signMismatches={}, unsafeSignMismatches={}, "
-                        + "nearZeroSamples={}, maxAbsError={}, "
+                        + "nearZeroSamples={}, maxAbsError={}, maxErrorAt={}, "
                         + "firstSignMismatch={}, firstNearZero={}",
                 chunks, chunkX, chunkZ, SAMPLES.get(), EXACT_MISMATCHES.get(), SIGN_MISMATCHES.get(),
                 UNSAFE_SIGN_MISMATCHES.get(),
                 NEAR_ZERO_SAMPLES.get(), MAX_ABS_ERROR.get(),
+                MAX_ERROR_SAMPLE.get() == null ? "none" : MAX_ERROR_SAMPLE.get().description(),
                 valueOrNone(FIRST_SIGN_MISMATCH.get()), valueOrNone(FIRST_NEAR_ZERO.get()));
+    }
+
+    private static void recordMaxError(int x, int y, int z, double cpu, double gpu, double error) {
+        ErrorSample candidate = new ErrorSample(error, describe(x, y, z, cpu, gpu));
+        ErrorSample previous = MAX_ERROR_SAMPLE.get();
+        while ((previous == null || error > previous.absoluteError())
+                && !MAX_ERROR_SAMPLE.compareAndSet(previous, candidate)) {
+            previous = MAX_ERROR_SAMPLE.get();
+        }
     }
 
     private static String describe(int x, int y, int z, double cpu, double gpu) {
@@ -84,4 +97,6 @@ public final class GpuTerrainDensityParity {
     private static String valueOrNone(String value) {
         return value == null ? "none" : value;
     }
+
+    private record ErrorSample(double absoluteError, String description) {}
 }
