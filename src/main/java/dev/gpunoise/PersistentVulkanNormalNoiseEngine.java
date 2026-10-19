@@ -524,6 +524,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 || (long) blockCount * markerCount > INTERPOLATED_INPUT_FLOATS
                 || (long) blockCount * outputRoots * Float.BYTES > interpolationOutput.size)
             throw new IllegalArgumentException("grid interpolation batch exceeds GPU capacity");
+        long preparationStarted = System.nanoTime();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
             ByteBuffer grids = gridMetadata.duplicate().order(ByteOrder.nativeOrder());
@@ -547,6 +548,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             ByteBuffer graphPush = stack.malloc(16).order(ByteOrder.nativeOrder())
                     .putInt(sampleCount).putInt(packed.nodeCount()).putInt(rootCount).putInt(samplesPerChunk).flip();
             vkCmdPushConstants(commandBuffer, graphPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, graphPush);
+            beginGpuTimestamp();
             vkCmdDispatch(commandBuffer, (sampleCount + 63) / 64, 1, 1);
             VkBufferMemoryBarrier.Buffer graphBarrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
                     .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT)
@@ -578,6 +580,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     .putInt(0x8000_0000 | markerCount).flip();
             vkCmdPushConstants(commandBuffer, graphPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, blockPush);
             vkCmdDispatch(commandBuffer, (blockCount + 63) / 64, 1, 1);
+            endGpuTimestamp();
             VkBufferMemoryBarrier.Buffer resultBarrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
                     .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
                     .buffer(results.buffer).size((long) sampleCount * cornerStride * Float.BYTES);
@@ -600,7 +603,11 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default()
                         .pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit grid interpolation");
             }
+            long submittedAt = System.nanoTime();
             check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait grid interpolation");
+            long submitToFenceNanos = System.nanoTime() - submittedAt;
+            long gpuCommandNanos = readGpuTimestamp(stack);
+            long readbackStarted = System.nanoTime();
             check(vkResetFences(device, fence), "reset grid interpolation fence");
             float[] corners = readRootResults(sampleCount, rootCount, cornerStride, stack);
             FloatBuffer blockValues = persistentMappings.get(interpolationOutput).duplicate()
@@ -609,6 +616,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             blockValues.limit(blockCount * outputRoots);
             float[] blocks = new float[blockCount * outputRoots];
             blockValues.get(blocks);
+            recordGraphFenceDuration(submittedAt - preparationStarted, submitToFenceNanos,
+                    gpuCommandNanos, System.nanoTime() - readbackStarted);
             return new GpuTerrainBatchResult(new GpuTerrainRootsResult(corners, 0, corners.length,
                     rootCount),
                     new GpuTerrainBlockResult(blocks, 0, blockCount, outputRoots,
