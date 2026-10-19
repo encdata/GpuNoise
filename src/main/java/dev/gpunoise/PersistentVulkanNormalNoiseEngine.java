@@ -590,7 +590,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipelineLayout, 0,
                     stack.longs(graphDescriptorSet), null);
             ByteBuffer blockPush = stack.malloc(16).order(ByteOrder.nativeOrder())
-                    .putInt(blockCount).putInt(packed.nodeCount()).putInt(outputRoots).putInt(1).flip();
+                    .putInt(blockCount).putInt(packed.nodeCount()).putInt(outputRoots)
+                    .putInt(0x8000_0000 | markerCount).flip();
             vkCmdPushConstants(commandBuffer, graphPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, blockPush);
             vkCmdDispatch(commandBuffer, (blockCount + 63) / 64, 1, 1);
             VkBufferMemoryBarrier.Buffer resultBarrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()

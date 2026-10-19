@@ -61,6 +61,7 @@ final class GpuDensityGraphBuffer {
         }
         ByteBuffer output = ByteBuffer.allocateDirect(Math.multiplyExact(graph.nodes().size(), NODE_BYTES))
                 .order(ByteOrder.nativeOrder());
+        int interpolationSlot = 0;
         for (GpuDensityGraph.Node node : graph.nodes()) {
             Integer opcode = OPCODES.get(node.opcode());
             if (opcode == null) throw new IllegalArgumentException("No GPU opcode for " + node.opcode());
@@ -70,7 +71,11 @@ final class GpuDensityGraphBuffer {
                     .putInt(children.length > 1 ? children[1] : -1)
                     .putInt(children.length > 2 ? children[2] : -1);
             for (int i = 0; i < 4; i++) output.putFloat(i < constants.length ? (float) constants[i] : 0.0f);
-            output.putInt(operation(node.payload())).putInt(children.length).putInt(constants.length).putInt(node.register());
+            int metadataZ = constants.length;
+            if (node.opcode().equals("Marker")) {
+                metadataZ = "Interpolated".equals(node.payload()) ? interpolationSlot++ : -1;
+            }
+            output.putInt(operation(node.payload())).putInt(children.length).putInt(metadataZ).putInt(node.register());
         }
         ByteBuffer splinePoints = ByteBuffer.allocateDirect(graph.splines().size() * 64 * 16).order(ByteOrder.nativeOrder());
         for (int splineIndex = 0; splineIndex < graph.splines().size(); splineIndex++) {
