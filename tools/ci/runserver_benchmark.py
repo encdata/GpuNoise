@@ -290,6 +290,7 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
     started = time.monotonic()
     chunky_started: float | None = None
     chunky_start_requested = False
+    server_ready_seen = False
     completed: re.Match[str] | None = None
     gpu_counts: list[tuple[int, int, int, int]] = []
     try:
@@ -310,7 +311,7 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
             if event is None:
                 break
             line, observed_at = event
-            if not chunky_start_requested and SERVER_READY.search(line):
+            if not server_ready_seen and SERVER_READY.search(line):
                 server_log = log_path.read_text(encoding="utf-8", errors="replace")
                 if C2ME_AQUIFER_OVERRIDE not in server_log:
                     raise RuntimeError(
@@ -333,6 +334,14 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                             f"terrain profile {terrain_profile} reached ready state without discovering: "
                             + ", ".join(missing_mods)
                         )
+                server_ready_seen = True
+            # The optional Vulkan smoke runs synchronously on the server thread
+            # after the ready line. RCON connections can be accepted while it
+            # runs, but command responses block until it finishes. Wait for its
+            # completion marker before starting Chunky so the RCON handshake
+            # does not expire against a busy server thread.
+            smoke_ready = not run_vulkan_smoke or "GPU_NOISE_VULKAN_SMOKE_PASSED" in line
+            if server_ready_seen and not chunky_start_requested and smoke_ready:
                 chunky_started = start_chunky_with_rcon()
                 chunky_start_requested = True
             if chunky_started is None and TASK_STARTED.search(line):
