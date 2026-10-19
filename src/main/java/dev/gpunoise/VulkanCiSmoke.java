@@ -1014,6 +1014,18 @@ public final class VulkanCiSmoke {
                 || GpuAquiferStatusRegionCache.get(otherGraph, fluidPicker, position) != expected) {
             throw new IllegalStateException("aquifer region cache could not isolate a disabled graph/picker pair");
         }
+        GpuAquiferStatusRegionCache.putSurface(graph, fluidPicker, -64, 112, 73);
+        GpuAquiferStatusRegionCache.putSurface(otherGraph, fluidPicker, -64, 112, 75);
+        if (GpuAquiferStatusRegionCache.getSurface(graph, fluidPicker, -64, 112) != 73
+                || GpuAquiferStatusRegionCache.getSurface(otherGraph, fluidPicker, -64, 112) != 75
+                || GpuAquiferStatusRegionCache.getSurface(graph, new Object(), -64, 112)
+                        != Integer.MIN_VALUE
+                || !GpuAquiferStatusRegionCache.disableSurface(graph, fluidPicker)
+                || GpuAquiferStatusRegionCache.getSurface(graph, fluidPicker, -64, 112)
+                        != Integer.MIN_VALUE
+                || GpuAquiferStatusRegionCache.getSurface(otherGraph, fluidPicker, -64, 112) != 75) {
+            throw new IllegalStateException("aquifer region surface cache failed identity or invalidation checks");
+        }
         GpuAquiferStatusRegionCache.clear();
         if (GpuAquiferStatusRegionCache.get(graph, fluidPicker, position) != null) {
             throw new IllegalStateException("aquifer region cache clear retained a fluid status");

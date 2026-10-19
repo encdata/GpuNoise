@@ -617,9 +617,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             for (int sample = 0; sample < offsets.length; sample++) {
                 int surfaceX = Math.floorDiv(centerX + (offsets[sample][0] << 4), 4) * 4;
                 int surfaceZ = Math.floorDiv(centerZ + (offsets[sample][1] << 4), 4) * 4;
-                surfaces[sample] = noiseChunk instanceof GpuNoiseChunkAccess access
-                        ? access.gpunoise$preliminarySurfaceLevel(surfaceX, surfaceZ)
-                        : Float.NaN;
+                surfaces[sample] = gpunoise$sharedSurfaceLevel(
+                        graphIdentity, surfaceX, surfaceZ);
                 int surfaceY = (int) Math.floor(surfaces[sample]) + 8;
                 Aquifer.FluidStatus sampled = gpunoise$sampleGlobalFluidLevel(
                         fluidLevelSampler, cache, surfaceY);
@@ -733,6 +732,28 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     BlockPos.of(position), cached, reference);
         }
         return reference;
+    }
+
+    @org.spongepowered.asm.mixin.Unique
+    private float gpunoise$sharedSurfaceLevel(Object graphIdentity, int blockX, int blockZ) {
+        int cached = GpuAquiferStatusRegionCache.getSurface(
+                graphIdentity, globalFluidPicker, blockX, blockZ);
+        GpuTerrainProfiler.recordAquiferRegionSurfaceCache(cached != Integer.MIN_VALUE);
+        if (cached != Integer.MIN_VALUE) {
+            if (!gpunoise$verifyAquifer || !(noiseChunk instanceof GpuNoiseChunkAccess access)) return cached;
+            int reference = access.gpunoise$preliminarySurfaceLevel(blockX, blockZ);
+            if (cached == reference) return cached;
+            if (GpuAquiferStatusRegionCache.disableSurface(graphIdentity, globalFluidPicker)) {
+                dev.gpunoise.GpuNoise.LOGGER.warn(
+                        "Shared GPU aquifer surface cache failed parity at ({}, {}); disabling it for this terrain graph and fluid picker. Cached={}, Java={}",
+                        blockX, blockZ, cached, reference);
+            }
+            return reference;
+        }
+        if (!(noiseChunk instanceof GpuNoiseChunkAccess access)) return Float.NaN;
+        int surface = access.gpunoise$preliminarySurfaceLevel(blockX, blockZ);
+        GpuAquiferStatusRegionCache.putSurface(graphIdentity, globalFluidPicker, blockX, blockZ, surface);
+        return surface;
     }
 
     @org.spongepowered.asm.mixin.Unique
