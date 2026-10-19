@@ -11,6 +11,8 @@ public final class GpuAquiferFluidStatus {
     /** One global fluid sample per C2ME OCL surface offset. */
     public static final int GLOBAL_LEVEL_SAMPLES = SURFACE_SAMPLES;
     public static final int RECORD_BYTES = 192;
+    /** Upper bound for a single C2ME chunk's unique center neighborhood. */
+    public static final int MAX_PREFILL_CENTERS = 8192;
     public static final int OUTPUT_INTS = 3;
     public static final int MAX_QUERIES = PersistentVulkanNormalNoiseEngine.CAPACITY;
     public static final int AIR = 0;

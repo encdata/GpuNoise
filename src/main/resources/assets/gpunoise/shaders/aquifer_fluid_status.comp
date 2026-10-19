@@ -20,7 +20,7 @@ struct InputRecord {
 
 layout(std430, set = 0, binding = 0) readonly buffer Inputs { InputRecord items[]; };
 layout(std430, set = 0, binding = 1) writeonly buffer Outputs { int values[]; };
-layout(push_constant) uniform Parameters { uint count; };
+layout(push_constant) uniform Parameters { uint count; uint baseRecord; uint outputBaseInt; };
 
 const uint AIR = 0u;
 const uint LAVA = 2u;
@@ -34,7 +34,7 @@ float clampValue(float value, float low, float high) {
 }
 
 void emit(uint row, int level, int source, uint flags) {
-    uint base = row * 3u;
+    uint base = outputBaseInt + row * 3u;
     values[base] = level;
     values[base + 1u] = source;
     values[base + 2u] = int(flags);
@@ -45,7 +45,7 @@ void fallback(uint row) { emit(row, 0, 0, FLAG_CPU_FALLBACK); }
 void main() {
     uint row = gl_GlobalInvocationID.x;
     if (row >= count) return;
-    InputRecord r = items[row];
+    InputRecord r = items[baseRecord + row];
     if (isnan(r.floodedness) || isinf(r.floodedness)
             || isnan(r.spread) || isinf(r.spread)
             || isnan(r.lava) || isinf(r.lava)

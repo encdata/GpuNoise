@@ -10,6 +10,7 @@ import dev.gpunoise.GpuAquiferNearestThree;
 import dev.gpunoise.GpuAquiferRuntimeMode;
 import dev.gpunoise.GpuAquiferSubstance;
 import dev.gpunoise.GpuAquiferFluidStatus;
+import dev.gpunoise.GpuAquiferPrefillResult;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQueries;
 import dev.gpunoise.GpuAquiferDecisionData.FluidStatusCache;
 import dev.gpunoise.GpuAquiferDecisionData.NeighborhoodCache;
@@ -359,16 +360,24 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         // resolving block decisions. Mirror that bulk prefill: evaluate the
         // 13 surface probes, global fluid samples, and terrain roots together
         // on Vulkan, then retain the original Java statuses for custom fluids.
-        if (c2meAquifer && queries.size() > 0) {
-            gpunoise$prefillC2meFluidStatuses(cache, queries, fluidStatuses,
-                    c2meGlobalFluidLevels);
-        }
-
         List<CompletableFuture<int[]>> nearestBatches = new ArrayList<>();
-        for (int offset = 0; offset < queries.size(); offset += GpuAquiferNearestThree.MAX_QUERIES) {
-            int count = Math.min(GpuAquiferNearestThree.MAX_QUERIES, queries.size() - offset);
-            nearestBatches.add(GpuTerrainRuntime.submitAquiferNearestThree(
-                    GpuAquiferNearestThree.pack(queries, offset, count), count).toCompletableFuture());
+        boolean combineAquiferPasses = c2meAquifer && queries.size() > 0
+                && queries.size() <= GpuAquiferNearestThree.MAX_QUERIES;
+        if (combineAquiferPasses) {
+            java.nio.ByteBuffer nearestRecords = GpuAquiferNearestThree.pack(queries, 0, queries.size());
+            int[] rows = gpunoise$prefillC2meFluidStatuses(cache, queries, fluidStatuses,
+                    c2meGlobalFluidLevels, nearestRecords, queries.size());
+            nearestBatches.add(CompletableFuture.completedFuture(rows));
+        } else {
+            if (c2meAquifer && queries.size() > 0) {
+                gpunoise$prefillC2meFluidStatuses(cache, queries, fluidStatuses,
+                        c2meGlobalFluidLevels, null, 0);
+            }
+            for (int offset = 0; offset < queries.size(); offset += GpuAquiferNearestThree.MAX_QUERIES) {
+                int count = Math.min(GpuAquiferNearestThree.MAX_QUERIES, queries.size() - offset);
+                nearestBatches.add(GpuTerrainRuntime.submitAquiferNearestThree(
+                        GpuAquiferNearestThree.pack(queries, offset, count), count).toCompletableFuture());
+            }
         }
         CompletableFuture.allOf(nearestBatches.toArray(CompletableFuture[]::new)).join();
 
@@ -553,10 +562,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     }
 
     @org.spongepowered.asm.mixin.Unique
-    private void gpunoise$prefillC2meFluidStatuses(GpuChunkDensityCache cache,
+    private int[] gpunoise$prefillC2meFluidStatuses(GpuChunkDensityCache cache,
                                                     AquiferQueries queries,
                                                     FluidStatusCache statusCache,
-                                                    Map<Integer, Aquifer.FluidStatus> fluidLevelSampler) {
+                                                    Map<Integer, Aquifer.FluidStatus> fluidLevelSampler,
+                                                    java.nio.ByteBuffer nearestRecords,
+                                                    int nearestCount) {
         long prefillStart = GpuTerrainProfiler.beginPhase();
         int javaFallbacks = 0;
         int[][] offsets = {
@@ -617,8 +628,20 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     surfaces, globalLevels, globalKinds);
             sampledStatuses[index] = samples;
         }
-        int[] outputs = GpuTerrainRuntime.submitAquiferFluidStatus(
-                GpuAquiferFluidStatus.pack(inputs), inputs.length).toCompletableFuture().join();
+        java.nio.ByteBuffer statusRecords = GpuAquiferFluidStatus.pack(inputs);
+        GpuAquiferPrefillResult combined = nearestRecords != null
+                && inputs.length <= GpuAquiferFluidStatus.MAX_PREFILL_CENTERS
+                ? GpuTerrainRuntime.submitAquiferPrefill(nearestRecords, nearestCount,
+                        statusRecords, inputs.length).toCompletableFuture().join()
+                : null;
+        int[] nearestRows = combined == null && nearestRecords != null
+                ? GpuTerrainRuntime.submitAquiferNearestThree(nearestRecords, nearestCount)
+                        .toCompletableFuture().join()
+                : combined == null ? null : combined.nearestRows();
+        int[] outputs = combined == null
+                ? GpuTerrainRuntime.submitAquiferFluidStatus(statusRecords, inputs.length)
+                        .toCompletableFuture().join()
+                : combined.fluidStatusRows();
         for (int index = 0; index < centers.size(); index++) {
             int[] center = centers.get(index);
             long key = BlockPos.asLong(center[0], center[1], center[2]);
@@ -646,6 +669,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             statusCache.put(key, status);
         }
         GpuTerrainProfiler.recordAquiferStatusPrefill(prefillStart, centers.size(), javaFallbacks);
+        return nearestRows;
     }
 
     @org.spongepowered.asm.mixin.Unique

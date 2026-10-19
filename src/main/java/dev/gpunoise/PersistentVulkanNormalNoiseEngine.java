@@ -26,11 +26,13 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             Math.min(64L, Long.getLong("gpunoise.terrainOutputBufferMiB", 32L)));
     private static final int GRAPH_NODE_STORAGE_CAPACITY = GRAPH_NODE_CAPACITY * 2;
     private static final long AQUIFER_INPUT_BYTES = Math.max(
-            GpuAquiferNearestThree.MAX_PACKED_BYTES,
+            GpuAquiferNearestThree.MAX_PACKED_BYTES
+                    + (long) GpuAquiferFluidStatus.MAX_PREFILL_CENTERS * GpuAquiferFluidStatus.RECORD_BYTES,
             (long) GpuAquiferSubstance.MAX_QUERIES * GpuAquiferSubstance.RECORD_BYTES);
-    private static final long AQUIFER_OUTPUT_BYTES = Math.max(
+    private static final long AQUIFER_OUTPUT_BYTES = (Math.max(
             (long) GpuAquiferNearestThree.MAX_QUERIES * GpuAquiferNearestThree.OUTPUT_INTS,
             (long) GpuAquiferSubstance.MAX_QUERIES * GpuAquiferSubstance.OUTPUT_INTS)
+            + (long) GpuAquiferFluidStatus.MAX_PREFILL_CENTERS * GpuAquiferFluidStatus.OUTPUT_INTS)
             * Integer.BYTES;
     // interpolationOutput stores the interleaved per-block terrain roots.
     static final int INTERPOLATION_OUTPUT_FLOATS = INTERPOLATION_OUTPUT_MIB * 1024 * 1024 / Float.BYTES;
@@ -172,7 +174,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             aquiferSubstancePipelineLayout = aquiferSubstancePipelineLayout(stack);
             aquiferSubstancePipeline = aquiferSubstancePipeline(stack);
             aquiferFluidStatusShader = loadShader(stack, "/assets/gpunoise/shaders/aquifer_fluid_status.comp.spv", "aquifer fluid-status shader");
-            aquiferFluidStatusPipelineLayout = aquiferSubstancePipelineLayout(stack);
+            aquiferFluidStatusPipelineLayout = aquiferFluidStatusPipelineLayout(stack);
             aquiferFluidStatusPipeline = aquiferPipeline(aquiferFluidStatusShader, aquiferFluidStatusPipelineLayout, stack, "aquifer fluid-status pipeline");
             mapPersistentBuffers(stack);
             put(graphMthSinTable, GpuDensityGraphBuffer.mthSinTableBytes(), stack);
@@ -247,7 +249,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             aquiferSubstancePipelineLayout = aquiferSubstancePipelineLayout(stack);
             aquiferSubstancePipeline = aquiferSubstancePipeline(stack);
             aquiferFluidStatusShader = loadShader(stack, "/assets/gpunoise/shaders/aquifer_fluid_status.comp.spv", "aquifer fluid-status shader");
-            aquiferFluidStatusPipelineLayout = aquiferSubstancePipelineLayout(stack);
+            aquiferFluidStatusPipelineLayout = aquiferFluidStatusPipelineLayout(stack);
             aquiferFluidStatusPipeline = aquiferPipeline(aquiferFluidStatusShader, aquiferFluidStatusPipelineLayout, stack, "aquifer fluid-status pipeline");
             mapPersistentBuffers(stack);
             put(graphMthSinTable, GpuDensityGraphBuffer.mthSinTableBytes(), stack);
@@ -934,8 +936,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin aquifer fluid-status command buffer");
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, aquiferFluidStatusPipeline);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                    aquiferSubstancePipelineLayout, 0, stack.longs(aquiferNearestDescriptorSet), null);
-            ByteBuffer push = stack.malloc(4).order(ByteOrder.nativeOrder()).putInt(count).flip();
+                    aquiferFluidStatusPipelineLayout, 0, stack.longs(aquiferNearestDescriptorSet), null);
+            ByteBuffer push = stack.malloc(12).order(ByteOrder.nativeOrder())
+                    .putInt(count).putInt(0).putInt(0).flip();
             vkCmdPushConstants(commandBuffer, aquiferFluidStatusPipelineLayout,
                     VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
             vkCmdDispatch(commandBuffer, (count + 63) / 64, 1, 1);
@@ -959,6 +962,83 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             int[] output = new int[count * GpuAquiferFluidStatus.OUTPUT_INTS];
             values.get(output);
             return output;
+        }
+    }
+
+    /** Runs nearest-center ranking and C2ME center-status prefill in one submission and fence wait. */
+    synchronized GpuAquiferPrefillResult submitAquiferPrefill(ByteBuffer nearestRecords, int nearestCount,
+                                                               ByteBuffer statusRecords, int statusCount)
+            throws Exception {
+        if (!GpuAquiferNearestThree.isValidPacked(nearestRecords, nearestCount)
+                || statusCount <= 0 || statusCount > GpuAquiferFluidStatus.MAX_PREFILL_CENTERS
+                || statusRecords.remaining() != statusCount * GpuAquiferFluidStatus.RECORD_BYTES)
+            throw new IllegalArgumentException("invalid combined aquifer prefill batch");
+        int nearestBytes = nearestRecords.remaining();
+        int statusByteOffset = Math.multiplyExact(
+                (nearestBytes + GpuAquiferFluidStatus.RECORD_BYTES - 1)
+                        / GpuAquiferFluidStatus.RECORD_BYTES,
+                GpuAquiferFluidStatus.RECORD_BYTES);
+        int baseRecord = statusByteOffset / GpuAquiferFluidStatus.RECORD_BYTES;
+        long combinedBytes = (long) statusByteOffset
+                + (long) statusCount * GpuAquiferFluidStatus.RECORD_BYTES;
+        if (combinedBytes > AQUIFER_INPUT_BYTES)
+            throw new IllegalArgumentException("combined aquifer input exceeds GPU capacity");
+
+        ByteBuffer combined = ByteBuffer.allocateDirect(Math.toIntExact(combinedBytes))
+                .order(ByteOrder.nativeOrder());
+        combined.put(nearestRecords.duplicate());
+        while (combined.position() < statusByteOffset) combined.put((byte) 0);
+        combined.put(statusRecords.duplicate()).flip();
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            put(aquiferNearestInputs, combined, stack);
+            check(vkResetCommandBuffer(commandBuffer, 0), "reset combined aquifer command buffer");
+            check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()),
+                    "begin combined aquifer command buffer");
+
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, aquiferNearestPipeline);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                    aquiferNearestPipelineLayout, 0, stack.longs(aquiferNearestDescriptorSet), null);
+            ByteBuffer nearestPush = stack.malloc(4).order(ByteOrder.nativeOrder()).putInt(nearestCount).flip();
+            vkCmdPushConstants(commandBuffer, aquiferNearestPipelineLayout,
+                    VK_SHADER_STAGE_COMPUTE_BIT, 0, nearestPush);
+            vkCmdDispatch(commandBuffer, Math.max(1, (nearestCount + 63) / 64), 1, 1);
+
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, aquiferFluidStatusPipeline);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                    aquiferFluidStatusPipelineLayout, 0, stack.longs(aquiferNearestDescriptorSet), null);
+            ByteBuffer statusPush = stack.malloc(12).order(ByteOrder.nativeOrder())
+                    .putInt(statusCount).putInt(baseRecord)
+                    .putInt(nearestCount * GpuAquiferNearestThree.OUTPUT_INTS).flip();
+            vkCmdPushConstants(commandBuffer, aquiferFluidStatusPipelineLayout,
+                    VK_SHADER_STAGE_COMPUTE_BIT, 0, statusPush);
+            vkCmdDispatch(commandBuffer, (statusCount + 63) / 64, 1, 1);
+
+            long outputBytes = ((long) nearestCount * GpuAquiferNearestThree.OUTPUT_INTS
+                    + (long) statusCount * GpuAquiferFluidStatus.OUTPUT_INTS) * Integer.BYTES;
+            VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
+                    .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
+                    .buffer(aquiferNearestOutput.buffer).size(outputBytes);
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_PIPELINE_STAGE_HOST_BIT, 0, null, barrier, null);
+            check(vkEndCommandBuffer(commandBuffer), "end combined aquifer command buffer");
+            synchronized (queueSubmitLock) {
+                check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default()
+                        .pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit combined aquifer prefill");
+            }
+            check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait combined aquifer prefill");
+            check(vkResetFences(device, fence), "reset combined aquifer prefill fence");
+            IntBuffer values = persistentMappings.get(aquiferNearestOutput)
+                    .duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
+            values.clear();
+            int nearestInts = nearestCount * GpuAquiferNearestThree.OUTPUT_INTS;
+            int statusInts = statusCount * GpuAquiferFluidStatus.OUTPUT_INTS;
+            int[] nearestRows = new int[nearestInts];
+            int[] statusRows = new int[statusInts];
+            values.limit(nearestInts);
+            values.get(nearestRows);
+            values.position(nearestInts).limit(nearestInts + statusInts);
+            values.get(statusRows);
+            return new GpuAquiferPrefillResult(nearestRows, statusRows);
         }
     }
 
@@ -1287,6 +1367,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long aquiferNearestDescriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(aquiferNearestDescriptorPool).pSetLayouts(s.longs(aquiferNearestDescriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"aquifer nearest-three set");return h.get(0);}
     private void aquiferNearestDescriptors(MemoryStack s){NativeBuffer[] bs={aquiferNearestInputs,aquiferNearestOutput};VkWriteDescriptorSet.Buffer w=VkWriteDescriptorSet.calloc(2,s);for(int i=0;i<2;i++){VkDescriptorBufferInfo.Buffer bi=VkDescriptorBufferInfo.calloc(1,s).buffer(bs[i].buffer).range(bs[i].size);w.get(i).sType$Default().dstSet(aquiferNearestDescriptorSet).dstBinding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bi);}vkUpdateDescriptorSets(device,w,null);}
     private long aquiferSubstancePipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(4);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(aquiferNearestDescriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"aquifer substance pipeline layout");return h.get(0);}
+    private long aquiferFluidStatusPipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(12);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(aquiferNearestDescriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"aquifer fluid-status pipeline layout");return h.get(0);}
     private long aquiferSubstancePipeline(MemoryStack s){return aquiferPipeline(aquiferSubstanceShader,aquiferSubstancePipelineLayout,s,"aquifer substance pipeline");}
     private long aquiferPipeline(long module,long layout,MemoryStack s,String label){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(module).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(layout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),label);return h.get(0);}
     private long commandPool(MemoryStack s){VkCommandPoolCreateInfo i=VkCommandPoolCreateInfo.calloc(s).sType$Default().flags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT).queueFamilyIndex(queueFamily);LongBuffer h=s.longs(0);check(vkCreateCommandPool(device,i,null,h),"command pool");return h.get(0);}

@@ -864,6 +864,28 @@ public final class VulkanCiSmoke {
                     }
                 }
             }
+            int[][] oneNearestQuery = {{0, 0, 0}};
+            int[][] oneNearestCenters = new int[GpuAquiferNearestThree.CANDIDATES][3];
+            for (int center = 0; center < oneNearestCenters.length; center++) {
+                oneNearestCenters[center][0] = center * 16;
+                oneNearestCenters[center][1] = (center % 3 - 1) * 12;
+                oneNearestCenters[center][2] = (center / 3) * 16;
+            }
+            ByteBuffer combinedNearest = GpuAquiferNearestThree.pack(
+                    oneNearestQuery, new int[][][]{oneNearestCenters});
+            GpuAquiferPrefillResult combinedAquifer = ring.submitAquiferPrefill(
+                    combinedNearest, 1, GpuAquiferFluidStatus.pack(fluidStatusCases),
+                    fluidStatusCases.length).get(60, TimeUnit.SECONDS);
+            int[] expectedNearest = GpuAquiferNearestThree.select(oneNearestQuery[0], oneNearestCenters);
+            if (!java.util.Arrays.equals(expectedNearest, combinedAquifer.nearestRows())) {
+                throw new IllegalStateException("combined C2ME aquifer nearest-center parity mismatch");
+            }
+            for (int index = 0; index < fluidStatusResults.length; index++) {
+                if (fluidStatusResults[index] != combinedAquifer.fluidStatusRows()[index]) {
+                    throw new IllegalStateException("combined C2ME aquifer prefill changed status output at int " + index);
+                }
+            }
+            System.out.println("Vulkan CI smoke: co-submitted C2ME OCL aquifer prefill parity completed");
             System.out.println("Vulkan CI smoke: C2ME OCL aquifer fluid-status prefill parity completed");
             // The Tectonic integration profile can produce 576-block-high
             // chunks. Exercise the largest observed volume through both

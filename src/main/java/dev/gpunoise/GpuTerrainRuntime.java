@@ -388,6 +388,15 @@ public final class GpuTerrainRuntime {
         return ring.submitAquiferFluidStatus(records, queryCount);
     }
 
+    public static java.util.concurrent.CompletionStage<GpuAquiferPrefillResult> submitAquiferPrefill(
+            java.nio.ByteBuffer nearestRecords, int nearestCount,
+            java.nio.ByteBuffer statusRecords, int statusCount) {
+        VulkanSubmissionRing ring = terrainRing;
+        if (ring == null) return java.util.concurrent.CompletableFuture.failedStage(
+                new IllegalStateException("GPU terrain graph provider is not installed"));
+        return ring.submitAquiferPrefill(nearestRecords, nearestCount, statusRecords, statusCount);
+    }
+
     static java.util.concurrent.CompletionStage<GpuTerrainBatchResult> submitTerrainGridInterpolated(
             java.nio.ByteBuffer gridMetadata, int chunkCount, int samplesPerChunk,
             java.nio.ByteBuffer outputMetadata, int blocksPerChunk) {
