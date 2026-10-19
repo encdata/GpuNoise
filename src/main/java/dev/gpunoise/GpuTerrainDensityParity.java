@@ -6,7 +6,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.DoubleAccumulator;
 
 /** CI-only differential trace for the density values that actually reach terrain decisions. */
-final class GpuTerrainDensityParity {
+public final class GpuTerrainDensityParity {
     private static final boolean ENABLED = Boolean.getBoolean("gpunoise.verifyTerrainDensity");
     private static final AtomicLong CHUNKS = new AtomicLong();
     private static final AtomicLong SAMPLES = new AtomicLong();
@@ -20,11 +20,11 @@ final class GpuTerrainDensityParity {
 
     private GpuTerrainDensityParity() {}
 
-    static boolean enabled() {
+    public static boolean enabled() {
         return ENABLED;
     }
 
-    static void record(int x, int y, int z, double cpu, double gpu) {
+    public static void record(int x, int y, int z, double cpu, double gpu) {
         if (!ENABLED) return;
         SAMPLES.incrementAndGet();
         if (Double.doubleToLongBits(cpu) != Double.doubleToLongBits(gpu)) {
@@ -44,7 +44,7 @@ final class GpuTerrainDensityParity {
         }
     }
 
-    static void reportChunk(int chunkX, int chunkZ) {
+    public static void reportChunk(int chunkX, int chunkZ) {
         if (!ENABLED) {
             if (LOGGED_DISABLED.compareAndSet(false, true)) {
                 GpuNoise.LOGGER.info("GPU terrain density differential trace disabled");
