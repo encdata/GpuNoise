@@ -271,6 +271,16 @@ public final class GpuTerrainRuntime {
 
     static synchronized void installTerrainGraph(GpuDensityGraph graph, NoiseRouter router) {
         if (engine == null) throw new IllegalStateException("GPU engine is not started");
+        if (graph == null || router == null) throw new IllegalArgumentException("terrain graph and router are required");
+        int routerRootCount = graph.routerRoots().length;
+        if (routerRootCount > 16) {
+            throw new IllegalArgumentException("GPU terrain graph has " + routerRootCount
+                    + " roots; the Vulkan root table supports at most 16");
+        }
+        // Finish graph-dependent validation before closing the currently
+        // installed scheduler. Candidate graph inspection can fail for
+        // unsupported custom nodes or malformed spline dependencies.
+        int skippedBlockNodes = GpuDensityGraphBuffer.blockSkippedNodeCount(graph);
         if (terrainScheduler != null) terrainScheduler.close();
         if (terrainProvider != null) terrainProvider.close();
         if (terrainRootsScheduler != null) terrainRootsScheduler.close();
@@ -278,13 +288,13 @@ public final class GpuTerrainRuntime {
         terrainGraph = graph;
         terrainRouter = router;
         GpuNoise.LOGGER.info("GPU terrain graph: nodes={}, registers={}, block pass skips {} marker-only nodes",
-                graph.nodes().size(), graph.registerCount(), GpuDensityGraphBuffer.blockSkippedNodeCount(graph));
+                graph.nodes().size(), graph.registerCount(), skippedBlockNodes);
         terrainRootsScheduler = new GpuTerrainRootsBatchScheduler();
         terrainProvider = null;
         terrainScheduler = null;
         chunkFillCoordinator = null;
         GpuNoise.LOGGER.info("GPU chunk terrain provider ready: async exact slabs, batches up to {} chunks, all {} router roots per dispatch.",
-                TerrainNoiseApi.MAX_CHUNKS_PER_BATCH, graph.routerRoots().length);
+                TerrainNoiseApi.MAX_CHUNKS_PER_BATCH, routerRootCount);
     }
 
     static java.util.concurrent.CompletionStage<TerrainNoiseApi.Result> submitTerrain(TerrainNoiseApi.Request request) {
