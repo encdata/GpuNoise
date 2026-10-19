@@ -601,7 +601,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait grid interpolation");
             check(vkResetFences(device, fence), "reset grid interpolation fence");
             float[] corners = readRootResults(sampleCount, rootCount, cornerStride, stack);
-            interpolationOutput.invalidate(device, stack);
             FloatBuffer blockValues = persistentMappings.get(interpolationOutput).duplicate()
                     .order(ByteOrder.nativeOrder()).asFloatBuffer();
             blockValues.clear();
@@ -671,7 +670,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             synchronized (queueSubmitLock) { check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default().pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit fused graph"); }
             check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait fused graph");
             check(vkResetFences(device, fence), "reset fused graph fence");
-            interpolationOutput.invalidate(device, stack);
             // The mapped buffer limit is expressed in bytes, while the
             // FloatBuffer limit is expressed in floats. Set the limit after
             // creating the typed view; otherwise a 4x-short view causes a
@@ -686,7 +684,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         }
     }
     private float[] readResults(int samples, int valuesPerSample, MemoryStack stack) {
-        results.invalidate(device, stack);
         float[] output = new float[samples * valuesPerSample];
         ByteBuffer view = persistentResults.duplicate().order(ByteOrder.nativeOrder());
         view.clear();
@@ -697,7 +694,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
 
     /** Copies router roots to Java while leaving GPU-only marker corners out of the batch result. */
     private float[] readRootResults(int samples, int roots, int sourceStride, MemoryStack stack) {
-        results.invalidate(device, stack);
         float[] output = new float[Math.multiplyExact(samples, roots)];
         FloatBuffer source = persistentResults.duplicate().order(ByteOrder.nativeOrder()).asFloatBuffer();
         source.clear();
@@ -743,7 +739,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             }
             check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait aquifer pressure");
             check(vkResetFences(device, fence), "reset aquifer pressure fence");
-            interpolationOutput.invalidate(device, stack);
             FloatBuffer values = persistentMappings.get(interpolationOutput)
                     .duplicate().order(ByteOrder.nativeOrder()).asFloatBuffer();
             values.clear();
@@ -782,7 +777,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             }
             check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait aquifer nearest-three");
             check(vkResetFences(device, fence), "reset aquifer nearest-three fence");
-            aquiferNearestOutput.invalidate(device, stack);
             IntBuffer values = persistentMappings.get(aquiferNearestOutput)
                     .duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
             values.clear();
@@ -822,7 +816,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             }
             check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait aquifer substance");
             check(vkResetFences(device, fence), "reset aquifer substance fence");
-            aquiferNearestOutput.invalidate(device, stack);
             IntBuffer values = persistentMappings.get(aquiferNearestOutput)
                     .duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
             values.clear();
@@ -863,7 +856,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             synchronized (queueSubmitLock) { check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default().pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit interpolation"); }
             check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait interpolation");
             check(vkResetFences(device, fence), "reset interpolation fence");
-            interpolationOutput.invalidate(device, stack);
             FloatBuffer values = persistentMappings.get(interpolationOutput)
                     .duplicate().order(ByteOrder.nativeOrder()).asFloatBuffer();
             values.clear();
@@ -935,7 +927,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             NativeBuffer staging = hostVisibleBuffer(bytes, stack);
             ByteBuffer stagingMap = staging.map(device, stack).order(ByteOrder.nativeOrder());
             stagingMap.put(source.duplicate());
-            staging.flush(device, stack);
             check(vkResetCommandBuffer(commandBuffer, 0), "reset upload command buffer");
             check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin upload command buffer");
             VkBufferCopy.Buffer copy = VkBufferCopy.calloc(1, stack).srcOffset(0).dstOffset(0).size(bytes);
@@ -953,7 +944,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         }
         mapped.clear();
         mapped.put(source.duplicate());
-        target.flush(device, stack);
     }
     private VkInstance createInstance(MemoryStack s) { VkApplicationInfo a=VkApplicationInfo.calloc(s).sType$Default().pApplicationName(s.UTF8("GPU Noise Persistent")).apiVersion(VK_API_VERSION_1_0); VkInstanceCreateInfo i=VkInstanceCreateInfo.calloc(s).sType$Default().pApplicationInfo(a); PointerBuffer h=s.mallocPointer(1); check(vkCreateInstance(i,null,h),"create instance"); return new VkInstance(h.get(0),i); }
     private VkPhysicalDevice findPhysical(VkInstance i,GpuDevice e,MemoryStack s){IntBuffer n=s.ints(0);check(vkEnumeratePhysicalDevices(i,n,null),"enumerate");PointerBuffer h=s.mallocPointer(n.get(0));check(vkEnumeratePhysicalDevices(i,n,h),"enumerate");for(int k=0;k<n.get(0);k++){VkPhysicalDevice p=new VkPhysicalDevice(h.get(k),i);VkPhysicalDeviceProperties q=VkPhysicalDeviceProperties.malloc();try{vkGetPhysicalDeviceProperties(p,q);if(q.vendorID()==e.vendorId()&&q.deviceNameString().equals(e.name()))return p;}finally{q.free();}}throw new IllegalStateException("GPU disappeared");}
@@ -1105,6 +1095,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private VkCommandBuffer commandBuffer(MemoryStack s){VkCommandBufferAllocateInfo i=VkCommandBufferAllocateInfo.calloc(s).sType$Default().commandPool(commandPool).level(VK_COMMAND_BUFFER_LEVEL_PRIMARY).commandBufferCount(1);PointerBuffer h=s.mallocPointer(1);check(vkAllocateCommandBuffers(device,i,h),"allocate command buffer");return new VkCommandBuffer(h.get(0),device);}
     private long fence(MemoryStack s){VkFenceCreateInfo i=VkFenceCreateInfo.calloc(s).sType$Default();LongBuffer h=s.longs(0);check(vkCreateFence(device,i,null,h),"create fence");return h.get(0);}
     private static void check(int r,String op){if(r!=VK_SUCCESS)throw new IllegalStateException(op+" failed: "+r);}
-    private record NativeBuffer(long buffer,long memory,long size,boolean hostVisible){ByteBuffer map(VkDevice d,MemoryStack s){PointerBuffer p=s.mallocPointer(1);check(vkMapMemory(d,memory,0,size,0,p),"map");return MemoryUtil.memByteBuffer(p.get(0),(int)size);}void flush(VkDevice d,MemoryStack s){VkMappedMemoryRange r=VkMappedMemoryRange.calloc(s).sType$Default().memory(memory).offset(0).size(size);check(vkFlushMappedMemoryRanges(d,r),"flush");}void invalidate(VkDevice d,MemoryStack s){VkMappedMemoryRange r=VkMappedMemoryRange.calloc(s).sType$Default().memory(memory).offset(0).size(size);check(vkInvalidateMappedMemoryRanges(d,r),"invalidate");}void unmap(VkDevice d){if(hostVisible)vkUnmapMemory(d,memory);}void destroy(VkDevice d){vkDestroyBuffer(d,buffer,null);vkFreeMemory(d,memory,null);}}
+    private record NativeBuffer(long buffer,long memory,long size,boolean hostVisible){ByteBuffer map(VkDevice d,MemoryStack s){PointerBuffer p=s.mallocPointer(1);check(vkMapMemory(d,memory,0,size,0,p),"map");return MemoryUtil.memByteBuffer(p.get(0),(int)size);}void unmap(VkDevice d){if(hostVisible)vkUnmapMemory(d,memory);}void destroy(VkDevice d){vkDestroyBuffer(d,buffer,null);vkFreeMemory(d,memory,null);}}
     @Override public void close(){vkDeviceWaitIdle(device);for(NativeBuffer buffer:persistentMappings.keySet())buffer.unmap(device);vkDestroyFence(device,fence,null);if(timestampQueryPool!=0L)vkDestroyQueryPool(device,timestampQueryPool,null);vkDestroyCommandPool(device,commandPool,null);vkDestroyDescriptorPool(device,descriptorPool,null);vkDestroyPipeline(device,pipeline,null);vkDestroyPipelineLayout(device,pipelineLayout,null);vkDestroyDescriptorSetLayout(device,descriptorLayout,null);vkDestroyShaderModule(device,shader,null);vkDestroyPipeline(device,graphPipeline,null);vkDestroyPipeline(device,gridPipeline,null);vkDestroyPipelineLayout(device,graphPipelineLayout,null);vkDestroyDescriptorSetLayout(device,graphDescriptorLayout,null);vkDestroyDescriptorPool(device,graphDescriptorPool,null);vkDestroyShaderModule(device,graphShader,null);vkDestroyShaderModule(device,gridShader,null);vkDestroyPipeline(device,interpolationPipeline,null);vkDestroyPipelineLayout(device,interpolationPipelineLayout,null);vkDestroyDescriptorSetLayout(device,interpolationDescriptorLayout,null);vkDestroyDescriptorPool(device,interpolationDescriptorPool,null);vkDestroyShaderModule(device,interpolationShader,null);vkDestroyPipeline(device,aquiferPressurePipeline,null);vkDestroyPipelineLayout(device,aquiferPressurePipelineLayout,null);vkDestroyDescriptorSetLayout(device,aquiferPressureDescriptorLayout,null);vkDestroyDescriptorPool(device,aquiferPressureDescriptorPool,null);vkDestroyShaderModule(device,aquiferPressureShader,null);vkDestroyPipeline(device,aquiferNearestPipeline,null);vkDestroyPipelineLayout(device,aquiferNearestPipelineLayout,null);vkDestroyDescriptorSetLayout(device,aquiferNearestDescriptorLayout,null);vkDestroyDescriptorPool(device,aquiferNearestDescriptorPool,null);vkDestroyShaderModule(device,aquiferNearestShader,null);vkDestroyPipeline(device,aquiferSubstancePipeline,null);vkDestroyPipelineLayout(device,aquiferSubstancePipelineLayout,null);vkDestroyShaderModule(device,aquiferSubstanceShader,null);coordinates.destroy(device);graphCoordinates.destroy(device);graphNodes.destroy(device);graphSplinePoints.destroy(device);graphBlendedMetadata.destroy(device);graphBlendInputs.destroy(device);graphRoots.destroy(device);graphMthSinTable.destroy(device);interpolatedInputs.destroy(device);interpolatorMap.destroy(device);interpolationMetadata.destroy(device);interpolationOutput.destroy(device);aquiferPressureInputs.destroy(device);aquiferNearestInputs.destroy(device);aquiferNearestOutput.destroy(device);results.destroy(device);permutations.destroy(device);octaves.destroy(device);samplerMetadata.destroy(device);if(ownsDevice){vkDestroyDevice(device,null);vkDestroyInstance(instance,null);}}
 }
