@@ -242,10 +242,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
         if (packed.nodeCount() > GRAPH_NODE_CAPACITY) throw new IllegalArgumentException("density graph exceeds GPU node capacity");
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            ByteBuffer coords = stack.malloc(xs.length * 16).order(ByteOrder.nativeOrder());
-            for (int i = 0; i < xs.length; i++) coords.putFloat(xs[i]).putFloat(ys[i]).putFloat(zs[i]).putFloat(0);
-            coords.flip();
-            put(graphCoordinates, coords, stack);
+            writeGraphCoordinates(xs, ys, zs, xs.length);
             if (graphResourcesGraph != graph) {
                 put(graphNodes, packed.nodes(), stack);
                 put(graphSplinePoints, packed.splinePoints(), stack);
@@ -286,10 +283,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16) throw new IllegalArgumentException("density graph exceeds GPU capacity");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
-            ByteBuffer coords = stack.malloc(sampleCount * 16).order(ByteOrder.nativeOrder());
-            for (int i = 0; i < sampleCount; i++) coords.putFloat(xs[i]).putFloat(ys[i]).putFloat(zs[i]).putFloat(0);
-            coords.flip();
-            put(graphCoordinates, coords, stack);
+            writeGraphCoordinates(xs, ys, zs, sampleCount);
             if (graphResourcesGraph != graph) {
                 put(graphNodes, packed.nodes(), stack);
                 put(graphSplinePoints, packed.splinePoints(), stack); put(graphBlendedMetadata, packed.blendedMetadata(), stack);
@@ -331,9 +325,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         long preparationStarted = System.nanoTime();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
-            ByteBuffer coords = stack.malloc(sampleCount * 16).order(ByteOrder.nativeOrder());
-            for (int i = 0; i < sampleCount; i++) coords.putFloat(xs[i]).putFloat(ys[i]).putFloat(zs[i]).putFloat(0);
-            coords.flip(); put(graphCoordinates, coords, stack);
+            writeGraphCoordinates(xs, ys, zs, sampleCount);
             if (graphResourcesGraph != graph) {
                 put(graphNodes, packed.nodes(), stack); put(graphSplinePoints, packed.splinePoints(), stack);
                 put(graphBlendedMetadata, packed.blendedMetadata(), stack);
@@ -627,10 +619,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 || metadata.remaining() > interpolationMetadata.size
                 || blockCount * outputRoots * 4L > interpolationOutput.size) throw new IllegalArgumentException("fused batch exceeds GPU capacity");
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            ByteBuffer coords = stack.malloc(sampleCount * 16).order(ByteOrder.nativeOrder());
-            for (int i = 0; i < sampleCount; i++) coords.putFloat(xs[i]).putFloat(ys[i]).putFloat(zs[i]).putFloat(0);
-            coords.flip();
-            put(graphCoordinates, coords, stack);
+            writeGraphCoordinates(xs, ys, zs, sampleCount);
             if (graphResourcesGraph != graph) {
                 put(graphNodes, packed.nodes(), stack); put(graphSplinePoints, packed.splinePoints(), stack);
                 put(graphBlendedMetadata, packed.blendedMetadata(), stack);
@@ -918,6 +907,14 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             }
         }
         persistentResults = persistentMappings.get(results);
+    }
+
+    private void writeGraphCoordinates(float[] xs, float[] ys, float[] zs, int count) {
+        ByteBuffer mapped = persistentMappings.get(graphCoordinates);
+        if (mapped == null) throw new IllegalStateException("graph coordinate buffer is not persistently mapped");
+        mapped.clear();
+        for (int i = 0; i < count; i++) mapped.putFloat(xs[i]).putFloat(ys[i]).putFloat(zs[i]).putFloat(0.0f);
+        mapped.flip();
     }
 
     private void put(NativeBuffer target, ByteBuffer source, MemoryStack stack) {
