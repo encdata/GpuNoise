@@ -82,6 +82,16 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                     "one chunk exceeds GPU terrain block-output capacity"));
             return future;
         }
+        if (GpuTerrainRuntime.terrainBlockOutputEnabled()) {
+            GpuDensityGraph graph = GpuTerrainRuntime.currentTerrainGraph();
+            int markerCount = graph == null ? 0 : graph.interpolatedMarkerRegisters().length;
+            if ((long) blocksPerChunk(grid) * markerCount
+                    > PersistentVulkanNormalNoiseEngine.INTERPOLATED_INPUT_FLOATS) {
+                future.completeExceptionally(new IllegalArgumentException(
+                        "one chunk exceeds GPU interpolated-marker capacity"));
+                return future;
+            }
+        }
         if (closed || !queue.offer(new Pending(grid, future, System.nanoTime())))
             future.completeExceptionally(new IllegalStateException("GPU terrain roots queue is full"));
         return future;
@@ -188,6 +198,13 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                     * GpuTerrainRuntime.terrainBlockOutputRootCount();
             maxChunks = Math.min(maxChunks,
                     (int) (PersistentVulkanNormalNoiseEngine.INTERPOLATION_OUTPUT_FLOATS / floatsPerChunk));
+            GpuDensityGraph graph = GpuTerrainRuntime.currentTerrainGraph();
+            int markerCount = graph == null ? 0 : graph.interpolatedMarkerRegisters().length;
+            if (markerCount > 0) {
+                long markersPerChunk = (long) blocksPerChunk(grid) * markerCount;
+                maxChunks = Math.min(maxChunks,
+                        (int) (PersistentVulkanNormalNoiseEngine.INTERPOLATED_INPUT_FLOATS / markersPerChunk));
+            }
         }
         if (maxChunks <= 0) throw new IllegalArgumentException("terrain grid exceeds GPU dispatch capacity");
         return maxChunks;

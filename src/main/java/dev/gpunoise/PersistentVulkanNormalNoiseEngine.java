@@ -31,6 +31,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     static final int INTERPOLATION_OUTPUT_FLOATS = CAPACITY * 16;
     private static final int MAX_INTERPOLATORS = 16;
     private static final int MAX_GRAPH_OUTPUTS = 32;
+    static final int INTERPOLATED_INPUT_FLOATS = CAPACITY * MAX_INTERPOLATORS;
     private final VkInstance instance;
     private final VkPhysicalDevice physical;
     private final VkDevice device;
@@ -107,7 +108,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             results = buffer(CAPACITY * (long) MAX_GRAPH_OUTPUTS * Float.BYTES, stack);
             graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack); graphNodes = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack); graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 64L * 16L, stack); graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack); graphBlendInputs = hostVisibleBuffer(CAPACITY * 8L, stack); graphRoots = deviceLocalBuffer(64L, stack);
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
-            interpolatedInputs = deviceLocalBuffer(CAPACITY * (long) MAX_INTERPOLATORS * Float.BYTES, stack);
+            interpolatedInputs = deviceLocalBuffer((long) INTERPOLATED_INPUT_FLOATS * Float.BYTES, stack);
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
             interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack); interpolationOutput = buffer((long) CAPACITY * 16L * Float.BYTES, stack);
             aquiferPressureInputs = hostVisibleBuffer((long) CAPACITY * GpuAquiferPressure.RECORD_BYTES, stack);
@@ -174,7 +175,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             graphBlendInputs = hostVisibleBuffer(CAPACITY * 8L, stack);
             graphRoots = deviceLocalBuffer(64L, stack);
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
-            interpolatedInputs = deviceLocalBuffer(CAPACITY * (long) MAX_INTERPOLATORS * Float.BYTES, stack);
+            interpolatedInputs = deviceLocalBuffer((long) INTERPOLATED_INPUT_FLOATS * Float.BYTES, stack);
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
             interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack); interpolationOutput = buffer((long) CAPACITY * 16L * Float.BYTES, stack);
             aquiferPressureInputs = hostVisibleBuffer((long) CAPACITY * GpuAquiferPressure.RECORD_BYTES, stack);
@@ -535,6 +536,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16 || outputRoots > rootCount
                 || markerCount > MAX_INTERPOLATORS || graph.registerCount() > 256
                 || (long) sampleCount * cornerStride * Float.BYTES > results.size
+                || (long) blockCount * markerCount > INTERPOLATED_INPUT_FLOATS
                 || (long) blockCount * outputRoots * Float.BYTES > interpolationOutput.size)
             throw new IllegalArgumentException("grid interpolation batch exceeds GPU capacity");
         try (MemoryStack stack = MemoryStack.stackPush()) {
