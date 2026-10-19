@@ -34,7 +34,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     // deadline is still bounded, so an isolated request is dispatched
     // promptly instead of waiting for neighbors that may never arrive.
     private static final long BATCH_WINDOW_NANOS = TimeUnit.MILLISECONDS.toNanos(
-            Math.max(1L, Math.min(250L, Long.getLong("gpunoise.terrainBatchWindowMs", 20L))));
+            Math.max(1L, Math.min(250L, Long.getLong("gpunoise.terrainBatchWindowMs", 50L))));
     private final BlockingQueue<Pending> queue = new ArrayBlockingQueue<>(PENDING_QUEUE_CAPACITY);
     // Grid metadata is small and the Vulkan submission is asynchronous. Keep a
     // bounded pool alive until each submission has consumed its metadata rather
