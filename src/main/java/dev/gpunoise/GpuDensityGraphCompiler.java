@@ -196,7 +196,13 @@ final class GpuDensityGraphCompiler {
         String functionClassName = function.getClass().getName();
         boolean customFunction = !functionClassName.startsWith("net.minecraft.");
         if (customFunction) {
-            GpuDensityExpression expression = GpuDensityFunctionTranslators.translateToGpu(function);
+            GpuDensityExpression expression;
+            try {
+                expression = GpuDensityFunctionTranslators.translateToGpu(function);
+            } catch (RuntimeException failure) {
+                throw unsupported(function, "registered GPU expression translator failed: "
+                        + failure.getMessage(), failure);
+            }
             String bytecodeRejection = null;
             if (expression == null) {
                 GpuDensityBytecodeCompiler.Result bytecode = GpuDensityBytecodeCompiler.compile(function);
@@ -256,7 +262,13 @@ final class GpuDensityGraphCompiler {
                         "GpuDensityExpression"));
                 return index;
             }
-            DensityFunction translated = GpuDensityFunctionTranslators.translate(function);
+            DensityFunction translated;
+            try {
+                translated = GpuDensityFunctionTranslators.translate(function);
+            } catch (RuntimeException failure) {
+                throw unsupported(function, "registered GPU graph translator failed: "
+                        + failure.getMessage(), failure);
+            }
             if (translated != null) {
                 // Keep the original function in sourceFunctions for parity and
                 // fallback. The marker forwards the GPU value from the adapter's
@@ -475,6 +487,10 @@ final class GpuDensityGraphCompiler {
     }
 
     private IllegalStateException unsupported(DensityFunction function, String reason) {
+        return unsupported(function, reason, null);
+    }
+
+    private IllegalStateException unsupported(DensityFunction function, String reason, Throwable cause) {
         StringBuilder path = new StringBuilder();
         int skip = Math.max(0, compilationPath.size() - 12);
         int index = 0;
@@ -484,8 +500,9 @@ final class GpuDensityGraphCompiler {
             path.append(step.getClass().getName());
         }
         if (skip > 0) path.insert(0, "... (" + compilationPath.size() + " nodes) -> ");
-        return new IllegalStateException("GPU density compiler cannot compile " + function.getClass().getName()
-                + " along dependency path [" + path + "]: " + reason);
+        String message = "GPU density compiler cannot compile " + function.getClass().getName()
+                + " along dependency path [" + path + "]: " + reason;
+        return cause == null ? new IllegalStateException(message) : new IllegalStateException(message, cause);
     }
 
     private static Object recordValue(RecordComponent[] components, Object owner, String name)
