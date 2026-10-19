@@ -643,10 +643,10 @@ public final class VulkanCiSmoke {
             };
             var substanceFuture = ring.submitAquiferSubstance(
                     GpuAquiferSubstance.pack(substanceCases), substanceCases.length);
-            // A complete overworld chunk contains more than the former
-            // 16,384-query limit. Ensure one substance dispatch can now hold
-            // a full chunk-sized batch without splitting or truncating it.
-            int chunkBatchSize = 16 * 16 * 384;
+            // The Tectonic integration profile can produce 576-block-high
+            // chunks. Exercise the largest observed volume through both
+            // decision kernels in one dispatch each.
+            int chunkBatchSize = 16 * 16 * 576;
             if (chunkBatchSize > GpuAquiferNearestThree.MAX_QUERIES) {
                 throw new IllegalStateException("Aquifer nearest-center capacity is smaller than a 384-block chunk");
             }
@@ -682,7 +682,7 @@ public final class VulkanCiSmoke {
                     }
                 }
             }
-            System.out.println("Vulkan CI smoke: full-chunk nearest-center batch completed (98,304 blocks, one dispatch)");
+            System.out.println("Vulkan CI smoke: full-chunk nearest-center batch completed (147,456 blocks, one dispatch)");
             for (int q = 0; q < queryCount; q++) {
                 int[] expected = GpuAquiferNearestThree.select(queries[q], centers[q]);
                 for (int field = 0; field < GpuAquiferNearestThree.OUTPUT_INTS; field++) {
@@ -704,7 +704,7 @@ public final class VulkanCiSmoke {
                     throw new IllegalStateException("Chunk-sized aquifer decision mismatch at row " + i);
                 }
             }
-            System.out.println("Vulkan CI smoke: full-chunk aquifer batch completed (98,304 blocks, one dispatch)");
+            System.out.println("Vulkan CI smoke: full-chunk aquifer batch completed (147,456 blocks, one dispatch)");
             for (int i = 0; i < substanceCases.length; i++) {
                 int[] expected = GpuAquiferSubstance.evaluate(substanceCases[i]);
                 for (int field = 0; field < GpuAquiferSubstance.OUTPUT_INTS; field++) {

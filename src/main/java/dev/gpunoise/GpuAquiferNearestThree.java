@@ -14,8 +14,8 @@ public final class GpuAquiferNearestThree {
     // Vanilla consumes the first three; optimized aquifer implementations can
     // use the fourth for fluid-tick decisions.
     public static final int OUTPUT_INTS = 12;
-    /** One dispatch can rank centers for a full 384-block chunk. */
-    public static final int MAX_QUERIES = 131_072;
+    /** One dispatch can rank centers for a modded 576-block chunk. */
+    public static final int MAX_QUERIES = PersistentVulkanNormalNoiseEngine.CAPACITY;
 
     private GpuAquiferNearestThree() {}
 

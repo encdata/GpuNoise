@@ -293,14 +293,13 @@ still prove that the integrated batches execute with nonzero samples and zero
 vanilla parity mismatches. Failure logs now include the first mismatching query
 and expected/GPU decisions to make any discrepancy actionable.
 
-Substance batches use the terrain engine's 262,144-record capacity, and
-nearest-center selection now has a separately sized 131,072-record capacity
-because its records are wider. Each stage can process a 98,304-block, 384-high
-chunk with one shader dispatch and one fence/readback round trip instead of
-splitting a stage into six submissions. Mesa smoke sends and parity-checks
-full-chunk batches for both kernels. This removes avoidable per-dispatch
-synchronization without treating software Vulkan timing as evidence of
-hardware speed.
+Substance and nearest-center batches use the terrain engine's 262,144-record
+capacity. The nearest-center input/output buffers account for its wider records.
+Each stage can process a 147,456-block, 576-high modded chunk in one shader
+dispatch and one fence/readback round trip instead of splitting the stage into
+multiple submissions. Mesa smoke sends and parity-checks full-height batches
+for both kernels. This removes avoidable per-dispatch synchronization without
+treating software Vulkan timing as evidence of hardware speed.
 
 The terrain roots batcher now reuses a bounded pool of direct metadata buffers
 until each asynchronous Vulkan submission completes. This removes per-dispatch
