@@ -108,7 +108,6 @@ jobs:
       matrix:
         profile:
           - without-terrain-mods
-          - without-c2me
           - tectonic-overworld-stack
           - expanded-biome-stacks
           - biomes-weve-gone

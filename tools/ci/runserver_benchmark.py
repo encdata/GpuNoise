@@ -43,7 +43,6 @@ MODS = {
     ),
 }
 RCON_PASSWORD = "gpunoise-ci-only"
-C2ME_MOD = "c2me-neoforge-mc1.21.1-0.4.0-alpha.0.123.jar"
 SERVER_START_TIMEOUT = 300
 CHUNKY_RUN_TIMEOUT = 3600
 SHUTDOWN_TIMEOUT = 90
@@ -174,10 +173,8 @@ def prepare_run_directory(run_dir: Path, downloaded_mods: Path,
     mods_dir = run_dir / "mods"
     mods_dir.mkdir(parents=True, exist_ok=True)
     profile_mods = set(TERRAIN_TEST_PROFILES[terrain_profile]) if terrain_profile in TERRAIN_TEST_PROFILES else set()
-    base_mods = ({name: spec for name, spec in MODS.items() if name != C2ME_MOD}
-                 if terrain_profile == "without-c2me" else MODS)
-    selected_mods = base_mods | ({name: TERRAIN_MODS[name] for name in profile_mods} | TERRAIN_LIBRARIES
-                                 if profile_mods else {})
+    selected_mods = MODS | ({name: TERRAIN_MODS[name] for name in profile_mods} | TERRAIN_LIBRARIES
+                            if profile_mods else {})
     for filename in selected_mods:
         shutil.copy2(downloaded_mods / filename, mods_dir / filename)
     (run_dir / "eula.txt").write_text("eula=true\n", encoding="utf-8")
@@ -437,10 +434,10 @@ def main() -> int:
     profile = None
     if sys.argv[1:] and not prepare_only:
         if len(sys.argv) != 3 or sys.argv[1] != "--profile":
-            choices = ", ".join(("without-terrain-mods", "without-c2me", *TERRAIN_TEST_PROFILES))
+            choices = ", ".join(("without-terrain-mods", *TERRAIN_TEST_PROFILES))
             raise ValueError(f"usage: runserver_benchmark.py [--prepare-mods | --profile PROFILE]; profiles: {choices}")
         profile = sys.argv[2]
-        if profile not in ("without-terrain-mods", "without-c2me", *TERRAIN_TEST_PROFILES):
+        if profile not in ("without-terrain-mods", *TERRAIN_TEST_PROFILES):
             raise ValueError(f"unknown worldgen profile {profile!r}")
     downloaded_mods = ROOT / "build" / "ci-mods"
     fetch_mods(downloaded_mods)
@@ -451,7 +448,7 @@ def main() -> int:
         return 0
     print(
         f"CI_WORLDGEN_CONFIG radius_blocks={CHUNKY_RADIUS_BLOCKS} "
-        f"test_cases={2 + len(TERRAIN_TEST_PROFILES)} selected_profile={profile or 'all'} "
+        f"test_cases={1 + len(TERRAIN_TEST_PROFILES)} selected_profile={profile or 'all'} "
         f"repetitions={WORLDGEN_CHECK_REPETITIONS} "
         f"terrain_mods={len(TERRAIN_MODS)} modded_profiles={len(TERRAIN_TEST_PROFILES)} "
         f"batch_window_ms={BATCH_WINDOW_MS} "
@@ -462,7 +459,6 @@ def main() -> int:
     completed_cases: list[str] = []
     all_cases: tuple[tuple[str, str | None], ...] = (
         (("without-terrain-mods", None),)
-        + (("without-c2me", "without-c2me"),)
         + tuple((profile, profile) for profile in TERRAIN_TEST_PROFILES)
     )
     cases = tuple(case for case in all_cases if profile is None or case[0] == profile)

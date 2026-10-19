@@ -165,6 +165,15 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
             target = "Lnet/minecraft/world/level/levelgen/DensityFunction;compute(Lnet/minecraft/world/level/levelgen/DensityFunction$FunctionContext;)D"))
     private double gpunoise$useGpuFinalDensity(DensityFunction vanillaFunction,
                                                 DensityFunction.FunctionContext context) {
+        // C2ME's aquifer rewrite makes block/fluid decisions from this exact
+        // value. The terrain graph ABI currently stores float results, so a
+        // tiny GPU rounding difference can change a thresholded fluid block.
+        // Preserve C2ME's Java density semantics until its aquifer decision
+        // stage can consume a precision-matched payload; other GPU terrain
+        // roots remain available for climate and batched lookup work.
+        if (dev.gpunoise.GpuAquiferRuntimeMode.c2meAquiferRewriteEnabled()) {
+            return vanillaFunction.compute(context);
+        }
         GpuChunkDensityCache cache = this.gpunoise$cache;
         if (cache == null) {
             cache = gpunoise$getActiveCache();
