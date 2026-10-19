@@ -74,7 +74,12 @@ parity checks.
   absolute, square, cube, half-negative, quarter-negative, and squeeze mappings,
   comparison/select operations for bytecode branches, with finite constant
   subgraphs folded, identical pure nodes shared, and
-  unreachable nodes and samplers removed before lowering. Graph-shape checks
+  unreachable nodes and samplers removed before lowering. Graph lowering also
+  drops transparent adapter/delegate markers and statically selects constant
+  `RangeChoice`/select branches before visiting their dead subgraphs; it keeps
+  interpolation markers because they are runtime data inputs. This follows the
+  useful compiler-pass pattern seen in C2ME's OpenCL path while preserving
+  GPU Noise's existing register and interpolation ABI. Graph-shape checks
   validate the compact IR.
   before packing. A Java IR evaluator now provides an independent numerical
   reference; it does not yet prove an adapter matches its original Java
@@ -361,6 +366,14 @@ validates each request against input/output capacities before enqueueing, and
 returns its host slab even when asynchronous result handling fails. Its
 periodic batch-fill and latency counters will show whether this path is
 dispatch-bound or request-arrival-bound; CI results are still pending.
+
+C2ME OpenCL's density path specializes an optimized density AST into generated
+kernels and combines that with area-aligned batch execution and reusable
+buffers. GPU Noise now removes transparent wrappers and constant branches from
+its IR, but the Vulkan shader still interprets a generic opcode stream for each
+sample. A graph-keyed specialized SPIR-V path is the larger remaining
+compiler-side speed opportunity; it needs a runtime-safe compiler or another
+way to produce graph-specific SPIR-V without requiring a system `glslc`.
 
 ## Known precision boundary
 

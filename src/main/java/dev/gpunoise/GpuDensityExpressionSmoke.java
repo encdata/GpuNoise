@@ -256,6 +256,8 @@ final class GpuDensityExpressionSmoke {
     static void verify() {
         verifyParityRootPruning();
         verifyTerrainDecisionFallback();
+        verifyTransparentMarkerElimination();
+        verifyConstantBranchPruning();
         requireOpcode("EXPR_ADD", 1);
         requireOpcode("EXPR_SUBTRACT", 2);
         requireOpcode("EXPR_MULTIPLY", 3);
@@ -420,6 +422,61 @@ final class GpuDensityExpressionSmoke {
                 (double) (float) 1.00000006, "packed-float constant");
 
         verifyBytecodeFrontend();
+    }
+
+    private static void verifyTransparentMarkerElimination() {
+        DensityFunction source = DensityFunctions.constant(7.0);
+        GpuDensityGraph transparent = new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{7.0}, null),
+                        new GpuDensityGraph.Node("Marker", new int[]{0}, new double[0], "HolderHolder"),
+                        new GpuDensityGraph.Node("Marker", new int[]{1}, new double[0], "C2MECompiledDensityFunction"),
+                        new GpuDensityGraph.Node("Marker", new int[]{2}, new double[0], "GpuDensityExpression")),
+                new int[]{3}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(source, source, source, source));
+        GpuDensityGraph lowered = GpuDensityGraphLowerer.lower(transparent);
+        if (lowered.nodes().size() != 1 || lowered.routerRoots()[0] != 0
+                || !lowered.nodes().get(0).opcode().equals("Constant")) {
+            throw new AssertionError("transparent density markers should collapse to their shader child");
+        }
+        GpuDensityGraph interpolated = new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{7.0}, null),
+                        new GpuDensityGraph.Node("Marker", new int[]{0}, new double[0], "Interpolated")),
+                new int[]{1}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(source, source));
+        GpuDensityGraph interpolationLowered = GpuDensityGraphLowerer.lower(interpolated);
+        if (interpolationLowered.nodes().size() != 2
+                || interpolationLowered.interpolatedMarkerCount() != 1
+                || interpolationLowered.interpolatedMarkerRegisters().length != 1) {
+            throw new AssertionError("interpolation markers must survive lowering with a live register");
+        }
+    }
+
+    private static void verifyConstantBranchPruning() {
+        DensityFunction source = DensityFunctions.constant(0.0);
+        GpuDensityGraph branches = new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{1.0}, null),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{10.0}, null),
+                        new GpuDensityGraph.Node("GpuCoordinate", new int[0], new double[0], "X"),
+                        new GpuDensityGraph.Node("RangeChoice", new int[]{0, 1, 2},
+                                new double[]{0.5, 1.5}, null),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{0.0}, null),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{20.0}, null),
+                        new GpuDensityGraph.Node("GpuSelect", new int[]{4, 1, 5}, new double[0], null)),
+                new int[]{3, 6}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(source, source, source, source, source, source, source));
+        GpuDensityGraph lowered = GpuDensityGraphLowerer.lower(branches);
+        int[] roots = lowered.routerRoots();
+        if (lowered.nodes().size() != 2 || roots[0] == roots[1]
+                || !lowered.nodes().get(roots[0]).opcode().equals("Constant")
+                || !lowered.nodes().get(roots[1]).opcode().equals("Constant")
+                || lowered.nodes().get(roots[0]).constants()[0] != 10.0
+                || lowered.nodes().get(roots[1]).constants()[0] != 20.0) {
+            throw new AssertionError("constant range/select branches should prune unused shader subgraphs");
+        }
+        GpuDensityGraphBuffer.pack(lowered);
     }
 
     private static void verifyTerrainDecisionFallback() {

@@ -47,6 +47,15 @@ final class GpuDensityGraphLowerer {
         for (int ordered = 0; ordered < count; ordered++) {
             int old = order[ordered];
             GpuDensityGraph.Node node = graph.nodes().get(old);
+            if (node.opcode().equals("Marker") && !"Interpolated".equals(node.payload())) {
+                remap[old] = remap[node.children()[0]];
+                continue;
+            }
+            int selectedBranch = constantBranch(graph, node);
+            if (selectedBranch >= 0) {
+                remap[old] = remap[selectedBranch];
+                continue;
+            }
             int[] children = node.children();
             for (int i = 0; i < children.length; i++) if (children[i] >= 0) children[i] = remap[children[i]];
             double[] constants = node.constants();
@@ -137,6 +146,41 @@ final class GpuDensityGraphLowerer {
         List<Long> constantKey = new ArrayList<>(constants.length);
         for (double constant : constants) constantKey.add(Double.doubleToRawLongBits(constant));
         return new NodeKey(opcode, List.copyOf(childKey), List.copyOf(constantKey), payload);
+    }
+
+    /** Selects branches whose condition is a position-independent constant. */
+    private static int constantBranch(GpuDensityGraph graph, GpuDensityGraph.Node node) {
+        int[] children = node.children();
+        if (node.opcode().equals("RangeChoice") && children.length == 3) {
+            double[] bounds = node.constants();
+            if (bounds.length < 2) return -1;
+            Double input = constantValue(graph, children[0]);
+            if (input == null) return -1;
+            float minInclusive = (float) bounds[0];
+            float maxExclusive = (float) bounds[1];
+            return input >= minInclusive && input < maxExclusive ? children[1] : children[2];
+        }
+        if (node.opcode().equals("GpuSelect") && children.length == 3) {
+            Double condition = constantValue(graph, children[0]);
+            if (condition != null) return condition != 0.0 ? children[1] : children[2];
+        }
+        return -1;
+    }
+
+    /** Reads constants through only transparent wrappers, matching the float-backed shader ABI. */
+    private static Double constantValue(GpuDensityGraph graph, int nodeIndex) {
+        List<GpuDensityGraph.Node> nodes = graph.nodes();
+        for (int depth = 0; depth < nodes.size(); depth++) {
+            GpuDensityGraph.Node node = nodes.get(nodeIndex);
+            if (node.opcode().equals("Constant")) {
+                double[] value = node.constants();
+                return value.length == 1 ? (double) (float) value[0] : null;
+            }
+            if (!node.opcode().equals("Marker") || "Interpolated".equals(node.payload())
+                    || node.children().length != 1) return null;
+            nodeIndex = node.children()[0];
+        }
+        return null;
     }
 
     /** Re-lowers the source graph after parity removes one or more GPU roots. */
@@ -244,6 +288,7 @@ final class GpuDensityGraphLowerer {
         double[] parameters = node.constants();
         int constants = parameters.length;
         boolean valid = switch (node.opcode()) {
+            case "Marker" -> children == 1 && constants == 0;
             case "GpuCoordinate" -> children == 0 && constants == 0
                     && node.payload() != null && Set.of("X", "Y", "Z").contains(node.payload());
             case "GpuMath" -> children == 2 && constants == 0
@@ -305,7 +350,7 @@ final class GpuDensityGraphLowerer {
             state[root] = 1;
             while (depth >= 0) {
                 int nodeIndex = nodeStack[depth];
-                int[] children = nodes.get(nodeIndex).children();
+                int[] children = traversalChildren(graph, nodeIndex);
                 if (childStack[depth] < children.length) {
                     int child = children[childStack[depth]++];
                     if (state[child] == 1) {
@@ -325,5 +370,16 @@ final class GpuDensityGraphLowerer {
             }
         }
         return count;
+    }
+
+    /** Avoids visiting dead branch subgraphs when the selector is statically constant. */
+    private static int[] traversalChildren(GpuDensityGraph graph, int nodeIndex) {
+        GpuDensityGraph.Node node = graph.nodes().get(nodeIndex);
+        if (node.opcode().equals("Marker") && !"Interpolated".equals(node.payload())) {
+            return node.children();
+        }
+        int selected = constantBranch(graph, node);
+        if (selected >= 0) return new int[]{selected};
+        return node.children();
     }
 }

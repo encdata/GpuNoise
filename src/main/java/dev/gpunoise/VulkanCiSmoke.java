@@ -826,7 +826,7 @@ public final class VulkanCiSmoke {
             };
             GpuAquiferSubstance.BatchWriter substanceWriter = new GpuAquiferSubstance.BatchWriter(3);
             substanceWriter.addPositiveDensity(0.25, 7, false);
-            substanceWriter.addGlobalLava(-1.0, -4, 0, true);
+            substanceWriter.addGlobalLava(-1.0, -4, true);
             GpuAquiferSubstance.Input aquiferSubstance = stagedSubstances[2];
             substanceWriter.addAquifer(aquiferSubstance.density(), aquiferSubstance.barrier(),
                     aquiferSubstance.y(), aquiferSubstance.level0(), aquiferSubstance.level1(),

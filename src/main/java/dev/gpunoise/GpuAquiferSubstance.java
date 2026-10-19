@@ -39,13 +39,13 @@ public final class GpuAquiferSubstance {
         return action | (scheduleFluidUpdate ? OUTPUT_SCHEDULE_FLUID_UPDATE : 0);
     }
 
-    static int outputAction(int packed) { return packed & OUTPUT_ACTION_MASK; }
+    public static int outputAction(int packed) { return packed & OUTPUT_ACTION_MASK; }
 
-    static boolean outputSchedulesFluidUpdate(int packed) {
+    public static boolean outputSchedulesFluidUpdate(int packed) {
         return (packed & OUTPUT_SCHEDULE_FLUID_UPDATE) != 0;
     }
 
-    static boolean isValidPackedOutput(int packed) {
+    public static boolean isValidPackedOutput(int packed) {
         int action = outputAction(packed);
         return (packed & ~(OUTPUT_ACTION_MASK | OUTPUT_SCHEDULE_FLUID_UPDATE)) == 0
                 && action <= CPU_FALLBACK;
