@@ -225,20 +225,14 @@ final class GpuDensityGraphLowerer {
         int[] order = new int[size];
         int[] stack = new int[size];
         int[] nextChild = new int[size];
+        List<Integer> starts = new ArrayList<>(inputRoots.length + inputSplines.size() * 5);
+        for (int root : inputRoots) starts.add(root);
+        for (GpuDensityGraph.Spline spline : inputSplines) {
+            starts.add(spline.coordinateNode());
+            for (int value : spline.valueNodes()) starts.add(value);
+        }
         int ordered = 0;
-        for (int startIndex = 0; startIndex < inputRoots.length + inputSplines.size() * 65; startIndex++) {
-            int start;
-            if (startIndex < inputRoots.length) {
-                start = inputRoots[startIndex];
-            } else {
-                int splineOffset = startIndex - inputRoots.length;
-                GpuDensityGraph.Spline spline = inputSplines.get(splineOffset / 65);
-                int point = splineOffset % 65;
-                int[] values = spline.valueNodes();
-                if (point == 0) start = spline.coordinateNode();
-                else if (point <= values.length) start = values[point - 1];
-                else continue;
-            }
+        for (int start : starts) {
             if (visited[start]) continue;
             int depth = 0;
             stack[depth] = start;
