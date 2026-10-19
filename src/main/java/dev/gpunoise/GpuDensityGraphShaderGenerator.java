@@ -101,7 +101,7 @@ final class GpuDensityGraphShaderGenerator {
                 }
                 case 6 -> {
                     requireChildren(index, childCount, 1);
-                    out.append("mapValue(").append(a).append(',').append(operation).append("u)");
+                    emitMapping(out, index, operation, a);
                 }
                 case 7 -> {
                     requireChildren(index, childCount, 1);
@@ -200,6 +200,40 @@ final class GpuDensityGraphShaderGenerator {
             case 10 -> "javaCopySign(" + a + "," + b + ")";
             default -> throw invalid(index, "unknown Java math operation " + operation);
         });
+    }
+
+    private static void emitMapping(StringBuilder out, int index, int operation, String value) {
+        String x = value;
+        switch (operation) {
+            case 5 -> out.append("abs(").append(x).append(')');
+            case 6 -> out.append("graphMultiply(").append(x).append(',').append(x).append(')');
+            case 7 -> out.append("graphMultiply(graphMultiply(").append(x).append(',').append(x)
+                    .append("),").append(x).append(')');
+            case 8 -> out.append('(').append(x).append(">0.0?").append(x).append(":graphMultiply(")
+                    .append(x).append(",0.5))");
+            case 9 -> out.append('(').append(x).append(">0.0?").append(x).append(":graphMultiply(")
+                    .append(x).append(",0.25))");
+            case 10 -> {
+                String clamped = "clamp(" + x + ",-1.0,1.0)";
+                out.append("graphSubtract(graphMultiply(").append(clamped)
+                        .append(",0.5),graphDivide(graphMultiply(graphMultiply(").append(clamped)
+                        .append(',').append(clamped).append("),").append(clamped).append("),24.0))");
+            }
+            case 11 -> out.append("floor(").append(x).append(')');
+            case 12 -> out.append("ceil(").append(x).append(')');
+            case 13 -> out.append("sqrt(").append(x).append(')');
+            case 14 -> out.append("double(sin(float(").append(x).append(")))");
+            case 15 -> out.append("double(cos(float(").append(x).append(")))");
+            case 16 -> out.append("double(exp(float(").append(x).append(")))");
+            case 17 -> out.append("double(log(float(").append(x).append(")))");
+            case 18 -> out.append("mappedTanh(").append(x).append(')');
+            case 19 -> out.append("double(mthSinValues[uint(int(float(").append(x)
+                    .append(")*10430.378)&65535)])");
+            case 20 -> out.append("double(mthSinValues[uint(int(float(").append(x)
+                    .append(")*10430.378+16384.0)&65535)])");
+            case 21 -> out.append("double(sqrt(float(").append(x).append(")))");
+            default -> throw invalid(index, "unknown mapped operation " + operation);
+        }
     }
 
     private static String register(int register, int instruction, int child, int childCount) {

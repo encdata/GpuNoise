@@ -339,6 +339,13 @@ double densityGradient(double from, double to, double t){
     return mix(from, to, t);
 #endif
 }
+double mappedTanh(double x){
+    float value=float(x);
+    if(value>10.0)return 1.0;
+    if(value< -10.0)return -1.0;
+    float exponential=exp(2.0*value);
+    return double((exponential-1.0)/(exponential+1.0));
+}
 double mapValue(double x,uint op){
     if(op==5u)return abs(x); if(op==6u)return graphMultiply(x,x); if(op==7u)return graphMultiply(graphMultiply(x,x),x);
     if(op==8u)return x>0?x:graphMultiply(x,.5); if(op==9u)return x>0?x:graphMultiply(x,.25);
