@@ -125,8 +125,11 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 long deadline = batchStarted + BATCH_WINDOW_NANOS;
                 BatchCandidate batchCandidate = largestNearbyBatch();
                 int compatibleCount = batchCandidate.chunks;
-                while (System.nanoTime() < deadline && pendingChunks < MAX_CHUNKS
-                        && compatibleCount < Math.min(TARGET_CHUNKS, batchCandidate.capacity)) {
+                int batchTarget = Math.min(TARGET_CHUNKS, batchCandidate.capacity);
+                int refreshAfterArrivals = candidateRefreshInterval(batchTarget - compatibleCount);
+                int arrivalsSinceRefresh = 0;
+                while (System.nanoTime() < deadline && pendingChunks < MAX_CHUNKS) {
+                    if (compatibleCount >= batchTarget) break;
                     long now = System.nanoTime();
                     long remaining = deadline - now;
                     Pending next = remaining > 0
@@ -134,9 +137,19 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                             : queue.poll();
                     if (next == null) break;
                     addPending(next);
-                    batchCandidate = largestNearbyBatch();
-                    compatibleCount = batchCandidate.chunks;
+                    arrivalsSinceRefresh++;
+                    if (arrivalsSinceRefresh >= refreshAfterArrivals) {
+                        batchCandidate = largestNearbyBatch();
+                        compatibleCount = batchCandidate.chunks;
+                        batchTarget = Math.min(TARGET_CHUNKS, batchCandidate.capacity);
+                        refreshAfterArrivals = candidateRefreshInterval(batchTarget - compatibleCount);
+                        arrivalsSinceRefresh = 0;
+                    }
                 }
+                // Candidate selection is exact at dispatch time. During the
+                // collection window, bounded refresh intervals avoid rescanning
+                // every spatial bucket for each individual C2ME arrival.
+                if (arrivalsSinceRefresh != 0) batchCandidate = largestNearbyBatch();
                 Map<Long, ArrayDeque<Pending>> region = pendingByLayout.get(batchCandidate.layout);
                 ArrayDeque<Pending> seedQueue = region.get(batchCandidate.region);
                 Pending seed = seedQueue.peekFirst();
@@ -206,6 +219,10 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 ignored -> new HashMap<>());
         regions.computeIfAbsent(regionKey(item.grid), ignored -> new ArrayDeque<>()).addLast(item);
         pendingChunks++;
+    }
+
+    private static int candidateRefreshInterval(int chunksUntilTarget) {
+        return Math.max(1, Math.min(16, chunksUntilTarget));
     }
 
     private static int maxChunksPerDispatch(GpuTerrainGrid grid) {
