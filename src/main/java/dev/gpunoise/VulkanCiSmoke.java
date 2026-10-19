@@ -654,8 +654,14 @@ public final class VulkanCiSmoke {
             int[][][] nearestChunkCenters = new int[chunkBatchSize][][];
             java.util.Arrays.fill(nearestChunkQueries, queries[0]);
             java.util.Arrays.fill(nearestChunkCenters, centers[0]);
-            var chunkNearestFuture = ring.submitAquiferNearestThree(
-                    GpuAquiferNearestThree.pack(nearestChunkQueries, nearestChunkCenters), chunkBatchSize);
+            ByteBuffer compactNearestBatch = GpuAquiferNearestThree.pack(nearestChunkQueries, nearestChunkCenters);
+            int expectedCompactBytes = GpuAquiferNearestThree.HEADER_BYTES
+                    + chunkBatchSize * GpuAquiferNearestThree.QUERY_RECORD_BYTES
+                    + GpuAquiferNearestThree.CENTER_RECORD_BYTES;
+            if (compactNearestBatch.remaining() != expectedCompactBytes) {
+                throw new IllegalStateException("Shared aquifer neighborhoods were not compacted in the GPU payload");
+            }
+            var chunkNearestFuture = ring.submitAquiferNearestThree(compactNearestBatch, chunkBatchSize);
             if (chunkBatchSize > GpuAquiferSubstance.MAX_QUERIES) {
                 throw new IllegalStateException("Aquifer substance capacity is smaller than a 384-block chunk");
             }

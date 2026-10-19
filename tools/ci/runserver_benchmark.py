@@ -384,6 +384,10 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                 raise RuntimeError(
                     "GPU final-density differential did not sample the configured parity chunk "
                     f"({DENSITY_PARITY_CHUNK_X},{DENSITY_PARITY_CHUNK_Z})")
+            if any(int(unsafe) != 0 for *_, unsafe in density_differentials):
+                raise RuntimeError(
+                    "GPU final-density sign parity failed outside the Java fallback threshold in the "
+                    f"configured chunk ({DENSITY_PARITY_CHUNK_X},{DENSITY_PARITY_CHUNK_Z})")
             if max(counts[2] for counts in gpu_counts) <= 0:
                 if not c2me_java_fallback:
                     raise RuntimeError("GPU benchmark completed without any GPU terrain cache being consumed")

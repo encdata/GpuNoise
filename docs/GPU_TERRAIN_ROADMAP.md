@@ -297,9 +297,13 @@ Substance and nearest-center batches use the terrain engine's 262,144-record
 capacity. The nearest-center input/output buffers account for its wider records.
 Each stage can process a 147,456-block, 576-high modded chunk in one shader
 dispatch and one fence/readback round trip instead of splitting the stage into
-multiple submissions. Mesa smoke sends and parity-checks full-height batches
-for both kernels. This removes avoidable per-dispatch synchronization without
-treating software Vulkan timing as evidence of hardware speed.
+multiple submissions. Nearest-center inputs now store each block's point and a
+neighborhood index once, then upload each shared 12-center neighborhood once;
+the per-block query record shrinks from 208 bytes to 16 bytes for the common
+shared-neighborhood case. Mesa smoke sends and parity-checks full-height batches
+for both kernels and asserts that shared centers are compacted. This reduces
+transfer volume and avoidable synchronization without treating software Vulkan
+timing as evidence of hardware speed.
 
 The terrain roots batcher now reuses a bounded pool of direct metadata buffers
 until each asynchronous Vulkan submission completes. This removes per-dispatch

@@ -2,6 +2,9 @@ package dev.gpunoise;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
+import java.util.IdentityHashMap;
+import java.util.List;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 
@@ -9,32 +12,74 @@ import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 public final class GpuAquiferNearestThree {
     // Vanilla visits grid X offsets 0..1, Y offsets -1..1, Z offsets 0..1.
     public static final int CANDIDATES = 12;
-    public static final int RECORD_BYTES = 16 * (CANDIDATES + 1);
+    public static final int HEADER_BYTES = 2 * Integer.BYTES;
+    public static final int QUERY_RECORD_BYTES = 4 * Integer.BYTES;
+    public static final int CENTER_RECORD_BYTES = 4 * Integer.BYTES * CANDIDATES;
+    /** Maximum-size query plus one unique center neighborhood per query. */
+    public static final int RECORD_BYTES = QUERY_RECORD_BYTES + CENTER_RECORD_BYTES;
     // Four ranked center indices, four squared distances, and four ABI words.
     // Vanilla consumes the first three; optimized aquifer implementations can
     // use the fourth for fluid-tick decisions.
     public static final int OUTPUT_INTS = 12;
     /** One dispatch can rank centers for a modded 576-block chunk. */
     public static final int MAX_QUERIES = PersistentVulkanNormalNoiseEngine.CAPACITY;
+    public static final long MAX_PACKED_BYTES = HEADER_BYTES
+            + (long) MAX_QUERIES * RECORD_BYTES;
 
     private GpuAquiferNearestThree() {}
 
     public static ByteBuffer pack(int[][] queries, int[][][] centers) {
-        if (queries.length != centers.length || queries.length > MAX_QUERIES)
+        if (queries.length == 0 || queries.length != centers.length || queries.length > MAX_QUERIES)
             throw new IllegalArgumentException("invalid aquifer nearest-four batch");
-        ByteBuffer packed = ByteBuffer.allocateDirect(queries.length * RECORD_BYTES)
-                .order(ByteOrder.nativeOrder());
+        IdentityHashMap<int[][], Integer> centerIndices = new IdentityHashMap<>();
+        List<int[][]> uniqueCenters = new ArrayList<>();
+        int[] queryCenterIndices = new int[queries.length];
         for (int i = 0; i < queries.length; i++) {
             int[] query = queries[i];
-            if (query.length != 3 || centers[i].length != CANDIDATES)
+            if (query == null || query.length != 3 || centers[i] == null
+                    || centers[i].length != CANDIDATES)
                 throw new IllegalArgumentException("aquifer query must contain one point and 12 centers");
-            packed.putInt(query[0]).putInt(query[1]).putInt(query[2]).putInt(0);
             for (int[] center : centers[i]) {
-                if (center.length != 3) throw new IllegalArgumentException("aquifer center must be xyz");
+                if (center == null || center.length != 3)
+                    throw new IllegalArgumentException("aquifer center must be xyz");
+            }
+            Integer group = centerIndices.get(centers[i]);
+            if (group == null) {
+                group = uniqueCenters.size();
+                uniqueCenters.add(centers[i]);
+                centerIndices.put(centers[i], group);
+            }
+            queryCenterIndices[i] = group;
+        }
+        long byteCount = HEADER_BYTES + (long) queries.length * QUERY_RECORD_BYTES
+                + (long) uniqueCenters.size() * CENTER_RECORD_BYTES;
+        if (byteCount > MAX_PACKED_BYTES || byteCount > Integer.MAX_VALUE)
+            throw new IllegalArgumentException("aquifer nearest-center payload exceeds GPU capacity");
+        ByteBuffer packed = ByteBuffer.allocateDirect((int) byteCount).order(ByteOrder.nativeOrder());
+        packed.putInt(queries.length).putInt(uniqueCenters.size());
+        for (int i = 0; i < queries.length; i++) {
+            packed.putInt(queries[i][0]).putInt(queries[i][1]).putInt(queries[i][2])
+                    .putInt(queryCenterIndices[i]);
+        }
+        for (int[][] neighborhood : uniqueCenters) {
+            for (int[] center : neighborhood) {
                 packed.putInt(center[0]).putInt(center[1]).putInt(center[2]).putInt(0);
             }
         }
         return packed.flip();
+    }
+
+    static boolean isValidPacked(ByteBuffer records, int count) {
+        if (records == null || count <= 0 || count > MAX_QUERIES
+                || records.remaining() < HEADER_BYTES + (long) count * QUERY_RECORD_BYTES) return false;
+        ByteBuffer view = records.duplicate().order(ByteOrder.nativeOrder());
+        int position = view.position();
+        if (view.getInt(position) != count) return false;
+        int groups = view.getInt(position + Integer.BYTES);
+        if (groups <= 0 || groups > count) return false;
+        long expected = HEADER_BYTES + (long) count * QUERY_RECORD_BYTES
+                + (long) groups * CENTER_RECORD_BYTES;
+        return expected == records.remaining() && expected <= MAX_PACKED_BYTES;
     }
 
     static ByteBuffer pack(PositionalRandomFactory factory, int[][] queries) {

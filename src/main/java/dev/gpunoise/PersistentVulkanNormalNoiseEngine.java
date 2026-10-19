@@ -21,7 +21,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     static final int CAPACITY = 262_144;
     static final int GRAPH_NODE_CAPACITY = 2048;
     private static final long AQUIFER_INPUT_BYTES = Math.max(
-            (long) GpuAquiferNearestThree.MAX_QUERIES * GpuAquiferNearestThree.RECORD_BYTES,
+            GpuAquiferNearestThree.MAX_PACKED_BYTES,
             (long) GpuAquiferSubstance.MAX_QUERIES * GpuAquiferSubstance.RECORD_BYTES);
     private static final long AQUIFER_OUTPUT_BYTES = Math.max(
             (long) GpuAquiferNearestThree.MAX_QUERIES * GpuAquiferNearestThree.OUTPUT_INTS,
@@ -725,8 +725,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
 
     /** Selects aquifer centers with Minecraft's exact integer tie ordering. */
     synchronized int[] submitAquiferNearestThree(ByteBuffer records, int count) throws Exception {
-        if (count <= 0 || count > GpuAquiferNearestThree.MAX_QUERIES
-                || records.remaining() != count * GpuAquiferNearestThree.RECORD_BYTES)
+        if (!GpuAquiferNearestThree.isValidPacked(records, count))
             throw new IllegalArgumentException("invalid aquifer nearest-three batch");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             put(aquiferNearestInputs, records, stack);
