@@ -30,9 +30,11 @@ GPU speed. Any speed evaluation belongs on real Vulkan hardware outside CI.
   parity checks. This preserves correct Java behavior while expanding useful
   GPU coverage in mixed terrain modpacks.
 - The graph lowerer removes unreachable nodes, orders dependencies, and reuses
-  registers. Vulkan evaluates the terrain router roots on the cell lattice.
-  Java still owns interpolation, aquifer orchestration, biome selection, and
-  chunk writing; full block output remains a diagnostic option.
+  registers. Vulkan evaluates terrain router roots on the cell lattice and has
+  a per-block interpolation shader. The final-density block trace currently
+  fails parity, so that interpolation contract is not ready for authoritative
+  terrain use. Minecraft retains aquifer orchestration, biome selection, and
+  chunk writing on Java.
 - Optional terrain profiling is available for separate real-hardware
   investigation; GitHub Actions does not enable or use it as a speed gate.
 - Bytecode translation now permits dynamic forward conditionals and switches
@@ -101,6 +103,16 @@ GPU speed. Any speed evaluation belongs on real Vulkan hardware outside CI.
   skip repeated block-output checks unless diagnostic full-block mode is
   enabled. These changes reduce avoidable Java work without changing density
   values or transferring chunk writes to the GPU.
+- Targeted run `39241099415` disproved final-density block parity even though
+  graph and cell-grid root parity passed: all 98,304 traced block samples in
+  chunk `(-17,-18)` differed bitwise, with 48 unsafe sign changes and maximum
+  absolute error 0.287576. The first sign change was at `(-268,46,-287)`:
+  Java `-0.0025274`, GPU `0.1482898`. Tectonic showed 44 sign changes and
+  maximum error 0.262641; the same saved-world errors were reproduced with and
+  without BYG. This localizes the remaining parity gap to the block stage. A
+  likely cause is interpolating the composed final-density root instead of
+  matching NoiseChunk's per-function interpolation; that hypothesis needs a
+  direct implementation-level parity check before changing the GPU contract.
 - Terrain profiling now reports Java fallback evaluations per router root in
   addition to whole-chunk fallback counts. This distinguishes intentional
   root-level CPU fallback in mixed modded graphs from GPU cache failures and
