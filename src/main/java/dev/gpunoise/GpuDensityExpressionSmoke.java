@@ -509,7 +509,12 @@ final class GpuDensityExpressionSmoke {
                 new int[]{2}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
                 java.util.List.of(source, source, source));
         GpuDensityGraph retained = GpuDensityGraphLowerer.lower(roundedAddition);
-        if (!retained.nodes().get(retained.routerRoots()[0]).opcode().equals("Ap2")) {
+        int rootRegister = retained.routerRoots()[0];
+        GpuDensityGraph.Node rootProducer = null;
+        for (GpuDensityGraph.Node node : retained.nodes()) {
+            if (node.register() == rootRegister) rootProducer = node;
+        }
+        if (rootProducer == null || !rootProducer.opcode().equals("Ap2")) {
             throw new AssertionError("constant addition must stay executable when folding changes float-ABI precision");
         }
 
