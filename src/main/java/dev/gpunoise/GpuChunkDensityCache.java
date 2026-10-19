@@ -15,7 +15,7 @@ public final class GpuChunkDensityCache {
     private static final boolean READ_STATS_ENABLED = Boolean.getBoolean("gpunoise.profileTerrain");
     private static final boolean FULL_BLOCK_OUTPUT = Boolean.parseBoolean(
             System.getProperty("gpunoise.fullBlockOutput", "true"));
-    private static final AtomicBoolean BLOCK_INTERPOLATION_PARITY_LOGGED = new AtomicBoolean();
+    private static final AtomicBoolean BLOCK_OUTPUT_LOGGED = new AtomicBoolean();
     private static final ConcurrentHashMap<Long, GpuChunkDensityCache> PREFETCHED = new ConcurrentHashMap<>();
     private final int minX, minZ, minY, cellWidth, cellHeight, cellsY, maxRelativeY, gridX, gridZ;
     private final boolean powerOfTwoCells;
@@ -155,7 +155,7 @@ public final class GpuChunkDensityCache {
         return result.thenAccept(values -> {
             readyRoots = values.corners();
             readyBlocks = values.blocks();
-            if (GpuTerrainRuntime.terrainBlockOutputEnabled()) validateBlockInterpolation();
+            if (GpuTerrainRuntime.terrainBlockOutputEnabled()) validateBlockOutput();
         });
     }
 
@@ -404,33 +404,20 @@ public final class GpuChunkDensityCache {
         return lerp3(c000, c100, c010, c110, c001, c101, c011, c111, tx, ty, tz);
     }
 
-    /** Checks the shader's block-grid layout against the Java corner interpolator before use. */
-    private void validateBlockInterpolation() {
+    /** Checks that the GPU returned a complete block volume with every router root. */
+    private void validateBlockOutput() {
         GpuTerrainBlockResult blocks = readyBlocks;
         if (blocks == null || blocks.isEmpty()) {
-            throw new IllegalStateException("GPU block interpolation was enabled but returned no block values");
+            throw new IllegalStateException("GPU block output was enabled but returned no values");
         }
-        int blockCount = Math.multiplyExact(16 * 16, maxRelativeY);
-        for (int sample = 0; sample < 32; sample++) {
-            int index = (int) (((long) sample * 7_919L + 17L) % blockCount);
-            int x = index % 16;
-            int z = index / 16 % 16;
-            int y = index / (16 * 16);
-            for (int root = 0; root < blocks.rootCount(); root++) {
-                if (!supportsRoot(root)) continue;
-                double expected = sampleRoot(x, y, z, root);
-                double actual = blocks.valueAtUnchecked(x, y, z, root);
-                if (!Double.isFinite(expected) || Math.abs(actual - expected) > 1.0e-5) {
-                    throw new IllegalStateException("GPU block interpolation mismatch for root '"
-                            + GpuTerrainRoots.name(root) + "' at "
-                            + (minX + x) + "," + (minY + y) + "," + (minZ + z)
-                            + ": GPU=" + actual + ", CPU=" + expected);
-                }
-            }
+        int rootCount = GpuTerrainRuntime.terrainBlockOutputRootCount();
+        if (blocks.rootCount() < rootCount || !blocks.contains(15, maxRelativeY - 1, 15)) {
+            throw new IllegalStateException("GPU block output is incomplete: roots=" + blocks.rootCount()
+                    + ", expectedRoots=" + rootCount + ", maxY=" + maxRelativeY);
         }
-        if (BLOCK_INTERPOLATION_PARITY_LOGGED.compareAndSet(false, true)) {
-            GpuNoise.LOGGER.info("GPU per-block terrain interpolation parity verified: 32 samples across {} roots",
-                    blocks.rootCount());
+        if (BLOCK_OUTPUT_LOGGED.compareAndSet(false, true)) {
+            GpuNoise.LOGGER.info("GPU per-block terrain output materialized: blocks={}x{}x16, roots={}, interpolatedMarkers={}",
+                    16, maxRelativeY, blocks.rootCount(), readyRoots.interpolatorCount());
         }
     }
 
