@@ -35,7 +35,6 @@ struct BlendedInfo {
     uint pad0; uint pad1; uint pad2; uint pad3; uint pad4; uint pad5;
 };
 layout(std430,set=0,binding=7) readonly buffer BlendedMetadata { BlendedInfo blended[]; };
-layout(std430,set=0,binding=8) readonly buffer BlendInputs { vec2 blendInputs[]; };
 layout(std430,set=0,binding=9) readonly buffer Roots { uint rootNodes[]; };
 layout(std430,set=0,binding=10) readonly buffer MthSinTable { float mthSinValues[]; };
 layout(std430,set=0,binding=11) readonly buffer InterpolatedInputs { float interpolatedInputs[]; };
