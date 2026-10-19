@@ -244,6 +244,9 @@ parity checks.
   pressure inputs. Near-zero results are marked for exact CPU resolution
   because the shader uses float inputs while vanilla computes pressure in
   double precision. The chunk writer does not consume this output yet.
+  Full-chunk substance batches now pack directly from the shared pending list,
+  removing the per-dispatch temporary reference array before the direct-buffer
+  upload. The Vulkan record layout is checked against array packing in smoke.
 - Keep fluid picking, preliminary surface sampling, surface level selection,
   and fluid type selection as explicit inputs/operations. These consult
   `NoiseChunk`, density roots, and world settings; the shader must not infer

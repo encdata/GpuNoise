@@ -334,10 +334,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         List<CompletableFuture<int[]>> substanceBatches = new ArrayList<>();
         for (int offset = 0; offset < inputs.size(); offset += GpuAquiferSubstance.MAX_QUERIES) {
             int count = Math.min(GpuAquiferSubstance.MAX_QUERIES, inputs.size() - offset);
-            GpuAquiferSubstance.Input[] batch = inputs.subList(offset, offset + count)
-                    .toArray(GpuAquiferSubstance.Input[]::new);
             substanceBatches.add(GpuTerrainRuntime.submitAquiferSubstance(
-                    GpuAquiferSubstance.pack(batch), batch.length).toCompletableFuture());
+                    GpuAquiferSubstance.pack(inputs, offset, count), count).toCompletableFuture());
         }
         CompletableFuture.allOf(substanceBatches.toArray(CompletableFuture[]::new)).join();
 

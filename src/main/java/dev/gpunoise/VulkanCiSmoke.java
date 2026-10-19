@@ -690,6 +690,14 @@ public final class VulkanCiSmoke {
                             GpuAquiferSubstance.OTHER, GpuAquiferSubstance.WATER,
                             GpuAquiferSubstance.LAVA, 0, false, false, 409)
             };
+            int substanceSliceCount = substanceCases.length - 2;
+            ByteBuffer substanceSlice = GpuAquiferSubstance.pack(
+                    List.of(substanceCases), 1, substanceSliceCount);
+            GpuAquiferSubstance.Input[] expectedSubstanceSlice = java.util.Arrays.copyOfRange(
+                    substanceCases, 1, substanceCases.length - 1);
+            if (!substanceSlice.equals(GpuAquiferSubstance.pack(expectedSubstanceSlice))) {
+                throw new IllegalStateException("aquifer substance range packing changed record order or values");
+            }
             var substanceFuture = ring.submitAquiferSubstance(
                     GpuAquiferSubstance.pack(substanceCases), substanceCases.length);
             // The Tectonic integration profile can produce 576-block-high

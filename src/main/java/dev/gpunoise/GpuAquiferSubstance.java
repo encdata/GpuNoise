@@ -2,6 +2,7 @@ package dev.gpunoise;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.List;
 
 /** Packed contract and double-precision reference for vanilla aquifer results. */
 public final class GpuAquiferSubstance {
@@ -33,21 +34,37 @@ public final class GpuAquiferSubstance {
     }
 
     public static ByteBuffer pack(Input[] inputs) {
-        if (inputs.length == 0 || inputs.length > MAX_QUERIES)
+        if (inputs == null || inputs.length == 0 || inputs.length > MAX_QUERIES)
             throw new IllegalArgumentException("invalid aquifer substance batch");
-        ByteBuffer packed = ByteBuffer.allocateDirect(inputs.length * RECORD_BYTES)
-                .order(ByteOrder.nativeOrder());
-        for (Input input : inputs) {
-            int flags = (input.globalIsLava ? 1 : 0) | (input.belowIsLava ? 2 : 0)
-                    | (input.c2meAquifer ? 4 : 0);
-            packed.putFloat((float) input.density).putFloat((float) input.barrier).putInt(input.y)
-                    .putInt(input.level0).putInt(input.level1).putInt(input.level2).putInt(input.level3)
-                    .putInt(input.distance0).putInt(input.distance1).putInt(input.distance2).putInt(input.distance3)
-                    .putInt(input.kind0).putInt(input.kind1).putInt(input.kind2).putInt(input.kind3)
-                    .putInt(input.statusEqualityMask).putInt(input.globalStateId).putInt(flags)
-                    .putInt(input.nearestStateId).putInt(0);
-        }
+        ByteBuffer packed = allocateBatch(inputs.length);
+        for (Input input : inputs) putInput(packed, input);
         return packed.flip();
+    }
+
+    /** Packs a range directly from the caller's list without a temporary array copy. */
+    static ByteBuffer pack(List<Input> inputs, int offset, int count) {
+        if (inputs == null || count <= 0 || count > MAX_QUERIES
+                || offset < 0 || offset > inputs.size() - count)
+            throw new IllegalArgumentException("invalid aquifer substance batch range");
+        ByteBuffer packed = allocateBatch(count);
+        for (int index = offset; index < offset + count; index++) putInput(packed, inputs.get(index));
+        return packed.flip();
+    }
+
+    private static ByteBuffer allocateBatch(int count) {
+        return ByteBuffer.allocateDirect(Math.multiplyExact(count, RECORD_BYTES))
+                .order(ByteOrder.nativeOrder());
+    }
+
+    private static void putInput(ByteBuffer packed, Input input) {
+        int flags = (input.globalIsLava ? 1 : 0) | (input.belowIsLava ? 2 : 0)
+                | (input.c2meAquifer ? 4 : 0);
+        packed.putFloat((float) input.density).putFloat((float) input.barrier).putInt(input.y)
+                .putInt(input.level0).putInt(input.level1).putInt(input.level2).putInt(input.level3)
+                .putInt(input.distance0).putInt(input.distance1).putInt(input.distance2).putInt(input.distance3)
+                .putInt(input.kind0).putInt(input.kind1).putInt(input.kind2).putInt(input.kind3)
+                .putInt(input.statusEqualityMask).putInt(input.globalStateId).putInt(flags)
+                .putInt(input.nearestStateId).putInt(0);
     }
 
     /** Output words are action, state ID, schedule-fluid-update, reserved. */
