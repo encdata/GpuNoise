@@ -14,9 +14,13 @@ final class GpuDensityGraphBuffer {
     private static final int MTH_SIN_TABLE_SIZE = 65_536;
     private static final float[] MTH_SIN_TABLE = createMthSinTable();
     private static final ByteBuffer MTH_SIN_TABLE_BYTES = createMthSinTableBytes();
+    private record BlockProgram(boolean[] skip, int[][] childProducers, int[] registers,
+                                int[] rootRegisters, int[][] splineValueProducers,
+                                int nodeCount, int registerCount) {}
     record Packed(ByteBuffer nodes, ByteBuffer permutations, ByteBuffer octaves,
                   ByteBuffer samplerMetadata, ByteBuffer splinePoints, ByteBuffer blendedMetadata,
-                  int nodeCount, int blockNodeOffset, int blockNodeCount,
+                  int nodeCount, int blockNodeOffset, int blockNodeCount, int blockRegisterCount,
+                  int[] blockRootRegisters,
                   int samplerCount, int blendedCount) {}
 
     private static final Map<String, Integer> OPCODES = Map.ofEntries(
@@ -39,7 +43,7 @@ final class GpuDensityGraphBuffer {
 
     static int blockSkippedNodeCount(GpuDensityGraph graph) {
         int skipped = 0;
-        for (boolean skip : blockEvaluationSkipMask(graph)) if (skip) skipped++;
+        for (boolean skip : blockProgram(graph).skip()) if (skip) skipped++;
         return skipped;
     }
 
@@ -67,9 +71,9 @@ final class GpuDensityGraphBuffer {
             throw new IllegalArgumentException("GPU graph needs " + graph.registerCount()
                     + " live registers; shader capacity is " + MAX_SHADER_REGISTERS);
         }
-        boolean[] blockSkip = blockEvaluationSkipMask(graph);
-        int blockNodeCount = 0;
-        for (boolean skip : blockSkip) if (!skip) blockNodeCount++;
+        BlockProgram block = blockProgram(graph);
+        boolean[] blockSkip = block.skip();
+        int blockNodeCount = block.nodeCount();
         int blockNodeOffset = graph.nodes().size();
         ByteBuffer output = ByteBuffer.allocateDirect(Math.multiplyExact(
                 Math.addExact(blockNodeOffset, blockNodeCount), NODE_BYTES)).order(ByteOrder.nativeOrder());
@@ -102,23 +106,43 @@ final class GpuDensityGraphBuffer {
             Integer opcode = OPCODES.get(node.opcode());
             int[] children = node.children();
             double[] constants = node.constants();
-            output.putInt(opcode).putInt(children.length > 0 ? children[0] : -1)
-                    .putInt(children.length > 1 ? children[1] : -1)
-                    .putInt(children.length > 2 ? children[2] : -1);
+            int first = blockChildRegister(block, node, nodeIndex, 0);
+            int second = blockChildRegister(block, node, nodeIndex, 1);
+            int third = blockChildRegister(block, node, nodeIndex, 2);
+            output.putInt(opcode).putInt(first).putInt(second).putInt(third);
+            if (node.opcode().equals("Spline") && constants.length > 0)
+                constants[0] += graph.splines().size();
             for (int i = 0; i < 4; i++) output.putFloat(i < constants.length ? (float) constants[i] : 0.0f);
             int metadataZ = constants.length;
             if (node.opcode().equals("Marker")) metadataZ = markerSlot;
             // Block pass consumes interpolated markers directly from their
             // per-block input; their child register is intentionally unused.
             int metadataY = children.length;
-            output.putInt(operation(node.payload())).putInt(metadataY).putInt(metadataZ).putInt(node.register());
+            output.putInt(operation(node.payload())).putInt(metadataY).putInt(metadataZ)
+                    .putInt(block.registers()[nodeIndex]);
         }
-        ByteBuffer splinePoints = ByteBuffer.allocateDirect(graph.splines().size() * 64 * 16).order(ByteOrder.nativeOrder());
+        int splineStride = 64 * 16;
+        ByteBuffer splinePoints = ByteBuffer.allocateDirect(graph.splines().size() * 2 * splineStride)
+                .order(ByteOrder.nativeOrder());
         for (int splineIndex = 0; splineIndex < graph.splines().size(); splineIndex++) {
             GpuDensityGraph.Spline spline = graph.splines().get(splineIndex);
             int[] valueNodes = spline.valueNodes(); float[] locations = spline.locations(); float[] derivatives = spline.derivatives();
             for (int i = 0; i < locations.length; i++) splinePoints.putFloat(locations[i]).putFloat(derivatives[i]).putInt(valueNodes[i]).putInt(0);
             splinePoints.position((splineIndex + 1) * 64 * 16);
+        }
+        for (int splineIndex = 0; splineIndex < graph.splines().size(); splineIndex++) {
+            GpuDensityGraph.Spline spline = graph.splines().get(splineIndex);
+            int[] valueNodes = spline.valueNodes();
+            float[] locations = spline.locations();
+            float[] derivatives = spline.derivatives();
+            int[] valueProducers = block.splineValueProducers()[splineIndex];
+            for (int i = 0; i < locations.length; i++) {
+                int producer = valueProducers[i];
+                int register = producer >= 0 && block.registers()[producer] >= 0
+                        ? block.registers()[producer] : valueNodes[i];
+                splinePoints.putFloat(locations[i]).putFloat(derivatives[i]).putInt(register).putInt(0);
+            }
+            splinePoints.position((graph.splines().size() + splineIndex + 1) * splineStride);
         }
         List<NormalNoise> samplers = graph.noises();
         int permutationBytes = 0;
@@ -179,6 +203,7 @@ final class GpuDensityGraphBuffer {
         return new Packed((ByteBuffer) output.flip(), (ByteBuffer) permutations.flip(),
                 (ByteBuffer) octaves.flip(), (ByteBuffer) metadata.flip(), (ByteBuffer) splinePoints.flip(),
                 (ByteBuffer) blendedMetadata.flip(), graph.nodes().size(), blockNodeOffset, blockNodeCount,
+                block.registerCount(), block.rootRegisters(),
                 samplers.size(), graph.blended().size());
     }
 
@@ -187,7 +212,16 @@ final class GpuDensityGraphBuffer {
      * interpolated marker's child is intentionally not a dependency in the
      * block pass because that marker is supplied from the cell-corner pass.
      */
-    private static boolean[] blockEvaluationSkipMask(GpuDensityGraph graph) {
+    private static int blockChildRegister(BlockProgram program, GpuDensityGraph.Node node,
+                                          int nodeIndex, int childIndex) {
+        int[] children = node.children();
+        if (childIndex >= children.length) return -1;
+        if (node.opcode().equals("Marker") && "Interpolated".equals(node.payload())) return -1;
+        int producer = program.childProducers()[nodeIndex][childIndex];
+        return program.registers()[producer];
+    }
+
+    private static BlockProgram blockProgram(GpuDensityGraph graph) {
         List<GpuDensityGraph.Node> nodes = graph.nodes();
         int[] lastProducer = new int[graph.registerCount()];
         java.util.Arrays.fill(lastProducer, -1);
@@ -235,8 +269,71 @@ final class GpuDensityGraphBuffer {
             for (int producer : childProducers[index]) work.addLast(producer);
         }
         boolean[] skip = new boolean[nodes.size()];
-        for (int index = 0; index < skip.length; index++) skip[index] = !active[index];
-        return skip;
+        int blockNodeCount = 0;
+        int[] compactNodeAt = new int[nodes.size()];
+        int[] activeNodeAt = new int[nodes.size()];
+        java.util.Arrays.fill(compactNodeAt, -1);
+        for (int index = 0; index < skip.length; index++) {
+            skip[index] = !active[index];
+            if (active[index]) {
+                compactNodeAt[index] = blockNodeCount;
+                activeNodeAt[blockNodeCount++] = index;
+            }
+        }
+
+        int[] lastUse = new int[nodes.size()];
+        java.util.Arrays.fill(lastUse, -1);
+        for (int index = 0; index < nodes.size(); index++) {
+            if (!active[index]) continue;
+            GpuDensityGraph.Node node = nodes.get(index);
+            if (node.opcode().equals("Marker") && "Interpolated".equals(node.payload())) continue;
+            int position = compactNodeAt[index];
+            for (int producer : childProducers[index]) lastUse[producer] = position;
+        }
+        int[] roots = graph.routerRoots();
+        for (int root : roots) lastUse[lastProducer[root]] = blockNodeCount;
+
+        List<List<Integer>> releases = new java.util.ArrayList<>(blockNodeCount);
+        for (int position = 0; position < blockNodeCount; position++) releases.add(new java.util.ArrayList<>());
+        for (int index = 0; index < nodes.size(); index++) {
+            if (active[index] && lastUse[index] >= 0 && lastUse[index] < blockNodeCount)
+                releases.get(lastUse[index]).add(index);
+        }
+        int[] registers = new int[nodes.size()];
+        java.util.Arrays.fill(registers, -1);
+        java.util.ArrayDeque<Integer> freeRegisters = new java.util.ArrayDeque<>();
+        int nextRegister = 0;
+        for (int position = 0; position < blockNodeCount; position++) {
+            for (int released : releases.get(position)) freeRegisters.addLast(registers[released]);
+            int nodeIndex = activeNodeAt[position];
+            registers[nodeIndex] = freeRegisters.isEmpty() ? nextRegister++ : freeRegisters.removeFirst();
+        }
+        int[] rootRegisters = new int[roots.length];
+        for (int root = 0; root < roots.length; root++) rootRegisters[root] = registers[lastProducer[roots[root]]];
+
+        int[][] splineValueProducers = new int[graph.splines().size()][];
+        for (int splineIndex = 0; splineIndex < splineValueProducers.length; splineIndex++) {
+            int[] values = graph.splines().get(splineIndex).valueNodes();
+            int[] producers = new int[values.length];
+            java.util.Arrays.fill(producers, -1);
+            for (int nodeIndex = 0; nodeIndex < nodes.size(); nodeIndex++) {
+                GpuDensityGraph.Node node = nodes.get(nodeIndex);
+                double[] constants = node.constants();
+                if (!node.opcode().equals("Spline") || constants.length == 0
+                        || (int) constants[0] != splineIndex) continue;
+                if (childProducers[nodeIndex].length != values.length + 1)
+                    throw new IllegalArgumentException("GPU spline " + splineIndex
+                            + " dependencies do not match its control points");
+                System.arraycopy(childProducers[nodeIndex], 1, producers, 0, values.length);
+                break;
+            }
+            splineValueProducers[splineIndex] = producers;
+        }
+        if (nextRegister <= 0 || nextRegister > MAX_SHADER_REGISTERS)
+            throw new IllegalArgumentException("GPU block graph needs " + nextRegister
+                    + " live registers; shader capacity is " + MAX_SHADER_REGISTERS);
+        return new BlockProgram(skip, childProducers, registers, rootRegisters,
+                splineValueProducers, blockNodeCount, nextRegister);
     }
 
     private static int perlinPermutationBytes(MinecraftPerlinData data) {

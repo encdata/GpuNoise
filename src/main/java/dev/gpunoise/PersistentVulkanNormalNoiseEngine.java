@@ -47,9 +47,12 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             aquiferNearestInputs, aquiferNearestOutput;
     private final long shader, descriptorLayout, pipelineLayout, pipeline, descriptorPool, descriptorSet, commandPool;
     private long graphShader, gridShader, graphPipeline, gridPipeline;
+    private long blockGraphShader, blockGraphPipeline;
     private final long graphDescriptorLayout, graphPipelineLayout, graphDescriptorPool, graphDescriptorSet;
     private int graphRegisterVariant = 256;
     private boolean graphFastMathVariant;
+    private int blockGraphRegisterVariant;
+    private boolean blockGraphFastMathVariant;
     private final long interpolationShader, interpolationDescriptorLayout, interpolationPipelineLayout,
             interpolationPipeline, interpolationDescriptorPool, interpolationDescriptorSet;
     private final long aquiferPressureShader, aquiferPressureDescriptorLayout, aquiferPressurePipelineLayout,
@@ -68,6 +71,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     // treated those different layouts as interchangeable.
     private GpuDensityGraph graphResourcesGraph;
     private int[] uploadedGraphRoots;
+    private int[] uploadedBlockGraphRoots;
     private GpuDensityGraph interpolatorMapGraph;
     private final long fence;
     private final VkCommandBuffer commandBuffer;
@@ -118,7 +122,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             coordinates = buffer(CAPACITY * 16L, stack); // vec4 position; sampler id occupies unused w
             // Graph dispatches can return up to 16 router roots per sample.
             results = buffer(CAPACITY * (long) MAX_GRAPH_OUTPUTS * Float.BYTES, stack);
-            graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack); graphNodes = deviceLocalBuffer((long) GRAPH_NODE_STORAGE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack); graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 64L * 16L, stack); graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack); graphRoots = deviceLocalBuffer(64L, stack);
+            graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack); graphNodes = deviceLocalBuffer((long) GRAPH_NODE_STORAGE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack); graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 2L * 64L * 16L, stack); graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack); graphRoots = deviceLocalBuffer(128L, stack);
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
             interpolatedInputs = deviceLocalBuffer((long) INTERPOLATED_INPUT_FLOATS * Float.BYTES, stack);
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
@@ -133,6 +137,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             timestampQueryPool = createTimestampQueryPool(stack);
             graphShader = graphShader(stack); graphDescriptorLayout = graphDescriptorLayout(stack);
             graphPipelineLayout = graphPipelineLayout(stack); graphPipeline = graphPipeline(stack);
+            blockGraphShader = loadShader(stack, "/assets/gpunoise/shaders/density_graph_256.comp.spv", "block graph shader");
+            blockGraphPipeline = graphPipeline(blockGraphShader, stack);
+            blockGraphRegisterVariant = 256;
             gridShader = gridShader(stack); gridPipeline = gridPipeline(stack);
             graphDescriptorPool = graphDescriptorPool(stack); graphDescriptorSet = graphDescriptorSet(stack);
             graphDescriptors(stack);
@@ -182,9 +189,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             results = buffer(CAPACITY * (long) MAX_GRAPH_OUTPUTS * Float.BYTES, stack);
             graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack);
             graphNodes = deviceLocalBuffer((long) GRAPH_NODE_STORAGE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack);
-            graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 64L * 16L, stack);
+            graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 2L * 64L * 16L, stack);
             graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack);
-            graphRoots = deviceLocalBuffer(64L, stack);
+            graphRoots = deviceLocalBuffer(128L, stack);
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
             interpolatedInputs = deviceLocalBuffer((long) INTERPOLATED_INPUT_FLOATS * Float.BYTES, stack);
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
@@ -201,6 +208,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             timestampQueryPool = createTimestampQueryPool(stack);
             graphShader = graphShader(stack); graphDescriptorLayout = graphDescriptorLayout(stack);
             graphPipelineLayout = graphPipelineLayout(stack); graphPipeline = graphPipeline(stack);
+            blockGraphShader = loadShader(stack, "/assets/gpunoise/shaders/density_graph_256.comp.spv", "block graph shader");
+            blockGraphPipeline = graphPipeline(blockGraphShader, stack);
+            blockGraphRegisterVariant = 256;
             gridShader = gridShader(stack); gridPipeline = gridPipeline(stack);
             graphDescriptorPool = graphDescriptorPool(stack); graphDescriptorSet = graphDescriptorSet(stack);
             graphDescriptors(stack);
@@ -568,6 +578,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         long preparationStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
+            ensureBlockGraphVariant(packed, stack);
             ByteBuffer grids = gridMetadata.duplicate().order(ByteOrder.nativeOrder());
             grids.limit(grids.position() + chunkCount * 32);
             put(graphCoordinates, grids, stack);
@@ -578,7 +589,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 put(samplerMetadata, packed.samplerMetadata(), stack); graphResourcesGraph = graph;
             }
             uploadInterpolatorMap(graph, stack);
-            uploadGraphRoots(graph.routerRoots(), stack);
+            uploadGraphRoots(graph.routerRoots(), packed.blockRootRegisters(), stack);
             ByteBuffer metadata = outputMetadata.duplicate().order(ByteOrder.nativeOrder());
             metadata.limit(metadata.position() + chunkCount * GpuInterpolationBatch.METADATA_BYTES);
             put(interpolationMetadata, metadata, stack);
@@ -615,7 +626,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     .buffer(graphCoordinates.buffer).size((long) blockCount * 16L);
             vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, null, interpolationBarrier, null);
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipeline);
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, blockGraphPipeline);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipelineLayout, 0,
                     stack.longs(graphDescriptorSet), null);
             ByteBuffer blockPush = stack.malloc(16).order(ByteOrder.nativeOrder())
@@ -920,12 +931,21 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     }
 
     private void uploadGraphRoots(int[] roots, MemoryStack stack) {
-        if (uploadedGraphRoots != null && java.util.Arrays.equals(uploadedGraphRoots, roots)) return;
-        ByteBuffer bytes = stack.malloc(roots.length * Integer.BYTES).order(ByteOrder.nativeOrder());
-        for (int root : roots) bytes.putInt(root);
+        uploadGraphRoots(roots, roots, stack);
+    }
+
+    private void uploadGraphRoots(int[] roots, int[] blockRoots, MemoryStack stack) {
+        if (roots.length > 16 || blockRoots.length > 16)
+            throw new IllegalArgumentException("GPU root tables are limited to 16 roots");
+        if (uploadedGraphRoots != null && java.util.Arrays.equals(uploadedGraphRoots, roots)
+                && uploadedBlockGraphRoots != null && java.util.Arrays.equals(uploadedBlockGraphRoots, blockRoots)) return;
+        ByteBuffer bytes = stack.malloc(32 * Integer.BYTES).order(ByteOrder.nativeOrder());
+        for (int i = 0; i < 16; i++) bytes.putInt(i < roots.length ? roots[i] : 0);
+        for (int i = 0; i < 16; i++) bytes.putInt(i < blockRoots.length ? blockRoots[i] : 0);
         bytes.flip();
         put(graphRoots, bytes, stack);
         uploadedGraphRoots = roots.clone();
+        uploadedBlockGraphRoots = blockRoots.clone();
     }
 
     private GpuDensityGraphBuffer.Packed packedGraph(GpuDensityGraph graph) {
@@ -1065,6 +1085,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long graphDescriptorLayout(MemoryStack s){VkDescriptorSetLayoutBinding.Buffer b=VkDescriptorSetLayoutBinding.calloc(GRAPH_DESCRIPTOR_BINDINGS.length,s);for(int i=0;i<GRAPH_DESCRIPTOR_BINDINGS.length;i++)b.get(i).binding(GRAPH_DESCRIPTOR_BINDINGS[i]).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);VkDescriptorSetLayoutCreateInfo i=VkDescriptorSetLayoutCreateInfo.calloc(s).sType$Default().pBindings(b);LongBuffer h=s.longs(0);check(vkCreateDescriptorSetLayout(device,i,null,h),"graph layout");return h.get(0);}
     private long graphPipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(16);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(graphDescriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"graph pipeline layout");return h.get(0);}
     private long graphPipeline(MemoryStack s){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(graphShader).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(graphPipelineLayout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),"graph pipeline");return h.get(0);}
+    private long graphPipeline(long shaderModule, MemoryStack s){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(shaderModule).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(graphPipelineLayout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),"block graph pipeline");return h.get(0);}
     private long gridPipeline(MemoryStack s){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(gridShader).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(graphPipelineLayout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),"grid pipeline");return h.get(0);}
     private void ensureGraphVariant(GpuDensityGraph graph, MemoryStack stack) throws Exception {
         int required = graph.registerCount();
@@ -1084,6 +1105,19 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         graphRegisterVariant = variant;
         graphFastMathVariant = FAST_GRAPH_MATH;
         GpuNoise.LOGGER.info("GPU density shader variant: registers={}, fastMath={}", variant, FAST_GRAPH_MATH);
+    }
+    private void ensureBlockGraphVariant(GpuDensityGraphBuffer.Packed packed, MemoryStack stack) throws Exception {
+        int required = packed.blockRegisterCount();
+        int variant = required <= 32 ? 32 : required <= 64 ? 64 : required <= 128 ? 128 : 256;
+        if (variant == blockGraphRegisterVariant && FAST_GRAPH_MATH == blockGraphFastMathVariant) return;
+        vkDestroyPipeline(device, blockGraphPipeline, null);
+        vkDestroyShaderModule(device, blockGraphShader, null);
+        String fast = FAST_GRAPH_MATH ? "_fast" : "";
+        blockGraphShader = loadShader(stack, "/assets/gpunoise/shaders/density_graph" + fast
+                + "_" + variant + ".comp.spv", "block graph shader variant");
+        blockGraphPipeline = graphPipeline(blockGraphShader, stack);
+        blockGraphRegisterVariant = variant;
+        blockGraphFastMathVariant = FAST_GRAPH_MATH;
     }
     private long graphDescriptorPool(MemoryStack s){VkDescriptorPoolSize.Buffer z=VkDescriptorPoolSize.calloc(1,s).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(GRAPH_DESCRIPTOR_BINDINGS.length);VkDescriptorPoolCreateInfo i=VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(z);LongBuffer h=s.longs(0);check(vkCreateDescriptorPool(device,i,null,h),"graph pool");return h.get(0);}
     private long graphDescriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(graphDescriptorPool).pSetLayouts(s.longs(graphDescriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"graph set");return h.get(0);}
@@ -1191,5 +1225,5 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         inFlightGraphRoots = null;
         if (unfinished != null) unfinished.completeExceptionally(
                 new IllegalStateException("GPU engine closed before graph completion was observed"));
-        for(NativeBuffer buffer:persistentMappings.keySet())buffer.unmap(device);vkDestroyFence(device,fence,null);if(timestampQueryPool!=0L)vkDestroyQueryPool(device,timestampQueryPool,null);vkDestroyCommandPool(device,commandPool,null);vkDestroyDescriptorPool(device,descriptorPool,null);vkDestroyPipeline(device,pipeline,null);vkDestroyPipelineLayout(device,pipelineLayout,null);vkDestroyDescriptorSetLayout(device,descriptorLayout,null);vkDestroyShaderModule(device,shader,null);vkDestroyPipeline(device,graphPipeline,null);vkDestroyPipeline(device,gridPipeline,null);vkDestroyPipelineLayout(device,graphPipelineLayout,null);vkDestroyDescriptorSetLayout(device,graphDescriptorLayout,null);vkDestroyDescriptorPool(device,graphDescriptorPool,null);vkDestroyShaderModule(device,graphShader,null);vkDestroyShaderModule(device,gridShader,null);vkDestroyPipeline(device,interpolationPipeline,null);vkDestroyPipelineLayout(device,interpolationPipelineLayout,null);vkDestroyDescriptorSetLayout(device,interpolationDescriptorLayout,null);vkDestroyDescriptorPool(device,interpolationDescriptorPool,null);vkDestroyShaderModule(device,interpolationShader,null);vkDestroyPipeline(device,aquiferPressurePipeline,null);vkDestroyPipelineLayout(device,aquiferPressurePipelineLayout,null);vkDestroyDescriptorSetLayout(device,aquiferPressureDescriptorLayout,null);vkDestroyDescriptorPool(device,aquiferPressureDescriptorPool,null);vkDestroyShaderModule(device,aquiferPressureShader,null);vkDestroyPipeline(device,aquiferNearestPipeline,null);vkDestroyPipelineLayout(device,aquiferNearestPipelineLayout,null);vkDestroyDescriptorSetLayout(device,aquiferNearestDescriptorLayout,null);vkDestroyDescriptorPool(device,aquiferNearestDescriptorPool,null);vkDestroyShaderModule(device,aquiferNearestShader,null);vkDestroyPipeline(device,aquiferSubstancePipeline,null);vkDestroyPipelineLayout(device,aquiferSubstancePipelineLayout,null);vkDestroyShaderModule(device,aquiferSubstanceShader,null);coordinates.destroy(device);graphCoordinates.destroy(device);graphNodes.destroy(device);graphSplinePoints.destroy(device);graphBlendedMetadata.destroy(device);graphRoots.destroy(device);graphMthSinTable.destroy(device);interpolatedInputs.destroy(device);interpolatorMap.destroy(device);interpolationMetadata.destroy(device);interpolationOutput.destroy(device);aquiferPressureInputs.destroy(device);aquiferNearestInputs.destroy(device);aquiferNearestOutput.destroy(device);results.destroy(device);permutations.destroy(device);octaves.destroy(device);samplerMetadata.destroy(device);if(ownsDevice){vkDestroyDevice(device,null);vkDestroyInstance(instance,null);}}
+        for(NativeBuffer buffer:persistentMappings.keySet())buffer.unmap(device);vkDestroyFence(device,fence,null);if(timestampQueryPool!=0L)vkDestroyQueryPool(device,timestampQueryPool,null);vkDestroyCommandPool(device,commandPool,null);vkDestroyDescriptorPool(device,descriptorPool,null);vkDestroyPipeline(device,pipeline,null);vkDestroyPipelineLayout(device,pipelineLayout,null);vkDestroyDescriptorSetLayout(device,descriptorLayout,null);vkDestroyShaderModule(device,shader,null);vkDestroyPipeline(device,graphPipeline,null);vkDestroyPipeline(device,gridPipeline,null);vkDestroyPipeline(device,blockGraphPipeline,null);vkDestroyShaderModule(device,blockGraphShader,null);vkDestroyPipelineLayout(device,graphPipelineLayout,null);vkDestroyDescriptorSetLayout(device,graphDescriptorLayout,null);vkDestroyDescriptorPool(device,graphDescriptorPool,null);vkDestroyShaderModule(device,graphShader,null);vkDestroyShaderModule(device,gridShader,null);vkDestroyPipeline(device,interpolationPipeline,null);vkDestroyPipelineLayout(device,interpolationPipelineLayout,null);vkDestroyDescriptorSetLayout(device,interpolationDescriptorLayout,null);vkDestroyDescriptorPool(device,interpolationDescriptorPool,null);vkDestroyShaderModule(device,interpolationShader,null);vkDestroyPipeline(device,aquiferPressurePipeline,null);vkDestroyPipelineLayout(device,aquiferPressurePipelineLayout,null);vkDestroyDescriptorSetLayout(device,aquiferPressureDescriptorLayout,null);vkDestroyDescriptorPool(device,aquiferPressureDescriptorPool,null);vkDestroyShaderModule(device,aquiferPressureShader,null);vkDestroyPipeline(device,aquiferNearestPipeline,null);vkDestroyPipelineLayout(device,aquiferNearestPipelineLayout,null);vkDestroyDescriptorSetLayout(device,aquiferNearestDescriptorLayout,null);vkDestroyDescriptorPool(device,aquiferNearestDescriptorPool,null);vkDestroyShaderModule(device,aquiferNearestShader,null);vkDestroyPipeline(device,aquiferSubstancePipeline,null);vkDestroyPipelineLayout(device,aquiferSubstancePipelineLayout,null);vkDestroyShaderModule(device,aquiferSubstanceShader,null);coordinates.destroy(device);graphCoordinates.destroy(device);graphNodes.destroy(device);graphSplinePoints.destroy(device);graphBlendedMetadata.destroy(device);graphRoots.destroy(device);graphMthSinTable.destroy(device);interpolatedInputs.destroy(device);interpolatorMap.destroy(device);interpolationMetadata.destroy(device);interpolationOutput.destroy(device);aquiferPressureInputs.destroy(device);aquiferNearestInputs.destroy(device);aquiferNearestOutput.destroy(device);results.destroy(device);permutations.destroy(device);octaves.destroy(device);samplerMetadata.destroy(device);if(ownsDevice){vkDestroyDevice(device,null);vkDestroyInstance(instance,null);}}
 }

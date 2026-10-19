@@ -443,7 +443,7 @@ void main(){
             =float(values[interpolatorMap[1u+marker]]);
 #else
     for (uint root = 0u; root < outputRootCount; root++)
-        if(blockEvaluation) blockResults[sampleIndex * outputRootCount + root] = float(values[rootNodes[root]]);
+        if(blockEvaluation) blockResults[sampleIndex * outputRootCount + root] = float(values[rootNodes[16u + root]]);
         else results[sampleIndex * outputRootCount + root] = float(values[rootNodes[root]]);
 #endif
 }

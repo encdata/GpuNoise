@@ -585,7 +585,7 @@ final class GpuDensityExpressionSmoke {
         }
         GpuDensityGraphBuffer.Packed packed = GpuDensityGraphBuffer.pack(loweredGraph);
         if (packed.nodeCount() != loweredGraph.nodes().size() || packed.nodes().remaining()
-                != packed.nodeCount() * GpuDensityGraphBuffer.NODE_BYTES) {
+                != (packed.nodeCount() + packed.blockNodeCount()) * GpuDensityGraphBuffer.NODE_BYTES) {
             throw new AssertionError("lowered custom density graph did not produce a complete GPU node buffer");
         }
 
