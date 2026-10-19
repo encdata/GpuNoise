@@ -625,7 +625,12 @@ final class GpuDensityBytecodeCompiler {
                 case Opcodes.DRETURN, Opcodes.IRETURN -> { return true; }
                 case Opcodes.FRETURN, Opcodes.LRETURN ->
                         reject("float or wide-integer return is not represented by the density IR");
-                case Opcodes.ARETURN -> reject("compute method returned a nonnumeric value");
+                // Object-returning helpers can expose density/noise/config
+                // inputs used by the enclosing compute method. The helper
+                // inliner carries these typed values to its caller; only the
+                // top-level compute entry point is required to return a
+                // numeric expression (checked by run()).
+                case Opcodes.ARETURN -> { return true; }
                 case Opcodes.POP -> pop("POP");
                 case Opcodes.DUP -> stack.add(peek("DUP"));
                 case Opcodes.IALOAD, Opcodes.LALOAD, Opcodes.FALOAD, Opcodes.DALOAD,
@@ -1626,9 +1631,7 @@ final class GpuDensityBytecodeCompiler {
 
         private Value finish() {
             if (stack.size() != 1) reject("return stack has " + stack.size() + " values instead of one");
-            Value result = stack.get(0);
-            if (result.kind() != Kind.VALUE) reject("compute method returned a non-expression value");
-            return result;
+            return stack.get(0);
         }
 
         private void pushConstant(double value) {

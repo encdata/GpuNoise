@@ -17,7 +17,7 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
-from terrain_mods import TERRAIN_LIBRARIES, TERRAIN_MODS
+from terrain_mods import TERRAIN_LIBRARIES, TERRAIN_MODS, TERRAIN_TEST_PROFILES
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -164,10 +164,12 @@ def crash_context(log_path: Path, max_lines: int = 45) -> str:
 
 
 def prepare_run_directory(run_dir: Path, downloaded_mods: Path,
-                          with_terrain_mods: bool) -> None:
+                          terrain_profile: str | None) -> None:
     mods_dir = run_dir / "mods"
     mods_dir.mkdir(parents=True, exist_ok=True)
-    selected_mods = MODS | (TERRAIN_MODS | TERRAIN_LIBRARIES if with_terrain_mods else {})
+    profile_mods = set(TERRAIN_TEST_PROFILES[terrain_profile]) if terrain_profile else set()
+    selected_mods = MODS | ({name: TERRAIN_MODS[name] for name in profile_mods} | TERRAIN_LIBRARIES
+                            if terrain_profile else {})
     for filename in selected_mods:
         shutil.copy2(downloaded_mods / filename, mods_dir / filename)
     (run_dir / "eula.txt").write_text("eula=true\n", encoding="utf-8")
@@ -190,12 +192,12 @@ def prepare_run_directory(run_dir: Path, downloaded_mods: Path,
 
 
 def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
-                       repetition: int, with_terrain_mods: bool) -> int:
-    case_name = "with-ten-terrain-mods" if with_terrain_mods else "without-terrain-mods"
+                       repetition: int, terrain_profile: str | None) -> int:
+    case_name = terrain_profile or "without-terrain-mods"
     run_name = f"ci-{case_name}-{mode}-r{repetition}"
     run_dir = ROOT / "run" / run_name
     shutil.rmtree(run_dir, ignore_errors=True)
-    prepare_run_directory(run_dir, downloaded_mods, with_terrain_mods)
+    prepare_run_directory(run_dir, downloaded_mods, terrain_profile)
     log_path = ROOT / "build" / "reports" / "ci" / f"runserver-{case_name}-{mode}-r{repetition}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     command = [
@@ -271,11 +273,12 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                     raise RuntimeError(
                         f"{mode} dedicated server reached ready state without Byepregen in NeoForge's mod list"
                     )
-                if with_terrain_mods:
-                    missing_mods = [filename for filename in TERRAIN_MODS if filename not in server_log]
+                if terrain_profile:
+                    missing_mods = [filename for filename in TERRAIN_TEST_PROFILES[terrain_profile]
+                                    if filename not in server_log]
                     if missing_mods:
                         raise RuntimeError(
-                            "ten-mod terrain case reached ready state without discovering: "
+                            f"terrain profile {terrain_profile} reached ready state without discovering: "
                             + ", ".join(missing_mods)
                         )
                 start_chunky_with_rcon()
@@ -331,7 +334,7 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                 )
             if "GPU terrain grid parity:" not in run_log:
                 raise RuntimeError("GPU terrain grid parity check did not run")
-            if with_terrain_mods and "GPU terrain root 'finalDensity' remains on vanilla Java" in run_log:
+            if terrain_profile == "tectonic-overworld-stack" and "GPU terrain root 'finalDensity' remains on vanilla Java" in run_log:
                 raise RuntimeError("Tectonic finalDensity did not compile through the generic GPU density frontend")
             if FULL_BLOCK_OUTPUT and "GPU per-block density interpolation parity verified:" not in run_log:
                 raise RuntimeError("GPU per-block interpolation parity check did not run")
@@ -399,19 +402,24 @@ def main() -> int:
         return 0
     print(
         f"CI_WORLDGEN_CONFIG radius_blocks={CHUNKY_RADIUS_BLOCKS} "
-        f"test_cases=2 repetitions={WORLDGEN_CHECK_REPETITIONS} terrain_mods={len(TERRAIN_MODS)} "
+        f"test_cases={1 + len(TERRAIN_TEST_PROFILES)} repetitions={WORLDGEN_CHECK_REPETITIONS} "
+        f"terrain_mods={len(TERRAIN_MODS)} modded_profiles={len(TERRAIN_TEST_PROFILES)} "
         f"batch_window_ms={BATCH_WINDOW_MS} "
         f"batch_target_chunks={BATCH_TARGET_CHUNKS} "
         f"batch_region_radius={BATCH_REGION_RADIUS} full_block_output={FULL_BLOCK_OUTPUT}",
         flush=True,
     )
     completed_cases: list[str] = []
-    for case_name, with_terrain_mods in (("without-terrain-mods", False), ("with-ten-terrain-mods", True)):
+    cases: tuple[tuple[str, str | None], ...] = (
+        (("without-terrain-mods", None),)
+        + tuple((profile, profile) for profile in TERRAIN_TEST_PROFILES)
+    )
+    for case_name, terrain_profile in cases:
         counts: dict[str, int] = {}
         for mode in ("cpu", "gpu"):
             counts[mode] = run_worldgen_check(
                 mode, downloaded_mods, force_cpu=mode == "cpu", repetition=1,
-                with_terrain_mods=with_terrain_mods)
+                terrain_profile=terrain_profile)
         if counts["cpu"] != counts["gpu"]:
             raise RuntimeError(f"{case_name} CPU/GPU Chunky areas differ: "
                                f"CPU={counts['cpu']} chunks, GPU={counts['gpu']} chunks")
@@ -420,7 +428,7 @@ def main() -> int:
               "cpu_gpu_correctness_paths=true", flush=True)
     print(
         f"CI_WORLDGEN_CHECKS_PASSED cases={','.join(completed_cases)} "
-        "cpu_fallback_and_gpu_paths=true",
+        f"cpu_fallback_and_gpu_paths=true profiles={len(completed_cases)}",
         flush=True,
     )
     return 0

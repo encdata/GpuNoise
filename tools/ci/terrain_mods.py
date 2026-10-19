@@ -1,4 +1,4 @@
-"""Pinned terrain-mod set for the optional integrated worldgen check."""
+"""Pinned terrain-mod matrix for dedicated worldgen correctness checks."""
 
 TERRAIN_MODS = {
     "tectonic-3.0.28-neoforge-21.1.jar": (
@@ -77,3 +77,27 @@ TERRAIN_LIBRARIES = {
         "aaf9b010955b8cd294e5a92f069985b18729fd5e2cf22d351f1dff9680f15488688803ec41e77e941cbde130ceb535014ca4c868047d80ab69c2d508e216654d",
     ),
 }
+
+# Exercise two different mixed terrain stacks while keeping the biome-mod
+# groups independent. Each item is checked against both the CPU reference and
+# the GPU path; together the profiles cover all ten terrain projects above.
+TERRAIN_TEST_PROFILES = {
+    "tectonic-overworld-stack": (
+        "tectonic-3.0.28-neoforge-21.1.jar",
+        "Terralith_1.21.1_v2.6.2_Neoforge.jar",
+        "Geophilic-v3.7.jar",
+        "wwoo-neoforge-2.6.7.jar",
+        "Continents_1.21.x_v1.1.12.jar",
+    ),
+    "expanded-biome-stacks": (
+        "regions-unexplored-0.6.2-neoforge-21.1.jar",
+        "Oh-The-Biomes-Weve-Gone-NeoForge-2.6.3.jar",
+        "natures_spirit-2.3.1-1.21.1.jar",
+        "BiomesOPlenty-neoforge-1.21.1-21.1.0.14.jar",
+        "lithosphere-1.8.2.jar",
+    ),
+}
+
+_profiled_mods = [mod for profile in TERRAIN_TEST_PROFILES.values() for mod in profile]
+if len(_profiled_mods) != len(set(_profiled_mods)) or set(_profiled_mods) != set(TERRAIN_MODS):
+    raise RuntimeError("terrain test profiles must cover each pinned terrain mod exactly once")
