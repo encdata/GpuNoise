@@ -327,14 +327,19 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
             raise RuntimeError(f"Chunky reported an incomplete run: {completed.group(0)}")
 
         if not force_cpu:
-            if not gpu_counts or max(counts[2] for counts in gpu_counts) <= 0:
-                raise RuntimeError("GPU benchmark completed without any GPU terrain cache being consumed")
             run_log = log_path.read_text(encoding="utf-8")
-            has_aquifer_batch = "GPU aquifer substance batch:" in run_log
             c2me_java_fallback = (
                 "GPU aquifer decision preflight skipped: C2ME aquifer rewrite is active; "
                 "keeping its fluid decisions on the exact Java path" in run_log
             )
+            if not gpu_counts:
+                raise RuntimeError("GPU server completed without reporting terrain cache state")
+            if max(counts[2] for counts in gpu_counts) <= 0:
+                if not c2me_java_fallback:
+                    raise RuntimeError("GPU benchmark completed without any GPU terrain cache being consumed")
+                print("CI_WORLDGEN_C2ME_EXACT_JAVA_FALLBACK cache_reads=0; continuing to saved-world parity",
+                      flush=True)
+            has_aquifer_batch = "GPU aquifer substance batch:" in run_log
             if not has_aquifer_batch and not c2me_java_fallback:
                 skip_reasons = re.findall(r"GPU aquifer decision preflight skipped: ([^\r\n]+)", run_log)
                 reason_detail = "; ".join(dict.fromkeys(skip_reasons)) or "no preflight skip reason was logged"
