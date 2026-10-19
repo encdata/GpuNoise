@@ -8,7 +8,7 @@ layout(std430,set=0,binding=1) writeonly buffer InterpolatedInputs { float inter
 // Per chunk: corner offset, block offset, cellsX, cellsY, cellsZ,
 // blocksPerCellX, blocksPerCellY, reserved. Horizontal X/Z spacing is shared.
 layout(std430,set=0,binding=2) readonly buffer Chunks { uint metadata[]; };
-layout(std430,set=0,binding=3) writeonly buffer BlockCoordinates { vec4 coordinates[]; };
+layout(std430,set=0,binding=3) writeonly buffer BlockCoordinates { ivec4 coordinates[]; };
 layout(std430,set=0,binding=4) writeonly buffer LegacyBlocks { float blocks[]; };
 layout(push_constant) uniform Parameters {
     uint chunkCount;
@@ -62,7 +62,7 @@ void main(){
         if(markerMode) interpolatedInputs[blockOffset+index*valueCount+valueIndex]=value;
         else blocks[blockOffset+index*valueCount+valueIndex]=value;
     }
-    if(markerMode) coordinates[blockOffset+index]=vec4(
-        float(int(metadata[base+0u])+int(x)),float(int(metadata[base+1u])+int(y)),
-        float(int(metadata[base+2u])+int(z)),0.0);
+    if(markerMode) coordinates[blockOffset+index]=ivec4(
+        int(metadata[base+0u])+int(x),int(metadata[base+1u])+int(y),
+        int(metadata[base+2u])+int(z),0);
 }
