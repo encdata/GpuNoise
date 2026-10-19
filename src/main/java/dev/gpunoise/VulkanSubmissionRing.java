@@ -57,23 +57,29 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     private void pollAndDrain() {
         if (completion.isShutdown()) return;
-        boolean graphInFlight = false;
-        for (PersistentVulkanNormalNoiseEngine slot : slots) {
-            if (slot == null) continue;
-            slot.pollGraphRootsCompletion();
-            graphInFlight |= slot.graphRootsInFlight();
-        }
-        drainGraphRoots();
-        // drainGraphRoots may have started the next queued submission.
-        for (PersistentVulkanNormalNoiseEngine slot : slots) {
-            if (slot != null) graphInFlight |= slot.graphRootsInFlight();
-        }
-        long delay = graphInFlight ? COMPLETION_POLL_MICROS : TimeUnit.MILLISECONDS.toMicros(
-                IDLE_POLL_MILLIS, TimeUnit.MILLISECONDS);
+        long delay = TimeUnit.MILLISECONDS.toMicros(IDLE_POLL_MILLIS);
         try {
-            completion.schedule(this::pollAndDrain, delay, TimeUnit.MICROSECONDS);
-        } catch (java.util.concurrent.RejectedExecutionException ignored) {
-            // Shutdown raced the next scheduled poll.
+            boolean graphInFlight = false;
+            for (PersistentVulkanNormalNoiseEngine slot : slots) {
+                if (slot == null) continue;
+                slot.pollGraphRootsCompletion();
+                graphInFlight |= slot.graphRootsInFlight();
+            }
+            drainGraphRoots();
+            // drainGraphRoots may have started the next queued submission.
+            for (PersistentVulkanNormalNoiseEngine slot : slots) {
+                if (slot != null) graphInFlight |= slot.graphRootsInFlight();
+            }
+            if (graphInFlight) delay = COMPLETION_POLL_MICROS;
+        } catch (Throwable failure) {
+            GpuNoise.LOGGER.error("GPU Vulkan completion poll failed; polling will resume", failure);
+        } finally {
+            try {
+                if (!completion.isShutdown()) completion.schedule(this::pollAndDrain,
+                        delay, TimeUnit.MICROSECONDS);
+            } catch (java.util.concurrent.RejectedExecutionException ignored) {
+                // Shutdown raced the next scheduled poll.
+            }
         }
     }
 
