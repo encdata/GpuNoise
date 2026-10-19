@@ -175,11 +175,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         }
         final int minX = cache.minX(), minY = cache.minY(), minZ = cache.minZ();
         final int height = cache.height();
-        Decision[] decisions = new Decision[Math.multiplyExact(height, 256)];
-        List<AquiferQuery> queries = new ArrayList<>();
+        int decisionCapacity = Math.multiplyExact(height, 256);
+        Decision[] decisions = new Decision[decisionCapacity];
+        List<AquiferQuery> queries = new ArrayList<>(decisionCapacity);
         GpuAquiferSubstance.BatchWriter substanceWriter =
-                new GpuAquiferSubstance.BatchWriter(Math.multiplyExact(height, 256));
-        List<PendingDecision> pending = new ArrayList<>();
+                new GpuAquiferSubstance.BatchWriter(decisionCapacity);
+        List<PendingDecision> pending = new ArrayList<>(decisionCapacity);
         Map<GridNeighborhood, int[][]> neighborhoods = new HashMap<>();
         boolean exactAquiferInputs = GpuAquiferRuntimeMode.exactAquiferInputsEnabled();
         int directLavaDecisions = 0;
