@@ -99,11 +99,10 @@ double normalNoise64(dvec3 pos,uint id){
     return (a+b)*double(s.valueFactor);
 }
 double normalNoiseTerrain(dvec3 pos,uint id){
-    // Keep the existing float implementation for the common near-spawn case
-    // when conversion itself is exact. Large or fractional coordinates use
-    // the double implementation so world-border phase precision is retained.
+    // Keep the original throughput path through the conservative near-spawn
+    // range. Beyond it, the accuracy benefit of preserving phase dominates.
     vec3 fastPosition=vec3(pos);
-    if(all(lessThanEqual(abs(pos),dvec3(4096.0)))&&all(equal(dvec3(fastPosition),pos)))
+    if(all(lessThanEqual(abs(pos),dvec3(4096.0))))
         return double(normalNoise(fastPosition,id));
     return normalNoise64(pos,id);
 }

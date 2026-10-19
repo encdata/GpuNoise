@@ -381,8 +381,9 @@ Terrain-grid and block-evaluation noise now retain integer world coordinates
 as doubles through octave scaling, Minecraft's period wrapping, and Improved
 Noise interpolation. A Lavapipe smoke fixture compares custom transformed
 `NormalNoise` graphs against Java at and beyond 2^24, including the world
-border. Direct point-sample requests still receive float coordinate arrays and
-therefore cannot represent every integer in that range; the terrain runtime
-uses the exact-coordinate grid path. This double-precision noise path favors
-parity and may have different throughput across physical GPU vendors, which
-must be measured on real hardware rather than inferred from Lavapipe.
+border. The shader retains the previous float fast path within a bounded
+near-spawn range, then switches to double precision at larger coordinates.
+Direct point-sample requests still receive float coordinate arrays and cannot
+represent every integer in that range; terrain generation uses the
+exact-coordinate grid path. The precision fallback's throughput must be
+measured on physical GPUs rather than inferred from Lavapipe.

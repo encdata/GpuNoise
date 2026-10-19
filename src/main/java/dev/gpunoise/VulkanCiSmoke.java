@@ -1110,7 +1110,8 @@ public final class VulkanCiSmoke {
     private static void verifyLargeCoordinateNoiseParity(VulkanSubmissionRing ring) throws Exception {
         GpuDensityExpressionSmoke.VulkanBranchFixture fixture =
                 GpuDensityExpressionSmoke.transformedNoiseFixture();
-        int[][] origins = {{16_777_216, 79, -16_777_217}, {-30_000_000, -64, 30_000_000}};
+        int[][] origins = {{4_096, 79, -4_096}, {-4_097, -64, 4_097},
+                {16_777_216, 79, -16_777_217}, {-30_000_000, -64, 30_000_000}};
         for (int[] origin : origins) {
             ByteBuffer metadata = ByteBuffer.allocateDirect(8 * Integer.BYTES).order(ByteOrder.nativeOrder());
             metadata.putInt(origin[0]).putInt(origin[1]).putInt(origin[2])
