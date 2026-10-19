@@ -9,6 +9,7 @@ import dev.gpunoise.GpuNoiseConfig;
 import dev.gpunoise.GpuTerrainRuntime;
 import dev.gpunoise.GpuTerrainRoots;
 import dev.gpunoise.GpuTerrainProfiler;
+import dev.gpunoise.GpuTerrainDensityParity;
 import dev.gpunoise.GpuClimateFunction;
 import net.minecraft.world.level.levelgen.DensityFunction;
 import net.minecraft.world.level.levelgen.DensityFunctions;
