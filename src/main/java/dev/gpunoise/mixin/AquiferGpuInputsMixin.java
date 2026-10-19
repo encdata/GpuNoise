@@ -180,6 +180,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         List<GpuAquiferSubstance.Input> inputs = new ArrayList<>();
         List<PendingDecision> pending = new ArrayList<>();
         Map<GridNeighborhood, int[][]> neighborhoods = new HashMap<>();
+        boolean exactAquiferInputs = GpuAquiferRuntimeMode.exactAquiferInputsEnabled();
         int directLavaDecisions = 0;
         int positiveDensityDecisions = 0;
 
@@ -190,7 +191,11 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     double density = noiseAccess.gpunoise$withBeardifier(cachedDensity, x, y, z);
                     if (!Double.isFinite(density)) continue;
                     int index = (y - minY) * 256 + (z - minZ) * 16 + (x - minX);
-                    DensityFunction.FunctionContext context = new DensityFunction.SinglePointContext(x, y, z);
+                    // Only the optional differential verifier needs a context
+                    // retained for each queued decision. Exact Java barrier
+                    // mode creates one only for non-lava aquifer queries.
+                    DensityFunction.FunctionContext context = gpunoise$verifyAquifer
+                            ? new DensityFunction.SinglePointContext(x, y, z) : null;
                     if (density > 0.0) {
                         // Vanilla's positive-density decision is the base
                         // solid/air material choice. Batch it through the same
@@ -230,8 +235,11 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                 : GpuAquiferNearestThree.centersForQuery(randomFactory, new int[]{x, y, z});
                         neighborhoods.put(key, centers);
                     }
-                    double barrier = GpuAquiferRuntimeMode.exactAquiferInputsEnabled()
-                            ? barrierNoise.compute(new DensityFunction.SinglePointContext(x, y, z))
+                    if (context == null && exactAquiferInputs) {
+                        context = new DensityFunction.SinglePointContext(x, y, z);
+                    }
+                    double barrier = exactAquiferInputs
+                            ? barrierNoise.compute(context)
                             : cache.aquiferBarrier(x, y, z);
                     if (!Double.isFinite(barrier)) continue;
                     boolean belowIsLava = globalFluidPicker.computeFluid(x, y - 1, z)
@@ -319,7 +327,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         0, false, query.belowIsLava, c2meAquifer, 0);
                 inputs.add(gpuInput);
                 pending.add(new PendingDecision(query.index, nearestState,
-                        new DensityFunction.SinglePointContext(query.x, query.y, query.z),
+                        gpunoise$verifyAquifer
+                                ? new DensityFunction.SinglePointContext(query.x, query.y, query.z) : null,
                         query.density, gpuInput));
             }
         }
@@ -421,16 +430,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                                     Aquifer.FluidStatus status1,
                                                     Aquifer.FluidStatus status2,
                                                     Aquifer.FluidStatus status3) {
-        Aquifer.FluidStatus[] statuses = {status0, status1, status2, status3};
-        int mask = 0;
-        int bit = 0;
-        for (int first = 0; first < statuses.length; first++) {
-            for (int second = first + 1; second < statuses.length; second++) {
-                if (statuses[first].equals(statuses[second])) mask |= 1 << bit;
-                bit++;
-            }
-        }
-        return mask;
+        return (status0.equals(status1) ? 1 : 0)
+                | (status0.equals(status2) ? 1 << 1 : 0)
+                | (status0.equals(status3) ? 1 << 2 : 0)
+                | (status1.equals(status2) ? 1 << 3 : 0)
+                | (status1.equals(status3) ? 1 << 4 : 0)
+                | (status2.equals(status3) ? 1 << 5 : 0);
     }
 
     @Override
