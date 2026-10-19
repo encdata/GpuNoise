@@ -26,13 +26,16 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     /** Amortize CPU/GPU submission overhead while keeping a hard dispatch bound. */
     private static final int TARGET_CHUNKS = (int) Math.max(1L,
             Math.min(MAX_CHUNKS, Long.getLong("gpunoise.terrainBatchTargetChunks", 96L)));
+    /** Bound producer bursts without converting temporary overload into CPU fallback. */
+    private static final int PENDING_QUEUE_CAPACITY = (int) Math.max(256L,
+            Math.min(16_384L, Long.getLong("gpunoise.terrainQueueCapacity", 4_096L)));
     private static final int MAX_INPUT = PersistentVulkanNormalNoiseEngine.CAPACITY;
     // Give C2ME enough time to enqueue the rest of the local 10x10 area. The
     // deadline is still bounded, so an isolated request is dispatched
     // promptly instead of waiting for neighbors that may never arrive.
     private static final long BATCH_WINDOW_NANOS = TimeUnit.MILLISECONDS.toNanos(
             Math.max(1L, Math.min(250L, Long.getLong("gpunoise.terrainBatchWindowMs", 20L))));
-    private final BlockingQueue<Pending> queue = new ArrayBlockingQueue<>(256);
+    private final BlockingQueue<Pending> queue = new ArrayBlockingQueue<>(PENDING_QUEUE_CAPACITY);
     // Grid metadata is small and the Vulkan submission is asynchronous. Keep a
     // bounded pool alive until each submission has consumed its metadata rather
     // than allocating native buffers for every dispatch or reusing one too soon.
@@ -56,6 +59,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     private final AtomicLong totalQueueWaitNanos = new AtomicLong();
     private final AtomicLong completedDispatches = new AtomicLong();
     private final AtomicLong totalDispatchLatencyNanos = new AtomicLong();
+    private final AtomicLong queueBackpressureEvents = new AtomicLong();
     private final BatchSizeHistogram batchSizes = new BatchSizeHistogram();
     private final LatencyHistogram chunkLatency = new LatencyHistogram();
     private final AtomicLong lastLatencyLogBucket = new AtomicLong();
@@ -63,9 +67,9 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
 
     GpuTerrainRootsBatchScheduler() {
         for (int i = 0; i < 8; i++) metadataPool.add(new DispatchMetadata());
-        GpuNoise.LOGGER.info("GPU terrain batch window={}ms, target={}, chunk limit={}, searchRadiusRegions={}",
+        GpuNoise.LOGGER.info("GPU terrain batch window={}ms, target={}, chunk limit={}, searchRadiusRegions={}, queueCapacity={}",
                 TimeUnit.NANOSECONDS.toMillis(BATCH_WINDOW_NANOS), TARGET_CHUNKS, MAX_CHUNKS,
-                SEARCH_RADIUS_REGIONS);
+                SEARCH_RADIUS_REGIONS, PENDING_QUEUE_CAPACITY);
         worker.execute(this::run);
     }
 
@@ -92,8 +96,19 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 return future;
             }
         }
-        if (closed || !queue.offer(new Pending(grid, future, System.nanoTime())))
-            future.completeExceptionally(new IllegalStateException("GPU terrain roots queue is full"));
+        Pending pending = new Pending(grid, future, System.nanoTime());
+        while (!closed) {
+            try {
+                if (queue.offer(pending, 50L, TimeUnit.MILLISECONDS)) return future;
+                queueBackpressureEvents.incrementAndGet();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                future.completeExceptionally(new IllegalStateException(
+                        "interrupted while waiting for GPU terrain queue capacity", interrupted));
+                return future;
+            }
+        }
+        future.completeExceptionally(new IllegalStateException("GPU terrain roots batcher is closed"));
         return future;
     }
 
@@ -169,6 +184,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         } catch (Throwable failure) {
             GpuNoise.LOGGER.error("GPU terrain roots batcher failed", failure);
         } finally {
+            closed = true;
             Pending pending;
             for (Map<Long, ArrayDeque<Pending>> regions : pendingByLayout.values()) {
                 for (ArrayDeque<Pending> region : regions.values()) {
@@ -358,11 +374,12 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         long completedChunks = chunkLatency.count();
         long batchBucket = completedChunks >>> 8;
         if (batchBucket > 0L && lastBatchLogBucket.getAndSet(batchBucket) != batchBucket) {
-            GpuNoise.LOGGER.info("GPU terrain roots batching: avgChunksPerDispatch={}, avgSamplesPerDispatch={}, avgQueueWaitMsPerChunk={}, avgSubmitToCompleteMsPerDispatch={}, batchSizes={}",
+            GpuNoise.LOGGER.info("GPU terrain roots batching: avgChunksPerDispatch={}, avgSamplesPerDispatch={}, avgQueueWaitMsPerChunk={}, avgSubmitToCompleteMsPerDispatch={}, queueBackpressureEvents={}, batchSizes={}",
                     (double) totalChunksDispatched.get() / dispatchCount.get(),
                     (double) totalSamplesDispatched.get() / dispatchCount.get(),
                     totalQueueWaitNanos.get() / (double) totalChunksDispatched.get() / 1_000_000.0,
                     totalDispatchLatencyNanos.get() / (double) completed / 1_000_000.0,
+                    queueBackpressureEvents.get(),
                     batchSizes.describe());
         }
         long latencyCount = completedChunks;
