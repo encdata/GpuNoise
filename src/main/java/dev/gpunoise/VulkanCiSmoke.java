@@ -628,6 +628,15 @@ public final class VulkanCiSmoke {
             // 16,384-query limit. Ensure one substance dispatch can now hold
             // a full chunk-sized batch without splitting or truncating it.
             int chunkBatchSize = 16 * 16 * 384;
+            if (chunkBatchSize > GpuAquiferNearestThree.MAX_QUERIES) {
+                throw new IllegalStateException("Aquifer nearest-center capacity is smaller than a 384-block chunk");
+            }
+            int[][] nearestChunkQueries = new int[chunkBatchSize][];
+            int[][][] nearestChunkCenters = new int[chunkBatchSize][][];
+            java.util.Arrays.fill(nearestChunkQueries, queries[0]);
+            java.util.Arrays.fill(nearestChunkCenters, centers[0]);
+            var chunkNearestFuture = ring.submitAquiferNearestThree(
+                    GpuAquiferNearestThree.pack(nearestChunkQueries, nearestChunkCenters), chunkBatchSize);
             if (chunkBatchSize > GpuAquiferSubstance.MAX_QUERIES) {
                 throw new IllegalStateException("Aquifer substance capacity is smaller than a 384-block chunk");
             }
@@ -636,10 +645,25 @@ public final class VulkanCiSmoke {
             var chunkSubstanceFuture = ring.submitAquiferSubstance(
                     GpuAquiferSubstance.pack(chunkBatch), chunkBatch.length);
             int[] nearest = nearestFuture.get(60, TimeUnit.SECONDS);
+            int[] chunkNearestResults = chunkNearestFuture.get(60, TimeUnit.SECONDS);
             int[] substanceResults = substanceFuture.get(60, TimeUnit.SECONDS);
             int[] chunkSubstanceResults = chunkSubstanceFuture.get(60, TimeUnit.SECONDS);
             assertConstantResults("queued terrain grid", queuedGrid.get(60, TimeUnit.SECONDS), 8);
             System.out.println("Vulkan CI smoke: four-center aquifer selection completed");
+            int[] expectedChunkNearest = GpuAquiferNearestThree.select(queries[0], centers[0]);
+            if (chunkNearestResults.length != chunkBatchSize * GpuAquiferNearestThree.OUTPUT_INTS) {
+                throw new IllegalStateException("Chunk-sized nearest-center batch returned truncated output");
+            }
+            for (int i = 0; i < chunkBatchSize; i++) {
+                int base = i * GpuAquiferNearestThree.OUTPUT_INTS;
+                for (int field = 0; field < GpuAquiferNearestThree.OUTPUT_INTS; field++) {
+                    if (chunkNearestResults[base + field] != expectedChunkNearest[field]) {
+                        throw new IllegalStateException("Chunk-sized nearest-center mismatch at row " + i
+                                + ", field " + field);
+                    }
+                }
+            }
+            System.out.println("Vulkan CI smoke: full-chunk nearest-center batch completed (98,304 blocks, one dispatch)");
             for (int q = 0; q < queryCount; q++) {
                 int[] expected = GpuAquiferNearestThree.select(queries[q], centers[q]);
                 for (int field = 0; field < GpuAquiferNearestThree.OUTPUT_INTS; field++) {
