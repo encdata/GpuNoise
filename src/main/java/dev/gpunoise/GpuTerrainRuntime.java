@@ -298,7 +298,10 @@ public final class GpuTerrainRuntime {
         // installed scheduler. Candidate graph inspection can fail for
         // unsupported custom nodes or malformed spline dependencies.
         int skippedBlockNodes = GpuDensityGraphBuffer.blockSkippedNodeCount(graph);
-        if (terrainRouter != router) GpuAquiferStatusRegionCache.clear();
+        if (terrainRouter != router) {
+            GpuTerrainAreaRegistry.clear();
+            GpuAquiferStatusRegionCache.clear();
+        }
         if (terrainScheduler != null) terrainScheduler.close();
         if (terrainProvider != null) terrainProvider.close();
         if (terrainRootsScheduler != null) terrainRootsScheduler.close();
