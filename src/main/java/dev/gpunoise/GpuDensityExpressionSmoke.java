@@ -533,16 +533,21 @@ final class GpuDensityExpressionSmoke {
             throw new AssertionError("folded constant conditions should prune selector branches before shader dispatch");
         }
 
-        GpuDensityGraph constantMapping = new GpuDensityGraph(
-                java.util.List.of(
-                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{-3.0}, null),
-                        new GpuDensityGraph.Node("Mapped", new int[]{0}, new double[0], "SQUARE")),
-                new int[]{1}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
-                java.util.List.of(source, source));
-        GpuDensityGraph mapped = GpuDensityGraphLowerer.lower(constantMapping);
-        if (mapped.nodes().size() != 1 || !mapped.nodes().get(0).opcode().equals("Constant")
-                || mapped.nodes().get(0).constants()[0] != 9.0) {
-            throw new AssertionError("exact constant mapped densities should fold before terrain dispatch");
+        String[] mappings = {"ABS", "SQUARE", "CUBE", "HALF_NEGATIVE", "QUARTER_NEGATIVE", "FLOOR", "CEIL"};
+        double[] expectedMappings = {3.25, 10.5625, -34.328125, -1.625, -0.8125, -4.0, -3.0};
+        for (int mapping = 0; mapping < mappings.length; mapping++) {
+            GpuDensityGraph constantMapping = new GpuDensityGraph(
+                    java.util.List.of(
+                            new GpuDensityGraph.Node("Constant", new int[0], new double[]{-3.25}, null),
+                            new GpuDensityGraph.Node("Mapped", new int[]{0}, new double[0], mappings[mapping])),
+                    new int[]{1}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                    java.util.List.of(source, source));
+            GpuDensityGraph mapped = GpuDensityGraphLowerer.lower(constantMapping);
+            if (mapped.nodes().size() != 1 || !mapped.nodes().get(0).opcode().equals("Constant")
+                    || mapped.nodes().get(0).constants()[0] != expectedMappings[mapping]) {
+                throw new AssertionError("exact constant " + mappings[mapping]
+                        + " density mapping should fold before terrain dispatch");
+            }
         }
     }
 
