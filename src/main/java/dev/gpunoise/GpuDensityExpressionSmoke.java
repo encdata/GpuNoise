@@ -412,6 +412,19 @@ final class GpuDensityExpressionSmoke {
     }
 
     private static void verifyParityRootPruning() {
+        DensityFunction duplicateSource = DensityFunctions.constant(1.0);
+        GpuDensityGraph duplicateGraph = new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{1.0}, null),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{1.0}, null)),
+                new int[]{0, 1}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(duplicateSource, duplicateSource), 2, 0b11, new String[2]);
+        GpuDensityGraph deduplicated = GpuDensityGraphLowerer.lower(duplicateGraph);
+        if (deduplicated.nodes().size() != 1 || deduplicated.routerRoots()[0] != deduplicated.routerRoots()[1]) {
+            throw new AssertionError("identical pure terrain nodes should share one lowered GPU instruction");
+        }
+        GpuDensityGraphBuffer.pack(deduplicated);
+
         DensityFunction first = DensityFunctions.constant(1.0);
         DensityFunction second = DensityFunctions.constant(2.0);
         GpuDensityGraph source = new GpuDensityGraph(
