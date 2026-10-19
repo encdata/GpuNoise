@@ -412,7 +412,7 @@ public final class GpuTerrainRuntime {
     }
 
     static boolean terrainBlockOutputEnabled() {
-        if (!FULL_BLOCK_OUTPUT) return false;
+        if (!FULL_BLOCK_OUTPUT || Boolean.getBoolean("gpunoise.forceCpuTerrain")) return false;
         if (!terrainBlockOutputVerificationComplete) {
             // Startup verification needs one full block-result batch before
             // it can decide which roots are safe to keep on the block path.
