@@ -415,6 +415,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     @Redirect(method = {"computeSurfaceLevel", "computeRandomizedFluidSurfaceLevel", "calculatePressure"}, at = @At(value = "INVOKE",
             target = "Lnet/minecraft/world/level/levelgen/DensityFunction;compute(Lnet/minecraft/world/level/levelgen/DensityFunction$FunctionContext;)D"))
     private double gpunoise$useGpuAquiferInputs(DensityFunction vanillaFunction, DensityFunction.FunctionContext context) {
+        // FluidStatus preparation is part of C2ME's rewritten aquifer
+        // algorithm. Feed it the same Java values as the CPU reference until
+        // the GPU roots can satisfy exact decision parity at this boundary.
+        if (GpuAquiferRuntimeMode.c2meAquiferRewriteEnabled()) {
+            return vanillaFunction.compute(context);
+        }
         if (noiseChunk instanceof GpuNoiseChunkAccess gpuNoiseChunk) {
             GpuChunkDensityCache cache = gpuNoiseChunk.gpunoise$gpuCache();
             if (cache == null) {
