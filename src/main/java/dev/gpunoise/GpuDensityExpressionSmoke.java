@@ -156,6 +156,13 @@ final class GpuDensityExpressionSmoke {
                 || graph.unsupportedRouterRootReasons()[1] == null) {
             throw new AssertionError("unsupported custom terrain root should be isolated from its GPU sibling");
         }
+        String rejection = graph.unsupportedRouterRootReasons()[1];
+        if (!rejection.contains("dependency path [")
+                || !rejection.contains(PartiallyUnsupportedTerrainDensity.class.getName())
+                || !rejection.contains(UnsupportedTerrainDensity.class.getName())) {
+            throw new AssertionError("unsupported custom terrain diagnostic omitted its dependency path: "
+                    + rejection);
+        }
         if (graph.nodes().size() != baseline.nodes().size()
                 || graph.noises().size() != baseline.noises().size()) {
             throw new AssertionError("failed root compilation leaked nodes or samplers into its GPU sibling");
