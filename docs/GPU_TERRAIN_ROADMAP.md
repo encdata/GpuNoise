@@ -186,6 +186,12 @@ parity checks.
   automatic compiler while preserving the vanilla implementation as oracle.
 - Retain the original Java function as the reference evaluator. Compare outputs
   over boundary, negative-coordinate, high-altitude, and random samples.
+- Startup terrain-root parity uses a deterministic 8x8x8 coordinate set spanning
+  negative and positive X/Z, zero boundaries, underground values, and high Y;
+  the full graph check uses a wider 16x16x16 volume. Shared comparison logic
+  treats mismatched NaN and infinity classifications as infinite error, so
+  non-finite results cannot disappear from a max-error reduction. Lavapipe
+  smoke assertions cover those comparison rules and the startup sample range.
 - Allow unsupported nodes to form explicit CPU islands in a dependency graph
   when their GPU consumers can accept CPU-produced inputs. Never silently
   replace an unknown function with an approximation.

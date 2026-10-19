@@ -33,6 +33,7 @@ public final class VulkanCiSmoke {
         if (registeredTranslator == null) {
             throw new IllegalStateException("Registered density adapter smoke was not prepared before graph compilation");
         }
+        verifyTerrainParityRules();
         GpuDensityExpressionSmoke.verify();
         verifyTranslatorRegistry();
         GpuDevice device = GpuProbe.findPreferredDevice(GpuNoiseConfig.GpuVendorPreference.AUTO);
@@ -945,6 +946,30 @@ public final class VulkanCiSmoke {
 
         System.out.println("Vulkan CI smoke passed on " + device.name()
                 + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, shared 12-root terrain lattices, and non-associative Y-X-Z float rounding; aquifer pressure, four-center selection, and vanilla/C2ME substance decisions matched Java reference cases.");
+    }
+
+    private static void verifyTerrainParityRules() {
+        if (GpuTerrainParity.error(Float.NaN, Float.NaN) != 0.0f
+                || !Float.isInfinite(GpuTerrainParity.error(Float.NaN, 0.0f))
+                || !Float.isInfinite(GpuTerrainParity.error(Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY))
+                || !Float.isInfinite(GpuTerrainParity.error(Float.POSITIVE_INFINITY, Float.MAX_VALUE))
+                || GpuTerrainParity.error(-0.0f, 0.0f) != 0.0f
+                || GpuTerrainParity.error(1.0f, 1.0f + 1.0e-6f) > 2.0e-6f) {
+            throw new IllegalStateException("Terrain parity comparison mishandled finite or non-finite values");
+        }
+        float[] x = new float[512], y = new float[512], z = new float[512];
+        GpuTerrainParity.fillStartupSamples(x, y, z);
+        boolean negativeX = false, positiveX = false, variedZ = false;
+        for (int sample = 0; sample < x.length; sample++) {
+            negativeX |= x[sample] < 0.0f;
+            positiveX |= x[sample] > 0.0f;
+            variedZ |= z[sample] != 0.0f;
+        }
+        if (!negativeX || !positiveX || !variedZ || y[0] != -128.0f
+                || y[y.length - 1] != 256.0f) {
+            throw new IllegalStateException("Terrain startup parity samples do not cover the intended 3D range");
+        }
+        System.out.println("Vulkan CI smoke: terrain parity classification and 3D sample coverage passed");
     }
 
     private static void verifyTranslatorRegistry() {
