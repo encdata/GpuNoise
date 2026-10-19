@@ -415,13 +415,16 @@ final class GpuDensityExpressionSmoke {
         DensityFunction duplicateSource = DensityFunctions.constant(1.0);
         GpuDensityGraph duplicateGraph = new GpuDensityGraph(
                 java.util.List.of(
-                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{1.0}, null),
-                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{1.0}, null)),
-                new int[]{0, 1}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
-                java.util.List.of(duplicateSource, duplicateSource), 2, 0b11, new String[2]);
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{2.0}, null),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{3.0}, null),
+                        new GpuDensityGraph.Node("GpuMath", new int[]{0, 1}, new double[0], "MULTIPLY"),
+                        new GpuDensityGraph.Node("GpuMath", new int[]{0, 1}, new double[0], "MULTIPLY")),
+                new int[]{2, 3}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(duplicateSource, duplicateSource, duplicateSource, duplicateSource),
+                4, 0b11, new String[2]);
         GpuDensityGraph deduplicated = GpuDensityGraphLowerer.lower(duplicateGraph);
-        if (deduplicated.nodes().size() != 1 || deduplicated.routerRoots()[0] != deduplicated.routerRoots()[1]) {
-            throw new AssertionError("identical pure terrain nodes should share one lowered GPU instruction");
+        if (deduplicated.nodes().size() != 3 || deduplicated.routerRoots()[0] != deduplicated.routerRoots()[1]) {
+            throw new AssertionError("identical pure terrain subgraphs should share lowered GPU instructions");
         }
         GpuDensityGraphBuffer.pack(deduplicated);
 
