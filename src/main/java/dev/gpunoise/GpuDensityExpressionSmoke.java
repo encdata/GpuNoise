@@ -428,22 +428,23 @@ final class GpuDensityExpressionSmoke {
         }
         GpuDensityGraphBuffer.pack(deduplicated);
 
-        DensityFunction interpolationSource = DensityFunctions.constant(2.0);
-        DensityFunction interpolationMarker = DensityFunctions.constant(2.0);
-        DensityFunction otherInput = DensityFunctions.constant(3.0);
-        DensityFunction combined = DensityFunctions.constant(5.0);
-        GpuDensityGraph markerGraph = GpuDensityGraphLowerer.lower(new GpuDensityGraph(
-                java.util.List.of(
-                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{2.0}, null),
-                        new GpuDensityGraph.Node("Marker", new int[]{0}, new double[0], "Interpolated"),
-                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{3.0}, null),
-                        new GpuDensityGraph.Node("GpuMath", new int[]{1, 2}, new double[0], "ADD")),
-                new int[]{3}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
-                java.util.List.of(interpolationSource, interpolationMarker, otherInput, combined)));
+        GpuDensityGraph markerGraph = interpolatedMarkerGraphForVulkanSmoke();
         GpuDensityGraphBuffer.Packed markerPacked = GpuDensityGraphBuffer.pack(markerGraph);
         int markerChildFlags = markerPacked.nodes().getInt(36);
         if ((markerChildFlags & GpuDensityGraphBuffer.BLOCK_SKIP_FLAG) == 0) {
             throw new AssertionError("block pass should skip a node used only by an interpolated marker");
+        }
+        boolean sharedMarkerChildKept = false;
+        for (int node = 0; node < markerPacked.nodeCount(); node++) {
+            int offset = node * GpuDensityGraphBuffer.NODE_BYTES;
+            if (markerPacked.nodes().getInt(offset) == 1
+                    && markerPacked.nodes().getFloat(offset + 16) == 8.0f) {
+                sharedMarkerChildKept = (markerPacked.nodes().getInt(offset + 36)
+                        & GpuDensityGraphBuffer.BLOCK_SKIP_FLAG) == 0;
+            }
+        }
+        if (!sharedMarkerChildKept) {
+            throw new AssertionError("block pass must retain a marker child also used by another router root");
         }
 
         DensityFunction first = DensityFunctions.constant(1.0);
@@ -460,6 +461,34 @@ final class GpuDensityExpressionSmoke {
             throw new AssertionError("parity root pruning must remove only the failed root's graph");
         }
         GpuDensityGraphBuffer.pack(filtered);
+    }
+
+    static GpuDensityGraph interpolatedMarkerGraphForVulkanSmoke() {
+        DensityFunction interpolationSource = DensityFunctions.constant(2.0);
+        DensityFunction interpolationMarker = DensityFunctions.constant(2.0);
+        DensityFunction sharedSource = DensityFunctions.constant(8.0);
+        DensityFunction sharedMarker = DensityFunctions.constant(8.0);
+        DensityFunction otherInput = DensityFunctions.constant(3.0);
+        DensityFunction combined = DensityFunctions.constant(5.0);
+        DensityFunction zero = DensityFunctions.constant(0.0);
+        DensityFunction sharedCombined = DensityFunctions.constant(8.0);
+        int[] roots = new int[GpuTerrainRoots.COUNT];
+        java.util.Arrays.fill(roots, 5);
+        roots[1] = 7;
+        roots[2] = 2;
+        return GpuDensityGraphLowerer.lower(new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{2.0}, null),
+                        new GpuDensityGraph.Node("Marker", new int[]{0}, new double[0], "Interpolated"),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{8.0}, null),
+                        new GpuDensityGraph.Node("Marker", new int[]{2}, new double[0], "Interpolated"),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{3.0}, null),
+                        new GpuDensityGraph.Node("GpuMath", new int[]{1, 4}, new double[0], "ADD"),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{0.0}, null),
+                        new GpuDensityGraph.Node("GpuMath", new int[]{3, 6}, new double[0], "ADD")),
+                roots, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(interpolationSource, interpolationMarker, sharedSource, sharedMarker,
+                        otherInput, combined, zero, sharedCombined)));
     }
 
     private static void verifyBytecodeFrontend() {

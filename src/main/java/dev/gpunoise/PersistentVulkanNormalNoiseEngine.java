@@ -495,12 +495,20 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     synchronized GpuTerrainBatchResult submitGraphGridInterpolated(ByteBuffer gridMetadata, int chunkCount,
                                                                      int samplesPerChunk, ByteBuffer outputMetadata,
                                                                      int blocksPerChunk) throws Exception {
+        return submitGraphGridInterpolated(GpuTerrainRuntime.currentTerrainGraph(), gridMetadata,
+                chunkCount, samplesPerChunk, outputMetadata, blocksPerChunk);
+    }
+
+    synchronized GpuTerrainBatchResult submitGraphGridInterpolated(GpuDensityGraph graph,
+                                                                     ByteBuffer gridMetadata, int chunkCount,
+                                                                     int samplesPerChunk, ByteBuffer outputMetadata,
+                                                                     int blocksPerChunk) throws Exception {
         if (chunkCount <= 0 || samplesPerChunk <= 0 || blocksPerChunk <= 0
                 || (long) chunkCount * samplesPerChunk > CAPACITY
                 || gridMetadata.remaining() < chunkCount * 32L
                 || outputMetadata.remaining() < chunkCount * GpuInterpolationBatch.METADATA_BYTES)
             throw new IllegalArgumentException("invalid grid interpolation batch");
-        GpuDensityGraph graph = GpuTerrainRuntime.currentTerrainGraph();
+        if (graph == null) throw new IllegalArgumentException("terrain graph is not installed");
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
         int rootCount = graph.routerRoots().length;
         int outputRoots = GpuTerrainRuntime.terrainBlockOutputRootCount();
@@ -918,9 +926,10 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     }
 
     private void put(NativeBuffer target, ByteBuffer source, MemoryStack stack) {
+        int bytes = source.remaining();
+        if (bytes == 0) return;
         ByteBuffer mapped = persistentMappings.get(target);
         if (mapped == null) {
-            int bytes = source.remaining();
             NativeBuffer staging = hostVisibleBuffer(bytes, stack);
             ByteBuffer stagingMap = staging.map(device, stack).order(ByteOrder.nativeOrder());
             stagingMap.put(source.duplicate());

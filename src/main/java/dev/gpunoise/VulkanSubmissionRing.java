@@ -239,11 +239,20 @@ final class VulkanSubmissionRing implements AutoCloseable {
     CompletableFuture<GpuTerrainBatchResult> submitGraphGridInterpolated(ByteBuffer gridMetadata, int chunkCount,
                                                                            int samplesPerChunk, ByteBuffer outputMetadata,
                                                                            int blocksPerChunk) {
+        return submitGraphGridInterpolated(GpuTerrainRuntime.currentTerrainGraph(), gridMetadata,
+                chunkCount, samplesPerChunk, outputMetadata, blocksPerChunk);
+    }
+
+    CompletableFuture<GpuTerrainBatchResult> submitGraphGridInterpolated(GpuDensityGraph graph,
+                                                                           ByteBuffer gridMetadata,
+                                                                           int chunkCount, int samplesPerChunk,
+                                                                           ByteBuffer outputMetadata,
+                                                                           int blocksPerChunk) {
         PersistentVulkanNormalNoiseEngine slot = slots[Math.floorMod(next.getAndIncrement(), slots.length)];
         return CompletableFuture.supplyAsync(() -> {
             try {
-                return slot.submitGraphGridInterpolated(gridMetadata, chunkCount, samplesPerChunk,
-                        outputMetadata, blocksPerChunk);
+                return slot.submitGraphGridInterpolated(graph, gridMetadata, chunkCount,
+                        samplesPerChunk, outputMetadata, blocksPerChunk);
             } catch (Exception failure) {
                 throw new IllegalStateException("GPU grid terrain output dispatch failed", failure);
             }

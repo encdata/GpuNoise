@@ -443,6 +443,41 @@ public final class VulkanCiSmoke {
             System.out.println("Vulkan CI smoke: shared terrain lattice interpolation completed");
             assertSharedLatticeInterpolationResults(terrainResults);
 
+            // Exercise the production sequence: evaluate cell corners, pass
+            // interpolated Marker values into the block graph, and verify that
+            // marker-only child instructions can be skipped without changing
+            // any written terrain root.
+            GpuDensityGraph markerGraph = GpuDensityExpressionSmoke.interpolatedMarkerGraphForVulkanSmoke();
+            ByteBuffer markerGrid = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder());
+            markerGrid.putInt(0).putInt(0).putInt(0)
+                    .putInt(2).putInt(2).putInt(2).putInt(1).putInt(1).flip();
+            ByteBuffer markerOutput = ByteBuffer.allocateDirect(GpuInterpolationBatch.METADATA_BYTES)
+                    .order(ByteOrder.nativeOrder());
+            markerOutput.putInt(0).putInt(0).putInt(1).putInt(1).putInt(1)
+                    .putInt(1).putInt(1).putInt(0).flip();
+            System.out.println("Vulkan CI smoke: dispatching block graph with interpolated marker inputs");
+            GpuTerrainBatchResult markerTerrain = ring.submitGraphGridInterpolated(markerGraph,
+                    markerGrid, 1, 8, markerOutput, 256).get(60, TimeUnit.SECONDS);
+            GpuTerrainBlockResult markerBlocks = markerTerrain.blocks();
+            if (markerBlocks.rootCount() != GpuTerrainRoots.COUNT
+                    || !markerBlocks.contains(15, 0, 15)) {
+                throw new IllegalStateException("Interpolated-marker block graph returned invalid output shape");
+            }
+            for (int blockZ = 0; blockZ < 16; blockZ++) {
+                for (int blockX = 0; blockX < 16; blockX++) {
+                    for (int root = 0; root < GpuTerrainRoots.COUNT; root++) {
+                        float value = markerBlocks.valueAt(blockX, 0, blockZ, root);
+                        float expected = root == 1 || root == 2 ? 8.0f : 5.0f;
+                        if (Math.abs(value - expected) > 1.0e-5f) {
+                            throw new IllegalStateException("Interpolated-marker block graph mismatch at "
+                                    + blockX + ",0," + blockZ + " root " + root + ": expected "
+                                    + expected + ", got " + value);
+                        }
+                    }
+                }
+            }
+            System.out.println("Vulkan CI smoke: interpolated-marker block graph completed");
+
             // Differentially exercise the first exact numeric component of
             // vanilla's aquifer block decision. Record fields and boundary
             // cases are shared with the production pressure input contract.
