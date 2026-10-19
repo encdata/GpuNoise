@@ -478,7 +478,7 @@ final class GpuDensityExpressionSmoke {
         roots[2] = 2;
         return GpuDensityGraphLowerer.lower(new GpuDensityGraph(
                 java.util.List.of(
-                        new GpuDensityGraph.Node("GpuCoordinate", new int[0], new double[]{0.0}, null),
+                        new GpuDensityGraph.Node("GpuCoordinate", new int[0], new double[0], "X"),
                         new GpuDensityGraph.Node("Marker", new int[]{0}, new double[0], "Interpolated"),
                         new GpuDensityGraph.Node("Constant", new int[0], new double[]{8.0}, null),
                         new GpuDensityGraph.Node("Marker", new int[]{2}, new double[0], "Interpolated"),
