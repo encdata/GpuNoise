@@ -12,7 +12,7 @@ import dev.gpunoise.GpuAquiferSubstance;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQuery;
 import dev.gpunoise.GpuAquiferDecisionData.Decision;
 import dev.gpunoise.GpuAquiferDecisionData.GridNeighborhood;
-import dev.gpunoise.GpuAquiferDecisionData.PendingDecision;
+import dev.gpunoise.GpuAquiferDecisionData.PendingDecisions;
 import dev.gpunoise.GpuWorldgenDependency;
 import dev.gpunoise.GpuTerrainProfiler;
 import net.minecraft.core.BlockPos;
@@ -180,7 +180,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         List<AquiferQuery> queries = new ArrayList<>(decisionCapacity);
         GpuAquiferSubstance.BatchWriter substanceWriter =
                 new GpuAquiferSubstance.BatchWriter(decisionCapacity);
-        List<PendingDecision> pending = new ArrayList<>(decisionCapacity);
+        PendingDecisions pending = new PendingDecisions(decisionCapacity, gpunoise$verifyAquifer);
         Map<GridNeighborhood, int[][]> neighborhoods = new HashMap<>();
         boolean exactAquiferInputs = GpuAquiferRuntimeMode.exactAquiferInputsEnabled();
         int directLavaDecisions = 0;
@@ -211,7 +211,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                 GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
                                 0, 0, false, false, c2meAquifer, 0) : null;
                         substanceWriter.addPositiveDensity(density, y, c2meAquifer);
-                        pending.add(new PendingDecision(index, null, context, density, diagnosticInput));
+                        pending.add(index, null, context, density, diagnosticInput);
                         positiveDensityDecisions++;
                         continue;
                     }
@@ -224,8 +224,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                 GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
                                 GpuAquiferSubstance.OTHER, 0, true, false, 0) : null;
                         substanceWriter.addGlobalLava(density, y, 0, c2meAquifer);
-                        pending.add(new PendingDecision(index, globalState,
-                                context, density, diagnosticInput));
+                        pending.add(index, globalState, context, density, diagnosticInput);
                         directLavaDecisions++;
                         continue;
                     }
@@ -341,10 +340,10 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         distance0, distance1, distance2, distance3,
                         kind0, kind1, kind2, kind3, statusMask,
                         query.belowIsLava, c2meAquifer);
-                pending.add(new PendingDecision(query.index, nearestState,
+                pending.add(query.index, nearestState,
                         gpunoise$verifyAquifer
                                 ? new DensityFunction.SinglePointContext(query.x, query.y, query.z) : null,
-                        query.density, diagnosticInput));
+                        query.density, diagnosticInput);
             }
         }
         if (gpunoise$verifyAquifer) {
@@ -353,6 +352,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 nearestFirstMismatch = "GPU returned fewer query rows: expected=" + queries.size()
                         + ", sampled=" + nearestParitySamples;
             }
+        }
+        if (substanceWriter.size() != pending.size()) {
+            throw new IllegalStateException("aquifer GPU rows lost their ordered chunk metadata");
         }
 
         List<CompletableFuture<int[]>> substanceBatches = new ArrayList<>();
@@ -377,27 +379,29 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 if ((action != GpuAquiferSubstance.RETURN_DEFAULT
                         && action != GpuAquiferSubstance.RETURN_STATE)
                         || outputs[base + 1] != 0 || (outputs[base + 2] & ~1) != 0) continue;
-                PendingDecision source = pending.get(query);
+                int sourceIndex = pending.index(query);
                 BlockState state = action == GpuAquiferSubstance.RETURN_STATE
-                        ? source.selectedState : null;
+                        ? pending.selectedState(query) : null;
                 if (gpunoise$verifyAquifer) {
-                    BlockState vanilla = gpunoise$invokeVanillaComputeSubstance(source.context, source.density);
+                    DensityFunction.FunctionContext context = pending.context(query);
+                    double density = pending.density(query);
+                    BlockState vanilla = gpunoise$invokeVanillaComputeSubstance(context, density);
                     boolean vanillaSchedule = shouldScheduleFluidUpdate;
                     vanillaParitySamples++;
                     if (!Objects.equals(vanilla, state) || vanillaSchedule != (outputs[base + 2] != 0)) {
                         vanillaParityMismatches++;
                         if (substanceFirstMismatch == null) {
-                            substanceFirstMismatch = "query=(" + source.context.blockX() + ","
-                                    + source.context.blockY() + "," + source.context.blockZ()
-                                    + "), density=" + source.density + ", vanillaState=" + vanilla
+                            substanceFirstMismatch = "query=(" + context.blockX() + ","
+                                    + context.blockY() + "," + context.blockZ()
+                                    + "), density=" + density + ", vanillaState=" + vanilla
                                     + ", gpuState=" + state + ", vanillaSchedule=" + vanillaSchedule
                                     + ", gpuSchedule=" + (outputs[base + 2] != 0)
-                                    + ", gpuAction=" + action + ", gpuInput=" + source.gpuInput;
+                                    + ", gpuAction=" + action + ", gpuInput=" + pending.gpuInput(query);
                         }
                         continue;
                     }
                 }
-                decisions[source.index] = new Decision(state, outputs[base + 2] != 0, source.density);
+                decisions[sourceIndex] = new Decision(state, outputs[base + 2] != 0, pending.density(query));
                 acceptedDecisions++;
             }
         }

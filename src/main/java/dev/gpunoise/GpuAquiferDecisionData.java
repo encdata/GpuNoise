@@ -29,17 +29,46 @@ public final class GpuAquiferDecisionData {
         }
     }
 
-    public static final class PendingDecision {
-        public final int index;
-        public final BlockState selectedState;
-        public final DensityFunction.FunctionContext context;
-        public final double density;
-        public final GpuAquiferSubstance.Input gpuInput;
-        public PendingDecision(int index, BlockState selectedState,
-                               DensityFunction.FunctionContext context, double density,
-                               GpuAquiferSubstance.Input gpuInput) {
-            this.index = index; this.selectedState = selectedState;
-            this.context = context; this.density = density; this.gpuInput = gpuInput;
+    /** Ordered primitive/reference columns for GPU rows; avoids one holder per block. */
+    public static final class PendingDecisions {
+        private final int[] indices;
+        private final BlockState[] selectedStates;
+        private final double[] densities;
+        private final DensityFunction.FunctionContext[] contexts;
+        private final GpuAquiferSubstance.Input[] gpuInputs;
+        private int size;
+
+        public PendingDecisions(int capacity, boolean diagnostics) {
+            indices = new int[capacity];
+            selectedStates = new BlockState[capacity];
+            densities = new double[capacity];
+            contexts = diagnostics ? new DensityFunction.FunctionContext[capacity] : null;
+            gpuInputs = diagnostics ? new GpuAquiferSubstance.Input[capacity] : null;
+        }
+
+        public void add(int index, BlockState selectedState,
+                        DensityFunction.FunctionContext context, double density,
+                        GpuAquiferSubstance.Input gpuInput) {
+            if (size == indices.length) throw new IllegalStateException("aquifer pending rows exceeded chunk capacity");
+            indices[size] = index;
+            selectedStates[size] = selectedState;
+            densities[size] = density;
+            if (contexts != null) {
+                contexts[size] = context;
+                gpuInputs[size] = gpuInput;
+            }
+            size++;
+        }
+
+        public int size() { return size; }
+        public int index(int row) { return indices[row]; }
+        public BlockState selectedState(int row) { return selectedStates[row]; }
+        public double density(int row) { return densities[row]; }
+        public DensityFunction.FunctionContext context(int row) {
+            return contexts == null ? null : contexts[row];
+        }
+        public GpuAquiferSubstance.Input gpuInput(int row) {
+            return gpuInputs == null ? null : gpuInputs[row];
         }
     }
 
