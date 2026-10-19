@@ -186,7 +186,9 @@ final class GpuDensityGraphBuffer {
         java.util.ArrayDeque<Integer> work = new java.util.ArrayDeque<>();
         int[] roots = graph.routerRoots();
         for (int root = 0; root < roots.length; root++) {
-            if (!graph.supportsRouterRoot(root)) continue;
+            // The shader writes the stable root table, including placeholder
+            // values for unsupported roots. Keep every referenced register
+            // defined even though the CPU will ignore unsupported outputs.
             int register = roots[root];
             if (register < 0 || register >= lastProducer.length || lastProducer[register] < 0) {
                 throw new IllegalArgumentException("GPU router root " + root
