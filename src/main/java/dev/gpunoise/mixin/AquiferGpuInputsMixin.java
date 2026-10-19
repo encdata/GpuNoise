@@ -150,6 +150,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         final int height = cache.height();
         Decision[] decisions = new Decision[Math.multiplyExact(height, 256)];
         List<AquiferQuery> queries = new ArrayList<>();
+        List<GpuAquiferSubstance.Input> inputs = new ArrayList<>();
+        List<PendingDecision> pending = new ArrayList<>();
         Map<GridNeighborhood, int[][]> neighborhoods = new HashMap<>();
         int directLavaDecisions = 0;
 
@@ -163,7 +165,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     Aquifer.FluidStatus global = globalFluidPicker.computeFluid(x, y, z);
                     BlockState globalState = global.at(y);
                     if (globalState.is(Blocks.LAVA)) {
-                        decisions[index] = new Decision(globalState, false, density);
+                        inputs.add(new GpuAquiferSubstance.Input(density, 0.0, y,
+                                0, 0, 0, 0, 0, 0,
+                                GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                                GpuAquiferSubstance.OTHER, 0, true, false, 0));
+                        pending.add(new PendingDecision(index, globalState,
+                                new DensityFunction.SinglePointContext(x, y, z), density));
                         directLavaDecisions++;
                         continue;
                     }
@@ -202,8 +209,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         }
         CompletableFuture.allOf(nearestBatches.toArray(CompletableFuture[]::new)).join();
 
-        List<GpuAquiferSubstance.Input> inputs = new ArrayList<>();
-        List<PendingDecision> pending = new ArrayList<>();
         int nearestParitySamples = 0;
         int nearestParityMismatches = 0;
         String nearestFirstMismatch = null;
@@ -275,7 +280,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         CompletableFuture.allOf(substanceBatches.toArray(CompletableFuture[]::new)).join();
 
         int outputOffset = 0;
-        int acceptedDecisions = directLavaDecisions;
+        int acceptedDecisions = 0;
         int vanillaParitySamples = 0;
         int vanillaParityMismatches = 0;
         String substanceFirstMismatch = null;
@@ -291,7 +296,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         || outputs[base + 1] != 0 || (outputs[base + 2] & ~1) != 0) continue;
                 PendingDecision source = pending.get(query);
                 BlockState state = action == GpuAquiferSubstance.RETURN_STATE
-                        ? source.nearestState : null;
+                        ? source.selectedState : null;
                 if (gpunoise$verifyAquifer) {
                     BlockState vanilla = gpunoise$invokeVanillaComputeSubstance(source.context, source.density);
                     boolean vanillaSchedule = shouldScheduleFluidUpdate;
@@ -332,9 +337,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         if (!inputs.isEmpty() && gpunoise$aquiferBatchLogged.compareAndSet(false, true)) {
             dev.gpunoise.GpuNoise.LOGGER.info(
                     "GPU aquifer substance batch: queries={}, acceptedDecisions={}, cpuFallback={}, "
-                            + "vanillaParitySamples={}, vanillaParityMismatches={}",
-                    inputs.size(), acceptedDecisions, inputs.size() - acceptedDecisions + directLavaDecisions,
-                    vanillaParitySamples, vanillaParityMismatches);
+                            + "globalLavaQueries={}, vanillaParitySamples={}, vanillaParityMismatches={}",
+                    inputs.size(), acceptedDecisions, inputs.size() - acceptedDecisions,
+                    directLavaDecisions, vanillaParitySamples, vanillaParityMismatches);
         }
     }
 

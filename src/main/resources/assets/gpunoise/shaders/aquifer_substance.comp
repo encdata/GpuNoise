@@ -72,12 +72,12 @@ void main() {
         emit(i, RETURN_DEFAULT, 0u, 0u);
         return;
     }
-    if (isnan(r.barrier) || isinf(r.barrier) || abs(r.density) <= PRECISION_EPSILON) {
-        emit(i, CPU_FALLBACK, 0u, 0u);
-        return;
-    }
     if (r.globalIsLava != 0u) {
         emit(i, RETURN_STATE, r.globalStateId, 0u);
+        return;
+    }
+    if (isnan(r.barrier) || isinf(r.barrier) || abs(r.density) <= PRECISION_EPSILON) {
+        emit(i, CPU_FALLBACK, 0u, 0u);
         return;
     }
 

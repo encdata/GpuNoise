@@ -41,9 +41,9 @@ public final class GpuAquiferSubstance {
     public static int[] evaluate(Input input) {
         if (!Double.isFinite(input.density)) return output(CPU_FALLBACK, 0, false);
         if (input.density > 0.0) return output(RETURN_DEFAULT, 0, false);
+        if (input.globalIsLava) return output(RETURN_STATE, input.globalStateId, false);
         if (!Double.isFinite(input.barrier) || Math.abs(input.density) <= PRECISION_EPSILON)
             return output(CPU_FALLBACK, 0, false);
-        if (input.globalIsLava) return output(RETURN_STATE, input.globalStateId, false);
 
         double similarity01 = similarity(input.distance0, input.distance1);
         if (similarity01 <= 0.0) {

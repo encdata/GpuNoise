@@ -31,12 +31,12 @@ public final class GpuAquiferDecisionData {
 
     public static final class PendingDecision {
         public final int index;
-        public final BlockState nearestState;
+        public final BlockState selectedState;
         public final DensityFunction.FunctionContext context;
         public final double density;
-        public PendingDecision(int index, BlockState nearestState,
+        public PendingDecision(int index, BlockState selectedState,
                                DensityFunction.FunctionContext context, double density) {
-            this.index = index; this.nearestState = nearestState;
+            this.index = index; this.selectedState = selectedState;
             this.context = context; this.density = density;
         }
     }
