@@ -110,6 +110,7 @@ jobs:
           - without-terrain-mods
           - tectonic-overworld-stack
           - expanded-biome-stacks
+          - biomes-weve-gone
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

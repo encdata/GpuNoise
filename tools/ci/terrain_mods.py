@@ -78,9 +78,11 @@ TERRAIN_LIBRARIES = {
     ),
 }
 
-# Exercise two different mixed terrain stacks while keeping the biome-mod
-# groups independent. Each item is checked against both the CPU reference and
-# the GPU path; together the profiles cover all ten terrain projects above.
+# Exercise mixed terrain stacks while keeping independently maintained biome
+# registries isolated. BYG 2.6.3 currently creates a vanilla feature-order
+# cycle through Lithostitched's biome injector when loaded beside the other
+# large biome packs, so it gets its own worldgen profile. Every item is still
+# checked against both the CPU reference and the GPU path.
 TERRAIN_TEST_PROFILES = {
     "tectonic-overworld-stack": (
         "tectonic-3.0.28-neoforge-21.1.jar",
@@ -91,10 +93,12 @@ TERRAIN_TEST_PROFILES = {
     ),
     "expanded-biome-stacks": (
         "regions-unexplored-0.6.2-neoforge-21.1.jar",
-        "Oh-The-Biomes-Weve-Gone-NeoForge-2.6.3.jar",
         "natures_spirit-2.3.1-1.21.1.jar",
         "BiomesOPlenty-neoforge-1.21.1-21.1.0.14.jar",
         "lithosphere-1.8.2.jar",
+    ),
+    "biomes-weve-gone": (
+        "Oh-The-Biomes-Weve-Gone-NeoForge-2.6.3.jar",
     ),
 }
 
