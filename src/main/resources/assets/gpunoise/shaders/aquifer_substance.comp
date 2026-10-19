@@ -130,7 +130,8 @@ void main() {
     }
 
     if (similarity12 > 0.0) {
-        float contribution12 = similarity01 * similarity12 * pressure(r.y,
+        float pairWeight = c2meAquifer ? similarity12 : similarity01 * similarity12;
+        float contribution12 = pairWeight * pressure(r.y,
                 r.level1, r.level2, r.kind1, r.kind2, r.barrier);
         float thirdResult = r.density + contribution12;
         if (abs(thirdResult) <= PRECISION_EPSILON) {

@@ -802,7 +802,16 @@ public final class VulkanCiSmoke {
                     new GpuAquiferSubstance.Input(-0.5, 0.0, 30,
                             30, 30, 30, 1, 2, 3,
                             GpuAquiferSubstance.OTHER, GpuAquiferSubstance.WATER,
-                            GpuAquiferSubstance.LAVA, 0, false, false, 409)
+                            GpuAquiferSubstance.LAVA, 0, false, false, 409),
+                    // C2ME's extracted check weights the final center pair
+                    // by similarity12, while vanilla also multiplies by
+                    // similarity01. This sample intentionally separates the
+                    // two contracts (default block in C2ME, fluid in vanilla).
+                    new GpuAquiferSubstance.Input(-1.6307795, 0.010709858, 76,
+                            6, 82, -24, 0, 5, 29, 17, 0,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            0, 0, false, false, true, 410)
             };
             int substanceSliceCount = substanceCases.length - 2;
             ByteBuffer substanceSlice = GpuAquiferSubstance.pack(
@@ -937,6 +946,21 @@ public final class VulkanCiSmoke {
                     || substanceResults[weightedThirdPressureIndex] != GpuAquiferSubstance.packOutput(
                     GpuAquiferSubstance.RETURN_STATE, true)) {
                 throw new IllegalStateException("Packed aquifer output lost the weighted second/third pressure decision");
+            }
+            GpuAquiferSubstance.Input c2mePairWeightCase = substanceCases[substanceCases.length - 1];
+            int[] c2mePairWeight = GpuAquiferSubstance.evaluate(c2mePairWeightCase);
+            int[] vanillaPairWeight = GpuAquiferSubstance.evaluate(new GpuAquiferSubstance.Input(
+                    c2mePairWeightCase.density(), c2mePairWeightCase.barrier(), c2mePairWeightCase.y(),
+                    c2mePairWeightCase.level0(), c2mePairWeightCase.level1(), c2mePairWeightCase.level2(),
+                    c2mePairWeightCase.level3(), c2mePairWeightCase.distance0(), c2mePairWeightCase.distance1(),
+                    c2mePairWeightCase.distance2(), c2mePairWeightCase.distance3(), c2mePairWeightCase.kind0(),
+                    c2mePairWeightCase.kind1(), c2mePairWeightCase.kind2(), c2mePairWeightCase.kind3(),
+                    c2mePairWeightCase.statusEqualityMask(), 0, false, false, false, 410));
+            if (c2mePairWeight[0] != GpuAquiferSubstance.RETURN_DEFAULT
+                    || vanillaPairWeight[0] != GpuAquiferSubstance.RETURN_STATE
+                    || substanceResults[substanceCases.length - 1] != GpuAquiferSubstance.packOutput(
+                    GpuAquiferSubstance.RETURN_DEFAULT, false)) {
+                throw new IllegalStateException("C2ME aquifer center-pair weighting did not match OCL semantics");
             }
             if (GpuAquiferSubstance.evaluate(positiveDensityThresholdCase)[0]
                     != GpuAquiferSubstance.CPU_FALLBACK) {

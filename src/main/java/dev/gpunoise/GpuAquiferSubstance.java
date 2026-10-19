@@ -206,7 +206,10 @@ public final class GpuAquiferSubstance {
         }
 
         if (similarity12 > 0.0) {
-            double contribution12 = similarity01 * similarity12
+            // C2ME OCL's extractedCheckFG receives the center-1/center-2
+            // similarity directly. Vanilla's implementation weights this
+            // pair by similarity01 as well; keep the two contracts distinct.
+            double contribution12 = (input.c2meAquifer ? similarity12 : similarity01 * similarity12)
                     * pressure(input.y, input.level1, input.level2,
                             input.kind1, input.kind2, input.barrier);
             double thirdResult = input.density + contribution12;
@@ -215,10 +218,10 @@ public final class GpuAquiferSubstance {
         }
         if (!input.c2meAquifer) return output(RETURN_STATE, input.nearestStateId, true);
 
-        boolean mayFlow01 = !sameStatus(input, 0, 1);
-        boolean mayFlow12 = similarity12 >= FLOWING_UPDATE_SIMILARITY && !sameStatus(input, 1, 2);
-        boolean mayFlow02 = similarity02 >= FLOWING_UPDATE_SIMILARITY && !sameStatus(input, 0, 2);
-        boolean schedule = mayFlow01 || mayFlow12 || mayFlow02
+        // Match C2ME OCL __aquifer_getFinalBlockState's center-status pairs.
+        boolean schedule = !sameStatus(input, 0, 1)
+                || (similarity12 >= FLOWING_UPDATE_SIMILARITY && !sameStatus(input, 1, 2))
+                || (similarity02 >= FLOWING_UPDATE_SIMILARITY && !sameStatus(input, 0, 2))
                 || (similarity02 >= FLOWING_UPDATE_SIMILARITY
                 && similarity(input.distance0, input.distance3) >= FLOWING_UPDATE_SIMILARITY
                 && !sameStatus(input, 0, 3));
