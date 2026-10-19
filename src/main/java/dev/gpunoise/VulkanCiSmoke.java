@@ -450,11 +450,11 @@ public final class VulkanCiSmoke {
             GpuDensityGraph markerGraph = GpuDensityExpressionSmoke.interpolatedMarkerGraphForVulkanSmoke();
             ByteBuffer markerGrid = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder());
             markerGrid.putInt(0).putInt(0).putInt(0)
-                    .putInt(2).putInt(2).putInt(2).putInt(1).putInt(1).flip();
+                    .putInt(2).putInt(2).putInt(2).putInt(16).putInt(1).flip();
             ByteBuffer markerOutput = ByteBuffer.allocateDirect(GpuInterpolationBatch.METADATA_BYTES)
                     .order(ByteOrder.nativeOrder());
             markerOutput.putInt(0).putInt(0).putInt(1).putInt(1).putInt(1)
-                    .putInt(1).putInt(1).putInt(0).flip();
+                    .putInt(16).putInt(1).putInt(0).flip();
             System.out.println("Vulkan CI smoke: dispatching block graph with interpolated marker inputs");
             GpuTerrainBatchResult markerTerrain = ring.submitGraphGridInterpolated(markerGraph,
                     markerGrid, 1, 8, markerOutput, 256).get(60, TimeUnit.SECONDS);
@@ -467,7 +467,7 @@ public final class VulkanCiSmoke {
                 for (int blockX = 0; blockX < 16; blockX++) {
                     for (int root = 0; root < GpuTerrainRoots.COUNT; root++) {
                         float value = markerBlocks.valueAt(blockX, 0, blockZ, root);
-                        float expected = root == 1 || root == 2 ? 8.0f : 5.0f;
+                        float expected = root == 1 || root == 2 ? 8.0f : blockX + 3.0f;
                         if (Math.abs(value - expected) > 1.0e-5f) {
                             throw new IllegalStateException("Interpolated-marker block graph mismatch at "
                                     + blockX + ",0," + blockZ + " root " + root + ": expected "
