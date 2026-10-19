@@ -86,7 +86,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long totalTerrainPreparationNanos;
     private long totalTerrainFenceNanos;
     private long totalTerrainReadbackNanos;
-    private long totalTerrainGpuCommandNanos;
+    private long totalTerrainGridGpuNanos;
+    private long totalTerrainInterpolationGpuNanos;
+    private long totalTerrainBlockGpuNanos;
     private long terrainGpuTimestampSamples;
     private long timestampQueryPool;
     private int timestampValidBits;
@@ -469,23 +471,31 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     }
 
     private void recordTerrainBatchDuration(long preparationNanos, long fenceNanos,
-                                            long gpuCommandNanos, long readbackNanos) {
+                                            long[] stageGpuNanos, long readbackNanos) {
         totalTerrainPreparationNanos += preparationNanos;
         totalTerrainFenceNanos += fenceNanos;
         totalTerrainReadbackNanos += readbackNanos;
-        if (gpuCommandNanos >= 0L) {
-            totalTerrainGpuCommandNanos += gpuCommandNanos;
+        if (stageGpuNanos.length == 3 && stageGpuNanos[0] >= 0L
+                && stageGpuNanos[1] >= 0L && stageGpuNanos[2] >= 0L) {
+            totalTerrainGridGpuNanos += stageGpuNanos[0];
+            totalTerrainInterpolationGpuNanos += stageGpuNanos[1];
+            totalTerrainBlockGpuNanos += stageGpuNanos[2];
             terrainGpuTimestampSamples++;
         }
         long completed = ++completedTerrainBatchSamples;
         if ((completed & 7L) == 0L) {
-            double averageGpuCommandMs = terrainGpuTimestampSamples == 0 ? -1.0
-                    : totalTerrainGpuCommandNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
-            GpuNoise.LOGGER.info("GPU full terrain profile: batches={}, avgCpuPrepareMs={}, avgSubmitToFenceMs={}, avgReadbackMs={}, avgGpuCommandMs={}, gpuTimingSamples={}",
+            double averageGridGpuMs = terrainGpuTimestampSamples == 0 ? -1.0
+                    : totalTerrainGridGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
+            double averageInterpolationGpuMs = terrainGpuTimestampSamples == 0 ? -1.0
+                    : totalTerrainInterpolationGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
+            double averageBlockGpuMs = terrainGpuTimestampSamples == 0 ? -1.0
+                    : totalTerrainBlockGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
+            GpuNoise.LOGGER.info("GPU full terrain profile: batches={}, avgCpuPrepareMs={}, avgSubmitToFenceMs={}, avgReadbackMs={}, avgGridGpuMs={}, avgInterpolationGpuMs={}, avgBlockGpuMs={}, gpuTimingSamples={}",
                     completed, totalTerrainPreparationNanos / (double) completed / 1_000_000.0,
                     totalTerrainFenceNanos / (double) completed / 1_000_000.0,
                     totalTerrainReadbackNanos / (double) completed / 1_000_000.0,
-                    averageGpuCommandMs, terrainGpuTimestampSamples);
+                    averageGridGpuMs, averageInterpolationGpuMs, averageBlockGpuMs,
+                    terrainGpuTimestampSamples);
         }
     }
 
@@ -575,8 +585,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             ByteBuffer graphPush = stack.malloc(16).order(ByteOrder.nativeOrder())
                     .putInt(sampleCount).putInt(packed.nodeCount()).putInt(rootCount).putInt(samplesPerChunk).flip();
             vkCmdPushConstants(commandBuffer, graphPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, graphPush);
-            beginGpuTimestamp();
+            beginTerrainGpuTimestamps();
             vkCmdDispatch(commandBuffer, (sampleCount + 63) / 64, 1, 1);
+            writeGpuTimestamp(1, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             VkBufferMemoryBarrier.Buffer graphBarrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
                     .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT)
                     .buffer(results.buffer).size((long) sampleCount * cornerStride * Float.BYTES);
@@ -589,7 +600,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     .putInt(chunkCount).putInt(blocksPerChunk).putInt(cornerStride)
                     .putInt(markerCount | 0x8000_0000).flip();
             vkCmdPushConstants(commandBuffer, interpolationPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, interpolationPush);
+            writeGpuTimestamp(2, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
             vkCmdDispatch(commandBuffer, (blockCount + 63) / 64, 1, 1);
+            writeGpuTimestamp(3, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             VkBufferMemoryBarrier.Buffer interpolationBarrier = VkBufferMemoryBarrier.calloc(2, stack).sType$Default();
             interpolationBarrier.get(0).srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT)
                     .buffer(interpolatedInputs.buffer).size(Math.max(4L, (long) blockCount * markerCount * Float.BYTES));
@@ -606,8 +619,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     .putInt((packed.blockNodeOffset() << 5) | outputRoots)
                     .putInt(0x8000_0000 | markerCount).flip();
             vkCmdPushConstants(commandBuffer, graphPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, blockPush);
+            writeGpuTimestamp(4, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
             vkCmdDispatch(commandBuffer, (blockCount + 63) / 64, 1, 1);
-            endGpuTimestamp();
+            writeGpuTimestamp(5, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             VkBufferMemoryBarrier.Buffer resultBarrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
                     .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
                     .buffer(results.buffer).size((long) sampleCount * cornerStride * Float.BYTES);
@@ -633,7 +647,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             long submittedAt = System.nanoTime();
             check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait grid interpolation");
             long submitToFenceNanos = System.nanoTime() - submittedAt;
-            long gpuCommandNanos = readGpuTimestamp(stack);
+            long[] stageGpuNanos = readTerrainGpuTimestamps(stack);
             long readbackStarted = System.nanoTime();
             check(vkResetFences(device, fence), "reset grid interpolation fence");
             float[] corners = readRootResults(sampleCount, rootCount, cornerStride, stack);
@@ -644,7 +658,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             float[] blocks = new float[blockCount * outputRoots];
             blockValues.get(blocks);
             recordTerrainBatchDuration(submittedAt - preparationStarted, submitToFenceNanos,
-                    gpuCommandNanos, System.nanoTime() - readbackStarted);
+                    stageGpuNanos, System.nanoTime() - readbackStarted);
             return new GpuTerrainBatchResult(new GpuTerrainRootsResult(corners, 0, corners.length,
                     rootCount),
                     new GpuTerrainBlockResult(blocks, 0, blockCount, outputRoots,
@@ -1104,7 +1118,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         timestampPeriodNanos = properties.limits().timestampPeriod();
         if (!(timestampPeriodNanos > 0.0) || !Double.isFinite(timestampPeriodNanos)) return 0L;
         VkQueryPoolCreateInfo create = VkQueryPoolCreateInfo.calloc(stack).sType$Default()
-                .queryType(VK_QUERY_TYPE_TIMESTAMP).queryCount(2);
+                .queryType(VK_QUERY_TYPE_TIMESTAMP).queryCount(6);
         LongBuffer handle = stack.longs(0);
         int result = vkCreateQueryPool(device, create, null, handle);
         return result == VK_SUCCESS ? handle.get(0) : 0L;
@@ -1112,15 +1126,23 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
 
     private void beginGpuTimestamp() {
         if (timestampQueryPool == 0L) return;
-        vkCmdResetQueryPool(commandBuffer, timestampQueryPool, 0, 2);
-        vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestampQueryPool, 0);
+        vkCmdResetQueryPool(commandBuffer, timestampQueryPool, 0, 6);
+        writeGpuTimestamp(0, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
     }
 
     private void endGpuTimestamp() {
-        if (timestampQueryPool != 0L) {
-            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                    timestampQueryPool, 1);
-        }
+        writeGpuTimestamp(1, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    }
+
+    private void beginTerrainGpuTimestamps() {
+        if (timestampQueryPool == 0L) return;
+        vkCmdResetQueryPool(commandBuffer, timestampQueryPool, 0, 6);
+        writeGpuTimestamp(0, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+    }
+
+    private void writeGpuTimestamp(int query, int stage) {
+        if (timestampQueryPool != 0L)
+            vkCmdWriteTimestamp(commandBuffer, stage, timestampQueryPool, query);
     }
 
     private long readGpuTimestamp(MemoryStack stack) {
@@ -1134,6 +1156,24 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         double elapsedNanos = elapsedTicks * timestampPeriodNanos;
         if (!Double.isFinite(elapsedNanos) || elapsedNanos < 0.0 || elapsedNanos > Long.MAX_VALUE) return -1L;
         return Math.round(elapsedNanos);
+    }
+
+    private long[] readTerrainGpuTimestamps(MemoryStack stack) {
+        if (timestampQueryPool == 0L) return new long[]{-1L, -1L, -1L};
+        ByteBuffer results = stack.malloc(6 * Long.BYTES).order(ByteOrder.nativeOrder());
+        int status = vkGetQueryPoolResults(device, timestampQueryPool, 0, 6, results,
+                Long.BYTES, VK_QUERY_RESULT_64_BIT);
+        if (status != VK_SUCCESS) return new long[]{-1L, -1L, -1L};
+        long[] elapsed = new long[3];
+        for (int stage = 0; stage < elapsed.length; stage++) {
+            long ticks = results.getLong((stage * 2 + 1) * Long.BYTES)
+                    - results.getLong(stage * 2 * Long.BYTES);
+            if (timestampValidBits < Long.SIZE) ticks &= (1L << timestampValidBits) - 1L;
+            double nanos = ticks * timestampPeriodNanos;
+            elapsed[stage] = !Double.isFinite(nanos) || nanos < 0.0 || nanos > Long.MAX_VALUE
+                    ? -1L : Math.round(nanos);
+        }
+        return elapsed;
     }
 
     private VkCommandBuffer commandBuffer(MemoryStack s){VkCommandBufferAllocateInfo i=VkCommandBufferAllocateInfo.calloc(s).sType$Default().commandPool(commandPool).level(VK_COMMAND_BUFFER_LEVEL_PRIMARY).commandBufferCount(1);PointerBuffer h=s.mallocPointer(1);check(vkAllocateCommandBuffers(device,i,h),"allocate command buffer");return new VkCommandBuffer(h.get(0),device);}
