@@ -532,6 +532,18 @@ final class GpuDensityExpressionSmoke {
                 || selected.nodes().get(0).constants()[0] != 10.0) {
             throw new AssertionError("folded constant conditions should prune selector branches before shader dispatch");
         }
+
+        GpuDensityGraph constantMapping = new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{-3.0}, null),
+                        new GpuDensityGraph.Node("Mapped", new int[]{0}, new double[0], "SQUARE")),
+                new int[]{1}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(source, source));
+        GpuDensityGraph mapped = GpuDensityGraphLowerer.lower(constantMapping);
+        if (mapped.nodes().size() != 1 || !mapped.nodes().get(0).opcode().equals("Constant")
+                || mapped.nodes().get(0).constants()[0] != 9.0) {
+            throw new AssertionError("exact constant mapped densities should fold before terrain dispatch");
+        }
     }
 
     private static void verifyConstantBranchPruning() {

@@ -194,6 +194,48 @@ final class GpuDensityGraphLowerer {
                 return new GpuDensityGraph.Node("Constant", new int[0], new double[]{precise}, null);
             }
         }
+        if (node.opcode().equals("Mapped") && children.length == 1) {
+            Double input = constantNodeValue(nodes, children[0]);
+            if (input == null || !Double.isFinite(input)) return null;
+            double precise;
+            double fast;
+            switch (node.payload() == null ? "" : node.payload()) {
+                case "ABS" -> {
+                    precise = Math.abs(input);
+                    fast = Math.abs((double) (float) input);
+                }
+                case "SQUARE" -> {
+                    precise = input * input;
+                    float value = (float) input;
+                    fast = (double) (value * value);
+                }
+                case "CUBE" -> {
+                    precise = input * input * input;
+                    float value = (float) input;
+                    fast = (double) ((value * value) * value);
+                }
+                case "HALF_NEGATIVE" -> {
+                    precise = input > 0.0 ? input : input * 0.5;
+                    fast = input > 0.0 ? input : (double) ((float) input * 0.5f);
+                }
+                case "QUARTER_NEGATIVE" -> {
+                    precise = input > 0.0 ? input : input * 0.25;
+                    fast = input > 0.0 ? input : (double) ((float) input * 0.25f);
+                }
+                case "FLOOR" -> {
+                    precise = Math.floor(input);
+                    fast = Math.floor((float) input);
+                }
+                case "CEIL" -> {
+                    precise = Math.ceil(input);
+                    fast = Math.ceil((float) input);
+                }
+                default -> { return null; }
+            }
+            if (sameFloatResult(precise, fast)) {
+                return new GpuDensityGraph.Node("Constant", new int[0], new double[]{precise}, null);
+            }
+        }
         if (node.opcode().equals("Clamp") && children.length == 1 && constants.length >= 2) {
             Double input = constantNodeValue(nodes, children[0]);
             if (input == null) return null;
