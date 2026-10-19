@@ -43,7 +43,9 @@ MODS = {
     ),
 }
 RCON_PASSWORD = "gpunoise-ci-only"
-SERVER_START_TIMEOUT = 300
+SERVER_START_TIMEOUT = int(os.environ.get("GPUNOISE_SERVER_START_TIMEOUT", "900"))
+if SERVER_START_TIMEOUT < 300:
+    raise ValueError("GPUNOISE_SERVER_START_TIMEOUT must be at least 300 seconds")
 CHUNKY_RUN_TIMEOUT = 3600
 SHUTDOWN_TIMEOUT = 90
 GPU_NOISE_MOD_LIST = re.compile(r"(?m)^\s*GPU Noise [^\r\n]*\(gpunoise\)\s*$")
@@ -609,7 +611,8 @@ def main() -> int:
         f"terrain_mods={len(TERRAIN_MODS)} modded_profiles={len(TERRAIN_TEST_PROFILES)} "
         f"batch_window_ms={BATCH_WINDOW_MS} "
         f"batch_target_chunks={BATCH_TARGET_CHUNKS} "
-        f"batch_region_radius={BATCH_REGION_RADIUS} full_block_output={FULL_BLOCK_OUTPUT}",
+        f"batch_region_radius={BATCH_REGION_RADIUS} full_block_output={FULL_BLOCK_OUTPUT} "
+        f"server_start_timeout_seconds={SERVER_START_TIMEOUT}",
         flush=True,
     )
     completed_cases: list[str] = []
