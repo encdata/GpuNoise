@@ -202,16 +202,18 @@ final class GpuDensityGraphLowerer {
                 return new GpuDensityGraph.Node("Constant", new int[0], new double[]{0.0}, null);
             }
             if (left == null || right == null) return null;
+            double leftValue = left.doubleValue();
+            double rightValue = right.doubleValue();
             double precise;
             double fast;
             switch (node.payload() == null ? "" : node.payload()) {
                 case "ADD" -> {
-                    precise = left + right;
-                    fast = (double) ((float) left + (float) right);
+                    precise = leftValue + rightValue;
+                    fast = (double) ((float) leftValue + (float) rightValue);
                 }
                 case "MUL" -> {
-                    precise = left == 0.0 ? 0.0 : left * right;
-                    fast = left == 0.0 ? 0.0 : (double) ((float) left * (float) right);
+                    precise = leftValue == 0.0 ? 0.0 : leftValue * rightValue;
+                    fast = leftValue == 0.0 ? 0.0 : (double) ((float) leftValue * (float) rightValue);
                 }
                 default -> { return null; }
             }
@@ -222,38 +224,39 @@ final class GpuDensityGraphLowerer {
         if (node.opcode().equals("Mapped") && children.length == 1) {
             Double input = constantNodeValue(nodes, children[0]);
             if (input == null || !Double.isFinite(input)) return null;
+            double inputValue = input.doubleValue();
             double precise;
             double fast;
             switch (node.payload() == null ? "" : node.payload()) {
                 case "ABS" -> {
-                    precise = Math.abs(input);
-                    fast = Math.abs((double) (float) input);
+                    precise = Math.abs(inputValue);
+                    fast = Math.abs((double) (float) inputValue);
                 }
                 case "SQUARE" -> {
-                    precise = input * input;
-                    float value = (float) input;
+                    precise = inputValue * inputValue;
+                    float value = (float) inputValue;
                     fast = (double) (value * value);
                 }
                 case "CUBE" -> {
-                    precise = input * input * input;
-                    float value = (float) input;
+                    precise = inputValue * inputValue * inputValue;
+                    float value = (float) inputValue;
                     fast = (double) ((value * value) * value);
                 }
                 case "HALF_NEGATIVE" -> {
-                    precise = input > 0.0 ? input : input * 0.5;
-                    fast = input > 0.0 ? input : (double) ((float) input * 0.5f);
+                    precise = inputValue > 0.0 ? inputValue : inputValue * 0.5;
+                    fast = inputValue > 0.0 ? inputValue : (double) ((float) inputValue * 0.5f);
                 }
                 case "QUARTER_NEGATIVE" -> {
-                    precise = input > 0.0 ? input : input * 0.25;
-                    fast = input > 0.0 ? input : (double) ((float) input * 0.25f);
+                    precise = inputValue > 0.0 ? inputValue : inputValue * 0.25;
+                    fast = inputValue > 0.0 ? inputValue : (double) ((float) inputValue * 0.25f);
                 }
                 case "FLOOR" -> {
-                    precise = Math.floor(input);
-                    fast = Math.floor((float) input);
+                    precise = Math.floor(inputValue);
+                    fast = Math.floor((float) inputValue);
                 }
                 case "CEIL" -> {
-                    precise = Math.ceil(input);
-                    fast = Math.ceil((float) input);
+                    precise = Math.ceil(inputValue);
+                    fast = Math.ceil((float) inputValue);
                 }
                 default -> { return null; }
             }
