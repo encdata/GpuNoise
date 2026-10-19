@@ -103,9 +103,9 @@ final class GpuProbe {
                         VK10.vkGetPhysicalDeviceProperties(physicalDevice, properties);
                         VkPhysicalDeviceFeatures features = VkPhysicalDeviceFeatures.malloc(stack);
                         VK10.vkGetPhysicalDeviceFeatures(physicalDevice, features);
-                        GpuDevice device = new GpuDevice(properties.vendorID(), vendorName(properties.vendorID()),
-                                properties.deviceNameString(), priority(properties.vendorID(), preference),
-                                features.shaderFloat64());
+                        GpuDevice device = new GpuDevice(index, properties.vendorID(), properties.deviceID(),
+                                vendorName(properties.vendorID()), properties.deviceNameString(),
+                                priority(properties.vendorID(), preference), features.shaderFloat64());
                         GpuNoise.LOGGER.info("Vulkan GPU found: {} ({})", device.name(), device.vendorName());
                         if (device.priority() >= 0 && hasComputeQueue(physicalDevice, stack)) candidates.add(device);
                     } finally {

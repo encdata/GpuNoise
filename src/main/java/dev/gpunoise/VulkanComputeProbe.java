@@ -128,11 +128,14 @@ final class VulkanComputeProbe {
         PointerBuffer handles = stack.mallocPointer(count.get(0));
         if (VK10.vkEnumeratePhysicalDevices(instance, count, handles) != VK10.VK_SUCCESS) return null;
         for (int i = 0; i < count.get(0); i++) {
+            if (i != expected.enumerationIndex()) continue;
             VkPhysicalDevice candidate = new VkPhysicalDevice(handles.get(i), instance);
             VkPhysicalDeviceProperties properties = VkPhysicalDeviceProperties.malloc();
             try {
                 VK10.vkGetPhysicalDeviceProperties(candidate, properties);
-                if (properties.vendorID() == expected.vendorId() && properties.deviceNameString().equals(expected.name())) return candidate;
+                if (properties.vendorID() == expected.vendorId()
+                        && properties.deviceID() == expected.deviceId()
+                        && properties.deviceNameString().equals(expected.name())) return candidate;
             } finally {
                 properties.free();
             }

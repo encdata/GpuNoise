@@ -54,7 +54,8 @@ public final class GpuTerrainRuntime {
     private static final AtomicLong lastChunkStatisticsBucket = new AtomicLong(-1L);
     private GpuTerrainRuntime() {}
 
-    public static synchronized void start(GpuDevice selected) {
+    public static synchronized boolean start(GpuDevice selected) {
+        if (selected == null) return false;
         try {
             submissionRing = VulkanBootstrapThread.call(() -> new VulkanSubmissionRing(selected));
             // The ring owns the one terrain VkInstance/VkDevice/VkQueue.
@@ -62,12 +63,14 @@ public final class GpuTerrainRuntime {
             // second complete engine and a second set of persistent buffers.
             engine = submissionRing.primary();
             device = selected;
+            return true;
         } catch (Exception failure) {
             GpuNoise.LOGGER.error("Persistent Vulkan terrain engine failed to initialize", failure);
             engine = null;
             if (submissionRing != null) submissionRing.close();
             submissionRing = null;
             device = null;
+            return false;
         }
     }
     public static boolean active() { return device != null; }

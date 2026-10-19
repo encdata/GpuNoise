@@ -1052,7 +1052,29 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         mapped.put(source.duplicate());
     }
     private VkInstance createInstance(MemoryStack s) { VkApplicationInfo a=VkApplicationInfo.calloc(s).sType$Default().pApplicationName(s.UTF8("GPU Noise Persistent")).apiVersion(VK_API_VERSION_1_0); VkInstanceCreateInfo i=VkInstanceCreateInfo.calloc(s).sType$Default().pApplicationInfo(a); PointerBuffer h=s.mallocPointer(1); check(vkCreateInstance(i,null,h),"create instance"); return new VkInstance(h.get(0),i); }
-    private VkPhysicalDevice findPhysical(VkInstance i,GpuDevice e,MemoryStack s){IntBuffer n=s.ints(0);check(vkEnumeratePhysicalDevices(i,n,null),"enumerate");PointerBuffer h=s.mallocPointer(n.get(0));check(vkEnumeratePhysicalDevices(i,n,h),"enumerate");for(int k=0;k<n.get(0);k++){VkPhysicalDevice p=new VkPhysicalDevice(h.get(k),i);VkPhysicalDeviceProperties q=VkPhysicalDeviceProperties.malloc();try{vkGetPhysicalDeviceProperties(p,q);if(q.vendorID()==e.vendorId()&&q.deviceNameString().equals(e.name()))return p;}finally{q.free();}}throw new IllegalStateException("GPU disappeared");}
+    private VkPhysicalDevice findPhysical(VkInstance instance, GpuDevice expected, MemoryStack stack) {
+        IntBuffer count = stack.ints(0);
+        check(vkEnumeratePhysicalDevices(instance, count, null), "enumerate physical devices");
+        if (expected.enumerationIndex() < 0 || expected.enumerationIndex() >= count.get(0)) {
+            throw new IllegalStateException("selected Vulkan GPU disappeared from the device list");
+        }
+        PointerBuffer handles = stack.mallocPointer(count.get(0));
+        check(vkEnumeratePhysicalDevices(instance, count, handles), "enumerate physical devices");
+        VkPhysicalDevice physicalDevice = new VkPhysicalDevice(
+                handles.get(expected.enumerationIndex()), instance);
+        VkPhysicalDeviceProperties properties = VkPhysicalDeviceProperties.malloc();
+        try {
+            vkGetPhysicalDeviceProperties(physicalDevice, properties);
+            if (properties.vendorID() != expected.vendorId()
+                    || properties.deviceID() != expected.deviceId()
+                    || !properties.deviceNameString().equals(expected.name())) {
+                throw new IllegalStateException("selected Vulkan GPU identity changed between probe and initialization");
+            }
+            return physicalDevice;
+        } finally {
+            properties.free();
+        }
+    }
     private int findQueue(VkPhysicalDevice p,MemoryStack s){IntBuffer n=s.ints(0);vkGetPhysicalDeviceQueueFamilyProperties(p,n,null);VkQueueFamilyProperties.Buffer f=VkQueueFamilyProperties.malloc(n.get(0),s);vkGetPhysicalDeviceQueueFamilyProperties(p,n,f);for(int i=0;i<n.get(0);i++)if((f.get(i).queueFlags()&VK_QUEUE_COMPUTE_BIT)!=0)return i;throw new IllegalStateException("no compute queue");}
     private NativeBuffer buffer(long size,MemoryStack s){return createBuffer(size,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,s);}
     private NativeBuffer hostVisibleBuffer(long size,MemoryStack s){return buffer(size,s);}

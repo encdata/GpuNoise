@@ -99,20 +99,23 @@ public final class GpuNoise {
         GpuDevice device = null;
         for (int index = 0; index < candidates.size(); index++) {
             GpuDevice candidate = candidates.get(index);
-            if (VulkanComputeProbe.verify(candidate)) {
+            if (!VulkanComputeProbe.verify(candidate)) {
+                LOGGER.warn("Vulkan compute setup failed on {}; trying the next supported device.", candidate.name());
+                continue;
+            }
+            if (GpuTerrainRuntime.start(candidate)) {
                 device = candidate;
                 if (index > 0) LOGGER.info("Preferred Vulkan device was unavailable; falling back to {} ({}).",
                         candidate.name(), candidate.vendorName());
                 break;
             }
-            LOGGER.warn("Vulkan compute setup failed on {}; trying the next supported device.", candidate.name());
+            LOGGER.warn("GPU Noise runtime setup failed on {}; trying the next supported device.", candidate.name());
         }
         if (device == null) {
             LOGGER.info("GPU Noise inactive: no discovered GPU could create a Vulkan compute device; vanilla terrain remains unchanged.");
             return;
         }
 
-        GpuTerrainRuntime.start(device);
         warmedDevice = device;
         LOGGER.info("GPU Noise Vulkan runtime warmed during mod registration; selected {} ({}).",
                 device.name(), device.vendorName());
