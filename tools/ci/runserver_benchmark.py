@@ -370,7 +370,7 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                 raise RuntimeError("GPU terrain grid parity check did not run")
             if terrain_profile == "tectonic-overworld-stack" and "GPU terrain root 'finalDensity' remains on vanilla Java" in run_log:
                 raise RuntimeError("Tectonic finalDensity did not compile through the generic GPU density frontend")
-            if FULL_BLOCK_OUTPUT and "GPU per-block density interpolation parity verified:" not in run_log:
+            if FULL_BLOCK_OUTPUT and "GPU per-block terrain interpolation parity verified:" not in run_log:
                 raise RuntimeError("GPU per-block interpolation parity check did not run")
             batch_window = GPU_BATCH_WINDOW.search(run_log)
             if (batch_window is None or int(batch_window.group(1)) != BATCH_WINDOW_MS

@@ -272,6 +272,9 @@ public final class GpuChunkDensityCache {
     public double initialDensity(int x, int y, int z) {
         if (!supportsRoot(GpuTerrainRoots.INITIAL_DENSITY)) return Double.NaN;
         if (exact != null) return exact.valueAt(GpuTerrainRoots.INITIAL_DENSITY, x, y, z);
+        double blockValue = sampleBlockRoot(x - minX, y - minY, z - minZ,
+                GpuTerrainRoots.INITIAL_DENSITY);
+        if (!Double.isNaN(blockValue)) return blockValue;
         return sampleRoot(readyRoots, x - minX, y - minY, z - minZ, GpuTerrainRoots.INITIAL_DENSITY);
     }
 
@@ -323,15 +326,14 @@ public final class GpuChunkDensityCache {
     private double rootDensity(int x, int y, int z, int root) {
         if (!supportsRoot(root)) return Double.NaN;
         if (exact != null) return exact.valueAt(root, x, y, z);
+        double blockValue = sampleBlockRoot(x - minX, y - minY, z - minZ, root);
+        if (!Double.isNaN(blockValue)) return blockValue;
         return sampleRoot(readyRoots, x - minX, y - minY, z - minZ, root);
     }
 
     private double sampleBlockRoot(int rx, int ry, int rz, int root) {
         GpuTerrainBlockResult blocks = readyBlocks;
-        // The compact block buffer currently materializes final density only.
-        // Climate/initial roots continue through the corner/interpolation path.
-        if (root != GpuTerrainRoots.FINAL_DENSITY
-                || blocks == null || !blocks.contains(rx, ry, rz)) return Double.NaN;
+        if (blocks == null || root >= blocks.rootCount() || !blocks.contains(rx, ry, rz)) return Double.NaN;
         return blocks.valueAt(rx, ry, rz, root);
     }
 
@@ -414,16 +416,21 @@ public final class GpuChunkDensityCache {
             int x = index % 16;
             int z = index / 16 % 16;
             int y = index / (16 * 16);
-            double expected = sampleRoot(x, y, z, GpuTerrainRoots.FINAL_DENSITY);
-            double actual = blocks.finalValueAtUnchecked(x, y, z);
-            if (!Double.isFinite(expected) || Math.abs(actual - expected) > 1.0e-5) {
-                throw new IllegalStateException("GPU block interpolation mismatch at "
-                        + (minX + x) + "," + (minY + y) + "," + (minZ + z)
-                        + ": GPU=" + actual + ", CPU=" + expected);
+            for (int root = 0; root < blocks.rootCount(); root++) {
+                if (!supportsRoot(root)) continue;
+                double expected = sampleRoot(x, y, z, root);
+                double actual = blocks.valueAtUnchecked(x, y, z, root);
+                if (!Double.isFinite(expected) || Math.abs(actual - expected) > 1.0e-5) {
+                    throw new IllegalStateException("GPU block interpolation mismatch for root '"
+                            + GpuTerrainRoots.name(root) + "' at "
+                            + (minX + x) + "," + (minY + y) + "," + (minZ + z)
+                            + ": GPU=" + actual + ", CPU=" + expected);
+                }
             }
         }
         if (BLOCK_INTERPOLATION_PARITY_LOGGED.compareAndSet(false, true)) {
-            GpuNoise.LOGGER.info("GPU per-block density interpolation parity verified: 32 samples");
+            GpuNoise.LOGGER.info("GPU per-block terrain interpolation parity verified: 32 samples across {} roots",
+                    blocks.rootCount());
         }
     }
 

@@ -419,9 +419,9 @@ public final class GpuTerrainRuntime {
         return 12;
     }
 
-    /** The compact grid output materializes the hot final-density root. */
+    /** Materialize final/initial density and aquifer inputs in the block-grid pass. */
     static int terrainBlockOutputRootCount() {
-        return 1;
+        return 6;
     }
 
     static java.util.concurrent.CompletionStage<GpuFusedResult> submitFusedDirect(int[] x, int[] y, int[] z,

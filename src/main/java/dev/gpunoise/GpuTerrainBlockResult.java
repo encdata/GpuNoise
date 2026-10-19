@@ -37,6 +37,10 @@ final class GpuTerrainBlockResult {
         return blocks == 0;
     }
 
+    int rootCount() {
+        return roots;
+    }
+
     float valueAt(int x, int y, int z, int root) {
         if (!contains(x, y, z) || root < 0 || root >= roots) throw new IndexOutOfBoundsException();
         return valueAtUnchecked(x, y, z, root);
