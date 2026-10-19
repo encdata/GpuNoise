@@ -9,7 +9,7 @@ import dev.gpunoise.GpuAquiferCoordinatePlanner;
 import dev.gpunoise.GpuAquiferNearestThree;
 import dev.gpunoise.GpuAquiferRuntimeMode;
 import dev.gpunoise.GpuAquiferSubstance;
-import dev.gpunoise.GpuAquiferDecisionData.AquiferQuery;
+import dev.gpunoise.GpuAquiferDecisionData.AquiferQueries;
 import dev.gpunoise.GpuAquiferDecisionData.NeighborhoodCache;
 import dev.gpunoise.GpuAquiferDecisionData.PendingDecisions;
 import dev.gpunoise.GpuAquiferDecisionTable;
@@ -167,7 +167,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         final int height = cache.height();
         int decisionCapacity = Math.multiplyExact(height, 256);
         GpuAquiferDecisionTable decisions = new GpuAquiferDecisionTable(minX, minY, minZ, height);
-        List<AquiferQuery> queries = new ArrayList<>(decisionCapacity);
+        AquiferQueries queries = new AquiferQueries(decisionCapacity);
         GpuAquiferSubstance.BatchWriter substanceWriter =
                 new GpuAquiferSubstance.BatchWriter(decisionCapacity);
         PendingDecisions pending = new PendingDecisions(decisionCapacity, gpunoise$verifyAquifer);
@@ -238,8 +238,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     if (!Double.isFinite(barrier)) continue;
                     boolean belowIsLava = globalFluidPicker.computeFluid(x, y - 1, z)
                             .at(y - 1).is(Blocks.LAVA);
-                    queries.add(new AquiferQuery(index, x, y, z, density, barrier,
-                            belowIsLava, centers));
+                    queries.add(index, x, y, z, density, barrier, belowIsLava, centers);
                 }
             }
         }
@@ -259,7 +258,11 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         for (CompletableFuture<int[]> batch : nearestBatches) {
             int[] selectedRows = batch.join();
             for (int row = 0; row < selectedRows.length / GpuAquiferNearestThree.OUTPUT_INTS; row++) {
-                AquiferQuery query = queries.get(queryOffset++);
+                int query = queryOffset++;
+                int queryX = queries.x(query), queryY = queries.y(query), queryZ = queries.z(query);
+                int[][] queryCenters = queries.centers(query);
+                double queryDensity = queries.density(query), queryBarrier = queries.barrier(query);
+                boolean queryBelowIsLava = queries.belowIsLava(query);
                 int base = row * GpuAquiferNearestThree.OUTPUT_INTS;
                 int first = selectedRows[base], second = selectedRows[base + 1];
                 int third = selectedRows[base + 2], fourth = selectedRows[base + 3];
@@ -267,7 +270,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 int distance2 = selectedRows[base + 6], distance3 = selectedRows[base + 7];
                 if (gpunoise$verifyAquifer) {
                     int[] expectedNearest = GpuAquiferNearestThree.select(
-                            new int[]{query.x, query.y, query.z}, query.centers);
+                            new int[]{queryX, queryY, queryZ}, queryCenters);
                     nearestParitySamples++;
                     if (selectedRows[base] != expectedNearest[0]
                             || selectedRows[base + 1] != expectedNearest[1]
@@ -277,7 +280,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                             || distance2 != expectedNearest[6] || distance3 != expectedNearest[7]) {
                         nearestParityMismatches++;
                         if (nearestFirstMismatch == null) {
-                            nearestFirstMismatch = "query=(" + query.x + "," + query.y + "," + query.z
+                            nearestFirstMismatch = "query=(" + queryX + "," + queryY + "," + queryZ
                                     + "), expected=" + java.util.Arrays.toString(expectedNearest)
                                     + ", gpu=[" + first + "," + second + "," + third + "," + fourth + ","
                                     + distance0 + "," + distance1 + "," + distance2 + "," + distance3 + "]";
@@ -293,39 +296,39 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         || second == third || second == fourth || third == fourth
                         || distance0 < 0 || distance1 < 0 || distance2 < 0 || distance3 < 0) continue;
                 Aquifer.FluidStatus status0 = gpunoise$getAquiferStatus(BlockPos.asLong(
-                        query.centers[first][0], query.centers[first][1], query.centers[first][2]));
+                        queryCenters[first][0], queryCenters[first][1], queryCenters[first][2]));
                 Aquifer.FluidStatus status1 = gpunoise$getAquiferStatus(BlockPos.asLong(
-                        query.centers[second][0], query.centers[second][1], query.centers[second][2]));
+                        queryCenters[second][0], queryCenters[second][1], queryCenters[second][2]));
                 Aquifer.FluidStatus status2 = gpunoise$getAquiferStatus(BlockPos.asLong(
-                        query.centers[third][0], query.centers[third][1], query.centers[third][2]));
+                        queryCenters[third][0], queryCenters[third][1], queryCenters[third][2]));
                 Aquifer.FluidStatus status3 = gpunoise$getAquiferStatus(BlockPos.asLong(
-                        query.centers[fourth][0], query.centers[fourth][1], query.centers[fourth][2]));
-                BlockState nearestState = status0.at(query.y);
+                        queryCenters[fourth][0], queryCenters[fourth][1], queryCenters[fourth][2]));
+                BlockState nearestState = status0.at(queryY);
                 int level0 = gpunoise$fluidLevel(status0);
                 int level1 = gpunoise$fluidLevel(status1);
                 int level2 = gpunoise$fluidLevel(status2);
                 int level3 = gpunoise$fluidLevel(status3);
-                int kind0 = gpunoise$fluidKind(status0.at(query.y));
-                int kind1 = gpunoise$fluidKind(status1.at(query.y));
-                int kind2 = gpunoise$fluidKind(status2.at(query.y));
-                int kind3 = gpunoise$fluidKind(status3.at(query.y));
+                int kind0 = gpunoise$fluidKind(status0.at(queryY));
+                int kind1 = gpunoise$fluidKind(status1.at(queryY));
+                int kind2 = gpunoise$fluidKind(status2.at(queryY));
+                int kind3 = gpunoise$fluidKind(status3.at(queryY));
                 int statusMask = gpunoise$statusEqualityMask(status0, status1, status2, status3);
                 GpuAquiferSubstance.Input diagnosticInput = gpunoise$verifyAquifer
                         ? new GpuAquiferSubstance.Input(
-                        query.density, query.barrier, query.y,
+                        queryDensity, queryBarrier, queryY,
                         level0, level1, level2, level3,
                         distance0, distance1, distance2, distance3,
                         kind0, kind1, kind2, kind3, statusMask,
-                        0, false, query.belowIsLava, c2meAquifer, 0) : null;
-                substanceWriter.addAquifer(query.density, query.barrier, query.y,
+                        0, false, queryBelowIsLava, c2meAquifer, 0) : null;
+                substanceWriter.addAquifer(queryDensity, queryBarrier, queryY,
                         level0, level1, level2, level3,
                         distance0, distance1, distance2, distance3,
                         kind0, kind1, kind2, kind3, statusMask,
-                        query.belowIsLava, c2meAquifer);
-                pending.add(query.index, nearestState,
+                        queryBelowIsLava, c2meAquifer);
+                pending.add(queries.index(query), nearestState,
                         gpunoise$verifyAquifer
-                                ? new DensityFunction.SinglePointContext(query.x, query.y, query.z) : null,
-                        query.density, diagnosticInput);
+                                ? new DensityFunction.SinglePointContext(queryX, queryY, queryZ) : null,
+                        queryDensity, diagnosticInput);
             }
         }
         if (gpunoise$verifyAquifer) {

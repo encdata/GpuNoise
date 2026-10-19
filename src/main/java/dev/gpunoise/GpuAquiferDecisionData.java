@@ -98,6 +98,44 @@ public final class GpuAquiferDecisionData {
         }
     }
 
+    /** Columnar staging for a chunk's aquifer work; avoids one query object per block. */
+    public static final class AquiferQueries {
+        private final int[] indices, xs, ys, zs;
+        private final double[] densities, barriers;
+        private final byte[] belowLava;
+        private final int[][][] centers;
+        private int size;
+
+        public AquiferQueries(int capacity) {
+            if (capacity < 0) throw new IllegalArgumentException("negative aquifer query capacity");
+            indices = new int[capacity]; xs = new int[capacity];
+            ys = new int[capacity]; zs = new int[capacity];
+            densities = new double[capacity]; barriers = new double[capacity];
+            belowLava = new byte[capacity];
+            centers = new int[capacity][][];
+        }
+
+        public void add(int index, int x, int y, int z, double density,
+                        double barrier, boolean isBelowLava, int[][] neighborhood) {
+            if (size == indices.length) throw new IllegalStateException("aquifer queries exceeded chunk capacity");
+            indices[size] = index; xs[size] = x; ys[size] = y; zs[size] = z;
+            densities[size] = density; barriers[size] = barrier;
+            belowLava[size] = (byte) (isBelowLava ? 1 : 0);
+            centers[size] = neighborhood;
+            size++;
+        }
+
+        public int size() { return size; }
+        public int index(int row) { return indices[row]; }
+        public int x(int row) { return xs[row]; }
+        public int y(int row) { return ys[row]; }
+        public int z(int row) { return zs[row]; }
+        public double density(int row) { return densities[row]; }
+        public double barrier(int row) { return barriers[row]; }
+        public boolean belowIsLava(int row) { return belowLava[row] != 0; }
+        public int[][] centers(int row) { return centers[row]; }
+    }
+
     /** Ordered primitive/reference columns for GPU rows; avoids one holder per block. */
     public static final class PendingDecisions {
         private final int[] indices;

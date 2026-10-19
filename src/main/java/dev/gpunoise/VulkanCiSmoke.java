@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import net.minecraft.util.RandomSource;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQuery;
+import dev.gpunoise.GpuAquiferDecisionData.AquiferQueries;
 
 /** Headless Vulkan smoke test for CI's Mesa Lavapipe device. */
 public final class VulkanCiSmoke {
@@ -668,6 +669,14 @@ public final class VulkanCiSmoke {
             }
             if (!nearestInput.equals(GpuAquiferNearestThree.pack(queuedAquiferQueries, 0, queryCount))) {
                 throw new IllegalStateException("queued aquifer queries changed nearest-center packing");
+            }
+            AquiferQueries columnarQueries = new AquiferQueries(queryCount);
+            for (int query = 0; query < queryCount; query++) {
+                columnarQueries.add(query, queries[query][0], queries[query][1], queries[query][2],
+                        query * 0.125, -query * 0.25, (query & 1) != 0, centers[query]);
+            }
+            if (!nearestInput.equals(GpuAquiferNearestThree.pack(columnarQueries, 0, queryCount))) {
+                throw new IllegalStateException("columnar aquifer staging changed nearest-center packing");
             }
             ByteBuffer queuedGridMetadata = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder());
             queuedGridMetadata.putInt(-16).putInt(-8).putInt(32)
