@@ -471,12 +471,18 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                                if "GPU_AQUIFER_TRACE_PARITY" in line and trace_block in line]
                 trace_applied = any("GPU_AQUIFER_TRACE_APPLIED" in line and trace_block in line
                                     for line in run_log.splitlines())
-                if not trace_lines or not trace_applied:
+                trace_vanilla = any("GPU_AQUIFER_TRACE_VANILLA" in line and trace_block in line
+                                    for line in run_log.splitlines())
+                if not trace_applied and not trace_vanilla:
                     raise RuntimeError(
-                        f"GPU aquifer trace did not cover prepared and applied decision at {trace_block}")
-                if not any("vanillaSchedule=true" in line and "gpuSchedule=true" in line
-                           or "vanillaSchedule=false" in line and "gpuSchedule=false" in line
-                           for line in trace_lines):
+                        f"GPU aquifer trace did not observe runtime decision lookup at {trace_block}")
+                if trace_applied and not trace_lines:
+                    raise RuntimeError(
+                        f"GPU aquifer trace applied a decision without its Java parity sample at {trace_block}")
+                if trace_lines and not any(
+                        ("vanillaSchedule=true" in line and "gpuSchedule=true" in line)
+                        or ("vanillaSchedule=false" in line and "gpuSchedule=false" in line)
+                        for line in trace_lines):
                     raise RuntimeError(
                         f"GPU aquifer trace schedule differs from vanilla at {trace_block}: {trace_lines[-1]}")
             fallback_chunks = max(counts[3] for counts in gpu_counts)

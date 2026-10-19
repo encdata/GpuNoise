@@ -166,9 +166,23 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             DensityFunction.FunctionContext context, double density,
             CallbackInfoReturnable<BlockState> cir) {
         GpuAquiferDecisionTable decisions = gpunoise$decisions;
-        if (decisions == null) return;
+        if (decisions == null) {
+            if (gpunoise$isTraceAquiferBlock(context.blockX(), context.blockY(), context.blockZ())) {
+                dev.gpunoise.GpuNoise.LOGGER.info(
+                        "GPU_AQUIFER_TRACE_VANILLA block=({}, {}, {}) reason=no-decision-table density={}",
+                        context.blockX(), context.blockY(), context.blockZ(), density);
+            }
+            return;
+        }
         int index = decisions.indexOfMatch(context.blockX(), context.blockY(), context.blockZ(), density);
-        if (index < 0) return;
+        if (index < 0) {
+            if (gpunoise$isTraceAquiferBlock(context.blockX(), context.blockY(), context.blockZ())) {
+                dev.gpunoise.GpuNoise.LOGGER.info(
+                        "GPU_AQUIFER_TRACE_VANILLA block=({}, {}, {}) reason=no-matching-decision density={}",
+                        context.blockX(), context.blockY(), context.blockZ(), density);
+            }
+            return;
+        }
         shouldScheduleFluidUpdate = decisions.schedulesFluidUpdate(index);
         if (gpunoise$isTraceAquiferBlock(context.blockX(), context.blockY(), context.blockZ())) {
             dev.gpunoise.GpuNoise.LOGGER.info(
