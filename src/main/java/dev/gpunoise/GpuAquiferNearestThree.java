@@ -77,18 +77,22 @@ public final class GpuAquiferNearestThree {
             throw new IllegalArgumentException("invalid aquifer nearest-four batch range");
         IdentityHashMap<int[][], Integer> centerIndices = new IdentityHashMap<>();
         List<int[][]> uniqueCenters = new ArrayList<>();
+        int[] queryCenterIndices = new int[count];
         for (int index = offset; index < offset + count; index++) {
             AquiferQuery query = queries.get(index);
             if (query == null || query.centers == null || query.centers.length != CANDIDATES)
                 throw new IllegalArgumentException("aquifer query must contain xyz and 12 centers");
-            if (centerIndices.get(query.centers) == null) {
+            Integer group = centerIndices.get(query.centers);
+            if (group == null) {
                 for (int[] center : query.centers) {
                     if (center == null || center.length != 3)
                         throw new IllegalArgumentException("aquifer center must be xyz");
                 }
-                centerIndices.put(query.centers, uniqueCenters.size());
+                group = uniqueCenters.size();
+                centerIndices.put(query.centers, group);
                 uniqueCenters.add(query.centers);
             }
+            queryCenterIndices[index - offset] = group;
         }
         long byteCount = HEADER_BYTES + (long) count * QUERY_RECORD_BYTES
                 + (long) uniqueCenters.size() * CENTER_RECORD_BYTES;
@@ -99,7 +103,7 @@ public final class GpuAquiferNearestThree {
         for (int index = offset; index < offset + count; index++) {
             AquiferQuery query = queries.get(index);
             packed.putInt(query.x).putInt(query.y).putInt(query.z)
-                    .putInt(centerIndices.get(query.centers));
+                    .putInt(queryCenterIndices[index - offset]);
         }
         for (int[][] neighborhood : uniqueCenters) {
             for (int[] center : neighborhood) {
@@ -131,9 +135,14 @@ public final class GpuAquiferNearestThree {
     /** Recreates the 2x3x2 positional-random neighborhood used by vanilla. */
     public static int[][] centersForQuery(PositionalRandomFactory factory, int[] query) {
         if (query.length != 3) throw new IllegalArgumentException("aquifer query must be xyz");
-        int baseX = Math.floorDiv(query[0] - 5, 16);
-        int baseY = Math.floorDiv(query[1] + 1, 12);
-        int baseZ = Math.floorDiv(query[2] - 5, 16);
+        return centersForQuery(factory, query[0], query[1], query[2]);
+    }
+
+    /** Coordinate overload for hot paths that already have primitive positions. */
+    public static int[][] centersForQuery(PositionalRandomFactory factory, int x, int y, int z) {
+        int baseX = Math.floorDiv(x - 5, 16);
+        int baseY = Math.floorDiv(y + 1, 12);
+        int baseZ = Math.floorDiv(z - 5, 16);
         int[][] centers = new int[CANDIDATES][3];
         int index = 0;
         for (int offsetX = 0; offsetX <= 1; offsetX++) {
@@ -150,9 +159,14 @@ public final class GpuAquiferNearestThree {
     /** Same neighborhood in C2ME's aquifer scan order (Y, Z, then X). */
     public static int[][] centersForC2meQuery(PositionalRandomFactory factory, int[] query) {
         if (query.length != 3) throw new IllegalArgumentException("aquifer query must be xyz");
-        int baseX = Math.floorDiv(query[0] - 5, 16);
-        int baseY = Math.floorDiv(query[1] + 1, 12);
-        int baseZ = Math.floorDiv(query[2] - 5, 16);
+        return centersForC2meQuery(factory, query[0], query[1], query[2]);
+    }
+
+    /** Coordinate overload for hot paths that already have primitive positions. */
+    public static int[][] centersForC2meQuery(PositionalRandomFactory factory, int x, int y, int z) {
+        int baseX = Math.floorDiv(x - 5, 16);
+        int baseY = Math.floorDiv(y + 1, 12);
+        int baseZ = Math.floorDiv(z - 5, 16);
         int[][] centers = new int[CANDIDATES][3];
         int index = 0;
         for (int offsetY = -1; offsetY <= 1; offsetY++) {

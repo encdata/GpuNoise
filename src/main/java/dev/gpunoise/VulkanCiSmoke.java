@@ -542,6 +542,10 @@ public final class VulkanCiSmoke {
             int[] negativeQuery = {-14, -1, -17};
             int[][] plannedCenters = GpuAquiferNearestThree.centersForQuery(
                     positionalRandom, negativeQuery);
+            if (!java.util.Arrays.deepEquals(plannedCenters,
+                    GpuAquiferNearestThree.centersForQuery(positionalRandom,
+                            negativeQuery[0], negativeQuery[1], negativeQuery[2])))
+                throw new IllegalStateException("Aquifer primitive-coordinate centers differ from array overload");
             int[][] expectedCenters = new int[GpuAquiferNearestThree.CANDIDATES][3];
             int baseX = Math.floorDiv(negativeQuery[0] - 5, 16);
             int baseY = Math.floorDiv(negativeQuery[1] + 1, 12);
@@ -561,6 +565,10 @@ public final class VulkanCiSmoke {
                 throw new IllegalStateException("Aquifer positional-random neighborhood mismatch");
             int[][] plannedC2meCenters = GpuAquiferNearestThree.centersForC2meQuery(
                     positionalRandom, negativeQuery);
+            if (!java.util.Arrays.deepEquals(plannedC2meCenters,
+                    GpuAquiferNearestThree.centersForC2meQuery(positionalRandom,
+                            negativeQuery[0], negativeQuery[1], negativeQuery[2])))
+                throw new IllegalStateException("C2ME primitive-coordinate centers differ from array overload");
             int[][] expectedC2meCenters = new int[GpuAquiferNearestThree.CANDIDATES][3];
             int c2meIndex = 0;
             for (int gy = -1; gy <= 1; gy++) {
@@ -574,6 +582,19 @@ public final class VulkanCiSmoke {
             }
             if (!java.util.Arrays.deepEquals(plannedC2meCenters, expectedC2meCenters))
                 throw new IllegalStateException("C2ME aquifer positional-random scan order mismatch");
+            dev.gpunoise.GpuAquiferDecisionData.NeighborhoodCache neighborhoodCache =
+                    new dev.gpunoise.GpuAquiferDecisionData.NeighborhoodCache(1);
+            int[][][] cachedNeighborhoods = new int[128][][];
+            for (int i = 0; i < cachedNeighborhoods.length; i++) {
+                cachedNeighborhoods[i] = new int[][]{{i, -i, i * 3}};
+                neighborhoodCache.put(i - 64, i * 17, 63 - i, cachedNeighborhoods[i]);
+            }
+            for (int i = 0; i < cachedNeighborhoods.length; i++) {
+                if (neighborhoodCache.get(i - 64, i * 17, 63 - i) != cachedNeighborhoods[i])
+                    throw new IllegalStateException("Aquifer primitive neighborhood cache lost an entry during growth");
+            }
+            if (neighborhoodCache.get(Integer.MIN_VALUE, 0, Integer.MAX_VALUE) != null)
+                throw new IllegalStateException("Aquifer primitive neighborhood cache returned a false match");
             // Four equal-distance centers pin vanilla's inclusive tie order
             // across all three nearest slots.
             centers[0][0] = new int[]{queries[0][0] + 1, queries[0][1], queries[0][2]};

@@ -7,12 +7,81 @@ import net.minecraft.world.level.block.state.BlockState;
 public final class GpuAquiferDecisionData {
     private GpuAquiferDecisionData() {}
 
-    public static final class GridNeighborhood {
-        public final int x, y, z;
-        public GridNeighborhood(int x, int y, int z) { this.x = x; this.y = y; this.z = z; }
-        @Override public int hashCode() { return (x * 31 + y) * 31 + z; }
-        @Override public boolean equals(Object other) {
-            return other instanceof GridNeighborhood key && x == key.x && y == key.y && z == key.z;
+    /** Open-addressed cache for aquifer center groups, avoiding a key object per block. */
+    public static final class NeighborhoodCache {
+        private int[] xs;
+        private int[] ys;
+        private int[] zs;
+        private int[][][] values;
+        private int size;
+
+        public NeighborhoodCache(int expectedEntries) {
+            if (expectedEntries < 0) throw new IllegalArgumentException("negative neighborhood capacity");
+            int capacity = 16;
+            long required = Math.max(16L, (long) expectedEntries * 2L);
+            while (capacity < required && capacity < (1 << 29)) capacity <<= 1;
+            allocate(capacity);
+        }
+
+        public int[][] get(int x, int y, int z) {
+            int mask = values.length - 1;
+            int slot = hash(x, y, z) & mask;
+            while (values[slot] != null) {
+                if (xs[slot] == x && ys[slot] == y && zs[slot] == z) return values[slot];
+                slot = (slot + 1) & mask;
+            }
+            return null;
+        }
+
+        public void put(int x, int y, int z, int[][] centers) {
+            if (centers == null) throw new NullPointerException("centers");
+            if ((long) (size + 1) * 10L >= (long) values.length * 7L) grow();
+            insert(x, y, z, centers);
+        }
+
+        private void insert(int x, int y, int z, int[][] centers) {
+            int mask = values.length - 1;
+            int slot = hash(x, y, z) & mask;
+            while (values[slot] != null) {
+                if (xs[slot] == x && ys[slot] == y && zs[slot] == z) {
+                    values[slot] = centers;
+                    return;
+                }
+                slot = (slot + 1) & mask;
+            }
+            xs[slot] = x;
+            ys[slot] = y;
+            zs[slot] = z;
+            values[slot] = centers;
+            size++;
+        }
+
+        private void grow() {
+            if (values.length >= (1 << 29)) throw new IllegalStateException("aquifer neighborhood cache is full");
+            int[] oldX = xs, oldY = ys, oldZ = zs;
+            int[][][] oldValues = values;
+            allocate(values.length << 1);
+            size = 0;
+            for (int i = 0; i < oldValues.length; i++) {
+                if (oldValues[i] != null) insert(oldX[i], oldY[i], oldZ[i], oldValues[i]);
+            }
+        }
+
+        private void allocate(int capacity) {
+            xs = new int[capacity];
+            ys = new int[capacity];
+            zs = new int[capacity];
+            values = new int[capacity][][];
+        }
+
+        private static int hash(int x, int y, int z) {
+            int h = x * 0x9E3779B9;
+            h = Integer.rotateLeft(h ^ y * 0x85EBCA6B, 13);
+            h = Integer.rotateLeft(h ^ z * 0xC2B2AE35, 15);
+            h ^= h >>> 16;
+            h *= 0x7FEB352D;
+            h ^= h >>> 15;
+            return h;
         }
     }
 

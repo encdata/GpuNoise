@@ -11,7 +11,7 @@ import dev.gpunoise.GpuAquiferRuntimeMode;
 import dev.gpunoise.GpuAquiferSubstance;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQuery;
 import dev.gpunoise.GpuAquiferDecisionData.Decision;
-import dev.gpunoise.GpuAquiferDecisionData.GridNeighborhood;
+import dev.gpunoise.GpuAquiferDecisionData.NeighborhoodCache;
 import dev.gpunoise.GpuAquiferDecisionData.PendingDecisions;
 import dev.gpunoise.GpuWorldgenDependency;
 import dev.gpunoise.GpuTerrainProfiler;
@@ -31,9 +31,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.mixin.gen.Invoker;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -181,7 +179,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         GpuAquiferSubstance.BatchWriter substanceWriter =
                 new GpuAquiferSubstance.BatchWriter(decisionCapacity);
         PendingDecisions pending = new PendingDecisions(decisionCapacity, gpunoise$verifyAquifer);
-        Map<GridNeighborhood, int[][]> neighborhoods = new HashMap<>();
+        NeighborhoodCache neighborhoods = new NeighborhoodCache(Math.max(16, (height + 11) / 12 * 4));
         boolean exactAquiferInputs = GpuAquiferRuntimeMode.exactAquiferInputsEnabled();
         int directLavaDecisions = 0;
         int positiveDensityDecisions = 0;
@@ -229,14 +227,15 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         continue;
                     }
 
-                    GridNeighborhood key = new GridNeighborhood(Math.floorDiv(x - 5, 16),
-                            Math.floorDiv(y + 1, 12), Math.floorDiv(z - 5, 16));
-                    int[][] centers = neighborhoods.get(key);
+                    int gridX = Math.floorDiv(x - 5, 16);
+                    int gridY = Math.floorDiv(y + 1, 12);
+                    int gridZ = Math.floorDiv(z - 5, 16);
+                    int[][] centers = neighborhoods.get(gridX, gridY, gridZ);
                     if (centers == null) {
                         centers = c2meAquifer
-                                ? GpuAquiferNearestThree.centersForC2meQuery(randomFactory, new int[]{x, y, z})
-                                : GpuAquiferNearestThree.centersForQuery(randomFactory, new int[]{x, y, z});
-                        neighborhoods.put(key, centers);
+                                ? GpuAquiferNearestThree.centersForC2meQuery(randomFactory, x, y, z)
+                                : GpuAquiferNearestThree.centersForQuery(randomFactory, x, y, z);
+                        neighborhoods.put(gridX, gridY, gridZ, centers);
                     }
                     if (context == null && exactAquiferInputs) {
                         context = new DensityFunction.SinglePointContext(x, y, z);
