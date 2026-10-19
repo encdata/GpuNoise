@@ -3,6 +3,8 @@ package dev.gpunoise;
 import java.lang.reflect.RecordComponent;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,6 +32,8 @@ final class GpuDensityGraphCompiler {
     private final List<GpuDensityGraph.Spline> splines = new ArrayList<>();
     private final List<GpuDensityGraph.Blended> blended = new ArrayList<>();
     private final List<DensityFunction> sourceFunctions = new ArrayList<>();
+    /** Active dependency chain, retained so a rejected mod graph names its route to the bad node. */
+    private final Deque<DensityFunction> compilationPath = new ArrayDeque<>();
     private boolean terrainGridMode;
     private int compilationDepth;
 
@@ -145,9 +149,11 @@ final class GpuDensityGraphCompiler {
             compilationDepth--;
             throw unsupported(function, "density dependency depth exceeds " + MAX_COMPILATION_DEPTH);
         }
+        compilationPath.addLast(function);
         try {
             return compileNode(function);
         } finally {
+            compilationPath.removeLast();
             compilationDepth--;
         }
     }
@@ -468,8 +474,18 @@ final class GpuDensityGraphCompiler {
         return index;
     }
 
-    private static IllegalStateException unsupported(DensityFunction function, String reason) {
-        return new IllegalStateException("GPU density compiler cannot compile " + function.getClass().getName() + ": " + reason);
+    private IllegalStateException unsupported(DensityFunction function, String reason) {
+        StringBuilder path = new StringBuilder();
+        int skip = Math.max(0, compilationPath.size() - 12);
+        int index = 0;
+        for (DensityFunction step : compilationPath) {
+            if (index++ < skip) continue;
+            if (!path.isEmpty()) path.append(" -> ");
+            path.append(step.getClass().getName());
+        }
+        if (skip > 0) path.insert(0, "... (" + compilationPath.size() + " nodes) -> ");
+        return new IllegalStateException("GPU density compiler cannot compile " + function.getClass().getName()
+                + " along dependency path [" + path + "]: " + reason);
     }
 
     private static Object recordValue(RecordComponent[] components, Object owner, String name)
