@@ -269,7 +269,7 @@ final class GpuDensityGraphLowerer {
                     && constants == 0;
             case "GpuFloat" -> (children == 1 && "FNEG".equals(node.payload()) || children == 2
                     && node.payload() != null
-                    && Set.of("FADD", "FSUB", "FMUL", "FDIV", "FREM").contains(node.payload()))
+                    && Set.of("FADD", "FSUB", "FMUL", "FDIV", "FREM", "FCOPY_SIGN").contains(node.payload()))
                     && constants == 0;
             case "GpuCast" -> children == 1 && constants == 0 && node.payload() != null
                     && Set.of("I2F", "D2F", "F2I", "D2I").contains(node.payload());

@@ -92,6 +92,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new CopySignMathDensity());
     }
 
+    static VulkanBranchFixture floatCopySignMathFixture() {
+        return graphFixture(new FloatCopySignMathDensity());
+    }
+
     static VulkanBranchFixture mapMathFixture() {
         return graphFixture(new MapMathDensity());
     }
@@ -261,6 +265,7 @@ final class GpuDensityExpressionSmoke {
         requireOpcode("EXPR_ATAN2", 8);
         requireOpcode("EXPR_POW", 9);
         requireOpcode("EXPR_COPY_SIGN", 10);
+        requireOpcode("FCOPY_SIGN", 7);
         requireOpcode("ADD", 1);
         requireOpcode("MUL", 2);
         requireOpcode("MIN", 3);
@@ -1356,6 +1361,15 @@ final class GpuDensityExpressionSmoke {
         @Override public double compute(FunctionContext context) {
             double magnitude = Math.sqrt(context.blockX() * -1.0);
             double sign = context.blockY() * -0.0;
+            return Math.copySign(magnitude, sign);
+        }
+    }
+
+    private static final class FloatCopySignMathDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            float x = context.blockX(), y = context.blockY();
+            float magnitude = x / y;
+            float sign = y * -0.0F;
             return Math.copySign(magnitude, sign);
         }
     }

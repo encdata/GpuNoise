@@ -141,6 +141,7 @@ double javaDoubleToInt(double value){
 double javaFloatOperation(uint operation,double leftValue,double rightValue){
     float left=float(leftValue);
     if(operation==6u)return double(-left);
+    if(operation==7u){uint magnitudeBits=floatBitsToUint(left),signBits=floatBitsToUint(float(rightValue));return double(uintBitsToFloat((magnitudeBits&0x7fffffffu)|(signBits&0x80000000u)));}
     float right=float(rightValue);
     precise float result=0.0;
     if(operation==1u)result=left+right;

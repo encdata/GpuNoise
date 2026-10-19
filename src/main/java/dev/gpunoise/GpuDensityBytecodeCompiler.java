@@ -883,6 +883,12 @@ final class GpuDensityBytecodeCompiler {
 
         private void mathCall(String owner, String name, String descriptor, Value[] arguments) {
             if ((owner.equals("java/lang/Math") || owner.equals("java/lang/StrictMath"))
+                    && name.equals("copySign") && descriptor.equals("(FF)F")
+                    && arguments.length == 2) {
+                stack.add(floatMathBinary("FCOPY_SIGN", arguments[0], arguments[1]));
+                return;
+            }
+            if ((owner.equals("java/lang/Math") || owner.equals("java/lang/StrictMath"))
                     && name.equals("copySign") && descriptor.equals("(DD)D")
                     && arguments.length == 2) {
                 stack.add(mathBinary(GpuDensityExpression.Operation.COPY_SIGN,
@@ -1377,6 +1383,7 @@ final class GpuDensityBytecodeCompiler {
                     case "FSUB" -> a - b;
                     case "FMUL" -> a * b;
                     case "FDIV" -> a / b;
+                    case "FCOPY_SIGN" -> Math.copySign(a, b);
                     default -> throw new AssertionError(operation);
                 };
                 if (Float.isFinite(result)) constant = (double) result;

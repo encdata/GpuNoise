@@ -324,6 +324,7 @@ public final class GpuDensityExpression {
             case "FMUL" -> left * right;
             case "FDIV" -> left / right;
             case "FREM" -> left % right;
+            case "FCOPY_SIGN" -> Math.copySign(left, right);
             default -> throw new IllegalStateException("Unknown GPU float operation " + operation);
         };
         return (double) result;
@@ -528,7 +529,7 @@ public final class GpuDensityExpression {
                 return append("GpuFloat", new int[]{left}, new double[0], operation);
             }
             requireValue(right);
-            if (!List.of("FADD", "FSUB", "FMUL", "FDIV", "FREM").contains(operation))
+            if (!List.of("FADD", "FSUB", "FMUL", "FDIV", "FREM", "FCOPY_SIGN").contains(operation))
                 throw new IllegalArgumentException("unsupported GPU float operation " + operation);
             Double rightConstant = knownConstants.get(right);
             if (leftConstant != null && rightConstant != null) {
@@ -539,6 +540,7 @@ public final class GpuDensityExpression {
                     case "FMUL" -> x * y;
                     case "FDIV" -> x / y;
                     case "FREM" -> x % y;
+                    case "FCOPY_SIGN" -> Math.copySign(x, y);
                     default -> throw new AssertionError(operation);
                 };
                 if (Float.isFinite(folded)) return constant(folded);
