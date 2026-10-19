@@ -375,15 +375,14 @@ sample. A graph-keyed specialized SPIR-V path is the larger remaining
 compiler-side speed opportunity; it needs a runtime-safe compiler or another
 way to produce graph-specific SPIR-V without requiring a system `glslc`.
 
-## Known precision boundary
+## Large-coordinate precision
 
-The current point-sample and terrain-grid shaders pass world coordinates into
-`NormalNoise` as 32-bit floats. A Lavapipe differential sample at coordinates
-near 2^24 diverged from Java's double-coordinate noise result by about 0.018,
-even though the Java bytecode branch lowering was correct. The branch smoke now
-uses ordinary-sized world coordinates so it can validate branch semantics
-independently. Large-coordinate noise parity remains an open correctness item:
-either carry coordinates and octave transforms in double precision through
-noise wrapping, or detect an unsafe range and keep that chunk on the Java path.
-Do not treat ordinary-coordinate smoke success as proof of parity near the
-world border.
+Terrain-grid and block-evaluation noise now retain integer world coordinates
+as doubles through octave scaling, Minecraft's period wrapping, and Improved
+Noise interpolation. A Lavapipe smoke fixture compares custom transformed
+`NormalNoise` graphs against Java at and beyond 2^24, including the world
+border. Direct point-sample requests still receive float coordinate arrays and
+therefore cannot represent every integer in that range; the terrain runtime
+uses the exact-coordinate grid path. This double-precision noise path favors
+parity and may have different throughput across physical GPU vendors, which
+must be measured on real hardware rather than inferred from Lavapipe.

@@ -75,6 +75,38 @@ float normalNoise(vec3 pos,uint id){
     for(uint i=0;i<s.octaveCount;i++){ vec4 o=octaveData[(s.octaveBase+s.octaveCount+i)*2]; vec4 f=octaveData[(s.octaveBase+s.octaveCount+i)*2+1]; b+=o.w*improved(wrapNoise(pos*1.0181269*f.x),o,s.permutationBase+floatBitsToUint(f.z))*f.y; }
     return (a+b)*s.valueFactor;
 }
+double improvedSmear64(dvec3 pos, vec4 params, uint base, double yScale, double yMax);
+double improved64(dvec3 pos,vec4 params,uint base){
+    // ImprovedNoise adds float offsets to Java double coordinates, then
+    // floors and interpolates in double precision. Reuse the smear evaluator
+    // with a zero smear scale so the exact same permutation/gradient path is
+    // used without rounding world coordinates through vec3.
+    return improvedSmear64(pos,params,base,0.0,0.0);
+}
+double normalNoise64(dvec3 pos,uint id){
+    SamplerInfo s=samplers[id]; double a=0.0, b=0.0;
+    for(uint i=0u;i<s.octaveCount;i++){
+        vec4 o=octaveData[(s.octaveBase+i)*2u];
+        vec4 f=octaveData[(s.octaveBase+i)*2u+1u];
+        a+=double(o.w)*improved64(wrapNoise64(pos*double(f.x)),o,s.permutationBase+floatBitsToUint(f.z))*double(f.y);
+    }
+    const double INPUT_FACTOR=1.0181268882175227;
+    for(uint i=0u;i<s.octaveCount;i++){
+        vec4 o=octaveData[(s.octaveBase+s.octaveCount+i)*2u];
+        vec4 f=octaveData[(s.octaveBase+s.octaveCount+i)*2u+1u];
+        b+=double(o.w)*improved64(wrapNoise64(pos*INPUT_FACTOR*double(f.x)),o,s.permutationBase+floatBitsToUint(f.z))*double(f.y);
+    }
+    return (a+b)*double(s.valueFactor);
+}
+double normalNoiseTerrain(dvec3 pos,uint id){
+    // Keep the existing float implementation for the common near-spawn case
+    // when conversion itself is exact. Large or fractional coordinates use
+    // the double implementation so world-border phase precision is retained.
+    vec3 fastPosition=vec3(pos);
+    if(all(lessThanEqual(abs(pos),dvec3(4096.0)))&&all(equal(dvec3(fastPosition),pos)))
+        return double(normalNoise(fastPosition,id));
+    return normalNoise64(pos,id);
+}
 float improvedSmear(vec3 pos, vec4 params, uint base, float yScale, float yMax){
     vec3 v=pos+params.xyz; ivec3 cell=ivec3(floor(v)); vec3 d=v-vec3(cell);
     // Minecraft's ImprovedNoise.sampleAndLerp receives deltaY - d6, where
@@ -255,8 +287,8 @@ double blendedOctave64(dvec3 pos, PerlinInfo info, uint octave, double yScale, d
     // by that loop's frequency. The packed f.y stores that inverse factor.
     return double(o.w)*improvedSmear64(wrapNoise64(pos),o,floatBitsToUint(f.z),yScale,yMax)*double(f.y);
 }
-double blendedNoise64(vec3 p, uint id){
-    BlendedInfo b=blended[id]; dvec3 pd=dvec3(p); double d0=0.0; double freq=1.0;
+double blendedNoise64(dvec3 pd, uint id){
+    BlendedInfo b=blended[id]; double d0=0.0; double freq=1.0;
     dvec3 mainPos=dvec3(pd.x*b.scales.x/b.scales.z,pd.y*b.scales.y/b.scales.w,pd.z*b.scales.x/b.scales.z);
     double mainYScale=b.scales.y*b.smearScale/b.scales.w;
     for(uint i=0u;i<8u;i++){d0+=blendedOctave64(mainPos*freq,b.main,i,mainYScale*freq,pd.y*b.scales.y/b.scales.w*freq);freq*=0.5;}
@@ -399,7 +431,7 @@ void main(){
         Node n=nodes[nodeBase+i];
         uint op=n.ids.x; double v=0.0;
         if(op==1u)v=double(n.params.x);
-        else if(op==2u)v=double(normalNoise(p*vec3(n.params.y,n.params.z,n.params.y),uint(n.params.x)));
+        else if(op==2u)v=normalNoiseTerrain(dvec3(pExact.x*double(n.params.y),pExact.y*double(n.params.z),pExact.z*double(n.params.y)),uint(n.params.x));
         else if(op==3u){double x=values[n.ids.y],y=values[n.ids.z];if(n.meta.x==1u)v=graphAdd(x,y);else if(n.meta.x==2u)v=x==0.0?0.0:graphMultiply(x,y);else if(n.meta.x==3u)v=min(x,y);else v=max(x,y);}
         else if(op==4u)v=n.meta.x==2u?graphMultiply(values[n.ids.y],double(n.params.z)):graphAdd(values[n.ids.y],double(n.params.z));
         else if(op==5u)v=clamp(values[n.ids.y],double(n.params.x),double(n.params.y));
@@ -413,12 +445,12 @@ void main(){
 #endif
                 v=values[n.ids.y];
         }
-        else if(op==8u)v=double(normalNoise(p*.25,uint(n.params.x)))*4.;
-        else if(op==9u)v=double(normalNoise(vec3(p.x,0,p.z)*.25,uint(n.params.x)))*4.;
-        else if(op==10u)v=double(normalNoise(vec3(p.z,p.x,0)*.25,uint(n.params.x)))*4.;
-        else if(op==11u){vec3 q=vec3(p.x*n.params.x+float(values[n.ids.y]),p.y*n.params.y+float(values[n.ids.z]),p.z*n.params.x+float(values[n.ids.w]));v=double(normalNoise(q,uint(n.params.z)));}
+        else if(op==8u)v=normalNoiseTerrain(pExact*.25,uint(n.params.x))*4.0;
+        else if(op==9u)v=normalNoiseTerrain(dvec3(pExact.x,0.0,pExact.z)*.25,uint(n.params.x))*4.0;
+        else if(op==10u)v=normalNoiseTerrain(dvec3(pExact.z,pExact.x,0.0)*.25,uint(n.params.x))*4.0;
+        else if(op==11u){dvec3 q=dvec3(pExact.x*double(n.params.x)+values[n.ids.y],pExact.y*double(n.params.y)+values[n.ids.z],pExact.z*double(n.params.x)+values[n.ids.w]);v=normalNoiseTerrain(q,uint(n.params.z));}
         else if(op==12u){v=splineValue(values[n.ids.y],uint(n.params.x)*64u,uint(n.params.y),values);}
-        else if(op==13u){v=blendedNoise64(p,uint(n.params.x));}
+        else if(op==13u){v=blendedNoise64(pExact,uint(n.params.x));}
         else if(op==14u){double t=clamp(graphDivide(graphSubtract(pExact.y,double(n.params.x)),graphSubtract(double(n.params.y),double(n.params.x))),0.0,1.0);
 #ifdef FAST_MATH
             v=graphAdd(double(n.params.z),graphMultiply(graphSubtract(double(n.params.w),double(n.params.z)),t));
@@ -433,10 +465,10 @@ void main(){
         else if(op==24u)v=javaIntOperation(n.meta.x,values[n.ids.y],n.meta.x==6u?0.0:values[n.ids.z]);
         else if(op==25u)v=javaFloatOperation(n.meta.x,values[n.ids.y],n.meta.x==6u?0.0:values[n.ids.z]);
         else if(op==26u)v=javaNumericCast(n.meta.x,values[n.ids.y]);
-        else if(op==27u){vec3 q=vec3(float(values[n.ids.y]),float(values[n.ids.z]),float(values[n.ids.w]));v=double(normalNoise(q,uint(n.params.x)));}
+        else if(op==27u){dvec3 q=dvec3(values[n.ids.y],values[n.ids.z],values[n.ids.w]);v=normalNoiseTerrain(q,uint(n.params.x));}
         else if(op==15u)v=values[n.ids.y]; // Blend inputs are vanilla no-blending (0,1).
         else if(op==16u){double x=values[n.ids.y];v=(x>=double(n.params.x)&&x<double(n.params.y))?values[n.ids.z]:values[n.ids.w];}
-        else if(op==17u){double rarity=double(spaghettiRarity(float(values[n.ids.y]),n.meta.x==0u?0u:1u));v=rarity*double(abs(normalNoise(p/float(rarity),uint(n.params.x))));}
+        else if(op==17u){double rarity=double(spaghettiRarity(float(values[n.ids.y]),n.meta.x==0u?0u:1u));v=rarity*abs(normalNoiseTerrain(pExact/rarity,uint(n.params.x)));}
         values[n.meta.w]=v;
     }
 #ifdef GRID_INPUT
