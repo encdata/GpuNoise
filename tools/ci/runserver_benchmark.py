@@ -413,6 +413,11 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                 raise RuntimeError(
                     "GPU preliminary aquifer surface decisions diverged from Java; Java fallback was used"
                 )
+            if terrain_profile == "c2me-aquifer-rewrite" and (
+                    "GPU aquifer surface scan sampled initialDensity" not in run_log):
+                raise RuntimeError(
+                    "C2ME aquifer surface estimation did not consume a GPU initialDensity sample"
+                )
             if not gpu_counts:
                 raise RuntimeError("GPU server completed without reporting terrain cache state")
             if "GPU aquifer inputs use Vulkan cache roots; parity verifier compares decisions against Java" not in run_log:

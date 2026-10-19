@@ -40,6 +40,7 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     @Unique private static final boolean gpunoise$verifyAquiferSurface =
             Boolean.getBoolean("gpunoise.verifyAquiferGpu");
     @Unique private static final AtomicBoolean gpunoise$aquiferSurfaceMismatchLogged = new AtomicBoolean();
+    @Unique private static final AtomicBoolean gpunoise$aquiferSurfaceGpuUseLogged = new AtomicBoolean();
 
     @Invoker("preliminarySurfaceLevel")
     protected abstract int gpunoise$invokePreliminarySurfaceLevel(int x, int z);
@@ -258,6 +259,11 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
                         GpuTerrainProfiler.recordJavaRootFallback(GpuTerrainRoots.INITIAL_DENSITY);
                         return java;
                     }
+                }
+                if (gpunoise$aquiferSurfaceGpuUseLogged.compareAndSet(false, true)) {
+                    dev.gpunoise.GpuNoise.LOGGER.info(
+                            "GPU aquifer surface scan sampled initialDensity at ({}, {}, {}).",
+                            context.blockX(), context.blockY(), context.blockZ());
                 }
                 GpuTerrainProfiler.recordGpuInitialDensity(lookupStart);
                 gpunoise$markGpuUse(cache);
