@@ -216,6 +216,7 @@ final class GpuDensityGraphLowerer {
     private static int constantBranch(GpuDensityGraph graph, GpuDensityGraph.Node node) {
         int[] children = node.children();
         if (node.opcode().equals("RangeChoice") && children.length == 3) {
+            if (children[1] == children[2]) return children[1];
             double[] bounds = node.constants();
             if (bounds.length < 2) return -1;
             Double input = constantValue(graph, children[0]);
@@ -225,6 +226,7 @@ final class GpuDensityGraphLowerer {
             return input >= minInclusive && input < maxExclusive ? children[1] : children[2];
         }
         if (node.opcode().equals("GpuSelect") && children.length == 3) {
+            if (children[1] == children[2]) return children[1];
             Double condition = constantValue(graph, children[0]);
             if (condition != null) return condition != 0.0 ? children[1] : children[2];
         }

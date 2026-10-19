@@ -529,12 +529,13 @@ final class GpuDensityExpressionSmoke {
                                 new double[]{0.5, 1.5}, null),
                         new GpuDensityGraph.Node("Constant", new int[0], new double[]{0.0}, null),
                         new GpuDensityGraph.Node("Constant", new int[0], new double[]{20.0}, null),
-                        new GpuDensityGraph.Node("GpuSelect", new int[]{4, 1, 5}, new double[0], null)),
-                new int[]{3, 6}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
-                java.util.List.of(source, source, source, source, source, source, source));
+                        new GpuDensityGraph.Node("GpuSelect", new int[]{4, 1, 5}, new double[0], null),
+                        new GpuDensityGraph.Node("GpuSelect", new int[]{2, 1, 1}, new double[0], null)),
+                new int[]{3, 6, 7}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(source, source, source, source, source, source, source, source));
         GpuDensityGraph lowered = GpuDensityGraphLowerer.lower(branches);
         int[] roots = lowered.routerRoots();
-        if (lowered.nodes().size() != 2 || roots[0] == roots[1]
+        if (lowered.nodes().size() != 2 || roots[0] == roots[1] || roots[0] != roots[2]
                 || !lowered.nodes().get(roots[0]).opcode().equals("Constant")
                 || !lowered.nodes().get(roots[1]).opcode().equals("Constant")
                 || lowered.nodes().get(roots[0]).constants()[0] != 10.0
