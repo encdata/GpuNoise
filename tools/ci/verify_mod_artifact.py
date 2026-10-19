@@ -13,6 +13,7 @@ from pathlib import Path
 
 LWJGL_VERSION = "3.3.3"
 VULKAN_LIBRARY = f"META-INF/jarjar/lwjgl-vulkan-{LWJGL_VERSION}.jar"
+SHADERC_LIBRARY = f"META-INF/jarjar/lwjgl-shaderc-{LWJGL_VERSION}.jar"
 SERVER_CORE_LIBRARY = "META-INF/gpunoise/server-libraries/lwjgl-core-gpunoise-server.jar"
 SERVER_NATIVES_LIBRARY = "META-INF/gpunoise/server-libraries/lwjgl-natives-gpunoise-server.jar"
 MOD_PAYLOAD = "META-INF/gpunoise/gpunoise-mod.jar"
@@ -61,8 +62,13 @@ def verify(path: Path) -> None:
         with zipfile.ZipFile(io.BytesIO(artifact.read(MOD_PAYLOAD))) as mod:
             mod_entries = set(mod.namelist())
             mod_required = {
-                "META-INF/neoforge.mods.toml", VULKAN_LIBRARY, METADATA,
+                "META-INF/neoforge.mods.toml", VULKAN_LIBRARY, SHADERC_LIBRARY, METADATA,
                 "dev/gpunoise/GpuNoise.class",
+                "dev/gpunoise/GpuRuntimeShaderCompiler.class",
+                "dev/gpunoise/GpuDensityGraphShaderGenerator.class",
+                "linux/x64/org/lwjgl/shaderc/libshaderc.so",
+                "windows/x64/org/lwjgl/shaderc/shaderc.dll",
+                "macos/x64/org/lwjgl/shaderc/libshaderc.dylib",
                 "windows/x64/org/lwjgl/lwjgl.dll",
                 "linux/x64/org/lwjgl/liblwjgl.so",
                 "macos/x64/org/lwjgl/liblwjgl.dylib",
@@ -89,7 +95,7 @@ def verify(path: Path) -> None:
 
             metadata = json.loads(mod.read(METADATA))
         jars = metadata.get("jars")
-        expected = [library_entry("lwjgl-vulkan")]
+        expected = [library_entry("lwjgl-vulkan"), library_entry("lwjgl-shaderc")]
         if jars != expected:
             raise ValueError(f"Unexpected cross-platform JarJar metadata: {jars!r}")
         if any(entry.get("identifier", {}).get("artifact") == "lwjgl" for entry in jars):

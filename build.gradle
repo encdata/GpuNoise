@@ -174,6 +174,17 @@ dependencies {
             prefer lwjgl_version
         }
     }
+    // Registry-time GLSL compilation lets each installed NoiseRouter become
+    // a world-specialized SPIR-V program, following C2ME OCL's generated
+    // kernel model without requiring a compiler executable on player systems.
+    jarJar(implementation("org.lwjgl:lwjgl-shaderc:${lwjgl_version}") {
+        transitive = false
+    }) {
+        version {
+            strictly "[${lwjgl_version},3.3.4)"
+            prefer lwjgl_version
+        }
+    }
     // Compile against core and embed a plain copy for conditional server-side
     // discovery. It intentionally is not registered as a Jar-in-Jar library.
     compileOnly "org.lwjgl:lwjgl:${lwjgl_version}"
@@ -183,13 +194,18 @@ dependencies {
     lwjglNatives "org.lwjgl:lwjgl:${lwjgl_version}:natives-windows"
     lwjglNatives "org.lwjgl:lwjgl:${lwjgl_version}:natives-linux"
     lwjglNatives "org.lwjgl:lwjgl:${lwjgl_version}:natives-macos"
+    lwjglNatives "org.lwjgl:lwjgl-shaderc:${lwjgl_version}:natives-windows"
+    lwjglNatives "org.lwjgl:lwjgl-shaderc:${lwjgl_version}:natives-linux"
+    lwjglNatives "org.lwjgl:lwjgl-shaderc:${lwjgl_version}:natives-macos"
     // NeoGradle 7 uses this configuration for ordinary libraries in dev runs.
     localRunRuntime "org.lwjgl:lwjgl-vulkan:${lwjgl_version}"
+    localRunRuntime "org.lwjgl:lwjgl-shaderc:${lwjgl_version}"
     localRunRuntime "org.lwjgl:lwjgl:${lwjgl_version}"
     if (System.getProperty('os.name', '').toLowerCase().contains('linux')) {
         // Dev run configurations do not use the flattened native payload in
         // the published jar, so provide LWJGL's Linux native to runServer CI.
         localRunRuntime "org.lwjgl:lwjgl:${lwjgl_version}:natives-linux"
+        localRunRuntime "org.lwjgl:lwjgl-shaderc:${lwjgl_version}:natives-linux"
     }
 
     // Example optional mod dependency with JEI
@@ -262,6 +278,11 @@ tasks.register('generateEmbeddedJarJarMetadata') {
                 identifier: [group: 'org.lwjgl', artifact: 'lwjgl-vulkan'],
                 version: [range: "[${lwjgl_version},3.3.4)", artifactVersion: lwjgl_version],
                 path: "META-INF/jarjar/lwjgl-vulkan-${lwjgl_version}.jar",
+                isObfuscated: false,
+        ], [
+                identifier: [group: 'org.lwjgl', artifact: 'lwjgl-shaderc'],
+                version: [range: "[${lwjgl_version},3.3.4)", artifactVersion: lwjgl_version],
+                path: "META-INF/jarjar/lwjgl-shaderc-${lwjgl_version}.jar",
                 isObfuscated: false,
         ]]]
         def output = embeddedJarJarMetadata.get().asFile

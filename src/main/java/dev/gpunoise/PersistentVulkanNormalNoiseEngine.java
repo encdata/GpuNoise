@@ -52,10 +52,12 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long graphShader, gridShader, graphPipeline, gridPipeline;
     private long blockGraphShader, blockGraphPipeline;
     private final long graphDescriptorLayout, graphPipelineLayout, graphDescriptorPool, graphDescriptorSet;
-    private int graphRegisterVariant = 256;
+    private int graphRegisterVariant = -1;
     private boolean graphFastMathVariant;
+    private GpuDensityGraph compiledGraphVariant;
     private int blockGraphRegisterVariant;
     private boolean blockGraphFastMathVariant;
+    private GpuDensityGraph compiledBlockGraphVariant;
     private final long interpolationShader, interpolationDescriptorLayout, interpolationPipelineLayout,
             interpolationPipeline, interpolationDescriptorPool, interpolationDescriptorSet;
     private final long aquiferPressureShader, aquiferPressureDescriptorLayout, aquiferPressurePipelineLayout,
@@ -143,7 +145,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             graphPipelineLayout = graphPipelineLayout(stack); graphPipeline = graphPipeline(stack);
             blockGraphShader = loadShader(stack, "/assets/gpunoise/shaders/density_graph_256.comp.spv", "block graph shader");
             blockGraphPipeline = graphPipeline(blockGraphShader, stack);
-            blockGraphRegisterVariant = 256;
+            blockGraphRegisterVariant = -1;
             gridShader = gridShader(stack); gridPipeline = gridPipeline(stack);
             graphDescriptorPool = graphDescriptorPool(stack); graphDescriptorSet = graphDescriptorSet(stack);
             graphDescriptors(stack);
@@ -215,7 +217,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             graphPipelineLayout = graphPipelineLayout(stack); graphPipeline = graphPipeline(stack);
             blockGraphShader = loadShader(stack, "/assets/gpunoise/shaders/density_graph_256.comp.spv", "block graph shader");
             blockGraphPipeline = graphPipeline(blockGraphShader, stack);
-            blockGraphRegisterVariant = 256;
+            blockGraphRegisterVariant = -1;
             gridShader = gridShader(stack); gridPipeline = gridPipeline(stack);
             graphDescriptorPool = graphDescriptorPool(stack); graphDescriptorSet = graphDescriptorSet(stack);
             graphDescriptors(stack);
@@ -602,7 +604,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         long preparationStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
-            ensureBlockGraphVariant(packed, stack);
+            ensureBlockGraphVariant(graph, packed, stack);
             ByteBuffer grids = gridMetadata.duplicate().order(ByteOrder.nativeOrder());
             grids.limit(grids.position() + chunkCount * 32);
             put(graphCoordinates, grids, stack);
@@ -1133,37 +1135,88 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long graphPipeline(MemoryStack s){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(graphShader).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(graphPipelineLayout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),"graph pipeline");return h.get(0);}
     private long graphPipeline(long shaderModule, MemoryStack s){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(shaderModule).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(graphPipelineLayout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),"block graph pipeline");return h.get(0);}
     private long gridPipeline(MemoryStack s){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(gridShader).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(graphPipelineLayout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),"grid pipeline");return h.get(0);}
+    private long compileRuntimeShader(String resource, String programName, Map<String, String> definitions,
+                                      GpuDensityGraphBuffer.Packed packed, boolean blockProgram) {
+        ByteBuffer spirv = GpuRuntimeShaderCompiler.compileResource(resource, programName, definitions,
+                packed, blockProgram);
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkShaderModuleCreateInfo create = VkShaderModuleCreateInfo.calloc(stack)
+                    .sType$Default().pCode(spirv);
+            LongBuffer handle = stack.longs(0);
+            check(vkCreateShaderModule(device, create, null, handle), programName + " module");
+            return handle.get(0);
+        } finally {
+            MemoryUtil.memFree(spirv);
+        }
+    }
+
     private void ensureGraphVariant(GpuDensityGraph graph, MemoryStack stack) throws Exception {
         int required = graph.registerCount();
         int variant = required <= 32 ? 32 : required <= 64 ? 64 : required <= 128 ? 128 : 256;
-        if (variant == graphRegisterVariant && FAST_GRAPH_MATH == graphFastMathVariant) return;
+        if (graph == compiledGraphVariant && variant == graphRegisterVariant
+                && FAST_GRAPH_MATH == graphFastMathVariant) return;
+        String source = "/assets/gpunoise/shaders/density_graph.comp";
+        Map<String, String> defines = new java.util.HashMap<>();
+        defines.put("REGISTER_COUNT", Integer.toString(variant));
+        if (FAST_GRAPH_MATH) defines.put("FAST_MATH", "1");
+        GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
+        long nextGraphShader = compileRuntimeShader(source, "density graph", defines, packed, false);
+        long nextGridShader;
+        try {
+            Map<String, String> gridDefines = new java.util.HashMap<>(defines);
+            gridDefines.put("GRID_INPUT", "1");
+            nextGridShader = compileRuntimeShader(source, "terrain grid", gridDefines, packed, false);
+        } catch (Throwable failure) {
+            vkDestroyShaderModule(device, nextGraphShader, null);
+            throw failure;
+        }
+        long nextGraphPipeline;
+        long nextGridPipeline;
+        try {
+            nextGraphPipeline = graphPipeline(nextGraphShader, stack);
+            nextGridPipeline = graphPipeline(nextGridShader, stack);
+        } catch (Throwable failure) {
+            vkDestroyShaderModule(device, nextGraphShader, null);
+            vkDestroyShaderModule(device, nextGridShader, null);
+            throw failure;
+        }
         vkDestroyPipeline(device, graphPipeline, null);
         vkDestroyPipeline(device, gridPipeline, null);
         vkDestroyShaderModule(device, graphShader, null);
         vkDestroyShaderModule(device, gridShader, null);
-        String fast = FAST_GRAPH_MATH ? "_fast" : "";
-        graphShader = loadShader(stack, "/assets/gpunoise/shaders/density_graph" + fast
-                + "_" + variant + ".comp.spv", "graph shader variant");
-        gridShader = loadShader(stack, "/assets/gpunoise/shaders/density_graph_grid" + fast
-                + "_" + variant + ".comp.spv", "grid shader variant");
-        graphPipeline = graphPipeline(stack);
-        gridPipeline = gridPipeline(stack);
+        graphShader = nextGraphShader;
+        gridShader = nextGridShader;
+        graphPipeline = nextGraphPipeline;
+        gridPipeline = nextGridPipeline;
         graphRegisterVariant = variant;
         graphFastMathVariant = FAST_GRAPH_MATH;
+        compiledGraphVariant = graph;
         GpuNoise.LOGGER.info("GPU density shader variant: registers={}, fastMath={}", variant, FAST_GRAPH_MATH);
     }
-    private void ensureBlockGraphVariant(GpuDensityGraphBuffer.Packed packed, MemoryStack stack) throws Exception {
+    private void ensureBlockGraphVariant(GpuDensityGraph graph, GpuDensityGraphBuffer.Packed packed,
+                                         MemoryStack stack) throws Exception {
         int required = packed.blockRegisterCount();
         int variant = required <= 32 ? 32 : required <= 64 ? 64 : required <= 128 ? 128 : 256;
-        if (variant == blockGraphRegisterVariant && FAST_GRAPH_MATH == blockGraphFastMathVariant) return;
+        if (graph == compiledBlockGraphVariant && variant == blockGraphRegisterVariant
+                && FAST_GRAPH_MATH == blockGraphFastMathVariant) return;
+        long nextShader = compileRuntimeShader("/assets/gpunoise/shaders/density_graph.comp",
+                "block density graph", FAST_GRAPH_MATH
+                        ? Map.of("REGISTER_COUNT", Integer.toString(variant), "FAST_MATH", "1")
+                        : Map.of("REGISTER_COUNT", Integer.toString(variant)), packed, true);
+        long nextPipeline;
+        try {
+            nextPipeline = graphPipeline(nextShader, stack);
+        } catch (Throwable failure) {
+            vkDestroyShaderModule(device, nextShader, null);
+            throw failure;
+        }
         vkDestroyPipeline(device, blockGraphPipeline, null);
         vkDestroyShaderModule(device, blockGraphShader, null);
-        String fast = FAST_GRAPH_MATH ? "_fast" : "";
-        blockGraphShader = loadShader(stack, "/assets/gpunoise/shaders/density_graph" + fast
-                + "_" + variant + ".comp.spv", "block graph shader variant");
-        blockGraphPipeline = graphPipeline(blockGraphShader, stack);
+        blockGraphShader = nextShader;
+        blockGraphPipeline = nextPipeline;
         blockGraphRegisterVariant = variant;
         blockGraphFastMathVariant = FAST_GRAPH_MATH;
+        compiledBlockGraphVariant = graph;
     }
     private long graphDescriptorPool(MemoryStack s){VkDescriptorPoolSize.Buffer z=VkDescriptorPoolSize.calloc(1,s).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(GRAPH_DESCRIPTOR_BINDINGS.length);VkDescriptorPoolCreateInfo i=VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(z);LongBuffer h=s.longs(0);check(vkCreateDescriptorPool(device,i,null,h),"graph pool");return h.get(0);}
     private long graphDescriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(graphDescriptorPool).pSetLayouts(s.longs(graphDescriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"graph set");return h.get(0);}
