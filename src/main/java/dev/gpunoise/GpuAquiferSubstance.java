@@ -69,21 +69,21 @@ public final class GpuAquiferSubstance {
     }
 
     /** Incremental direct-buffer staging for chunk-sized aquifer decisions. */
-    static final class BatchWriter {
+    public static final class BatchWriter {
         private final int expectedRows;
         private final List<ByteBuffer> completed = new ArrayList<>();
         private ByteBuffer current;
         private int size;
         private boolean finished;
 
-        BatchWriter(int expectedRows) {
+        public BatchWriter(int expectedRows) {
             if (expectedRows < 0) throw new IllegalArgumentException("negative aquifer batch capacity");
             this.expectedRows = expectedRows;
         }
 
-        int size() { return size; }
+        public int size() { return size; }
 
-        void add(Input input) {
+        public void add(Input input) {
             if (input == null) throw new NullPointerException("input");
             write(input.density, input.barrier, input.y, input.level0, input.level1,
                     input.level2, input.level3, input.distance0, input.distance1,
@@ -93,17 +93,17 @@ public final class GpuAquiferSubstance {
                     input.c2meAquifer, input.nearestStateId);
         }
 
-        void addPositiveDensity(double density, int y, boolean c2meAquifer) {
+        public void addPositiveDensity(double density, int y, boolean c2meAquifer) {
             write(density, 0.0, y, 0, 0, 0, 0, 0, 0, 0, 0,
                     OTHER, OTHER, OTHER, OTHER, 0, 0, false, false, c2meAquifer, 0);
         }
 
-        void addGlobalLava(double density, int y, int stateId, boolean c2meAquifer) {
+        public void addGlobalLava(double density, int y, int stateId, boolean c2meAquifer) {
             write(density, 0.0, y, 0, 0, 0, 0, 0, 0, 0, 0,
                     OTHER, OTHER, OTHER, OTHER, 0, stateId, true, false, c2meAquifer, 0);
         }
 
-        void addAquifer(double density, double barrier, int y,
+        public void addAquifer(double density, double barrier, int y,
                         int level0, int level1, int level2, int level3,
                         int distance0, int distance1, int distance2, int distance3,
                         int kind0, int kind1, int kind2, int kind3,
@@ -114,7 +114,7 @@ public final class GpuAquiferSubstance {
                     c2meAquifer, 0);
         }
 
-        List<ByteBuffer> finish() {
+        public List<ByteBuffer> finish() {
             if (finished) throw new IllegalStateException("aquifer batch writer is already finished");
             finished = true;
             if (current != null && current.position() > 0) {
