@@ -64,6 +64,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     // generation uploads a reduced graph. A boolean cache flag incorrectly
     // treated those different layouts as interchangeable.
     private GpuDensityGraph graphResourcesGraph;
+    private int[] uploadedGraphRoots;
     private GpuDensityGraph interpolatorMapGraph;
     private final long fence;
     private final VkCommandBuffer commandBuffer;
@@ -254,8 +255,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             for (int i = 0; i < xs.length; i++) blendInputs.putFloat(0.0f).putFloat(1.0f);
             blendInputs.flip();
             put(graphBlendInputs, blendInputs, stack);
-            ByteBuffer roots = stack.malloc(4).order(ByteOrder.nativeOrder()).putInt(resultNode).flip();
-            put(graphRoots, roots, stack);
+            uploadGraphRoots(new int[]{resultNode}, stack);
             if (graphResourcesGraph != graph) {
                 put(permutations, packed.permutations(), stack); put(octaves, packed.octaves(), stack); put(samplerMetadata, packed.samplerMetadata(), stack);
                 graphResourcesGraph = graph;
@@ -301,9 +301,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             ByteBuffer blendInputs = stack.malloc(sampleCount * 8).order(ByteOrder.nativeOrder());
             for (int i = 0; i < sampleCount; i++) blendInputs.putFloat(0.0f).putFloat(1.0f);
             blendInputs.flip(); put(graphBlendInputs, blendInputs, stack);
-            ByteBuffer roots = stack.malloc(rootCount * 4).order(ByteOrder.nativeOrder());
-            for (int root : graph.routerRoots()) roots.putInt(root);
-            roots.flip(); put(graphRoots, roots, stack);
+            uploadGraphRoots(graph.routerRoots(), stack);
             if (graphResourcesGraph != graph) {
                 put(permutations, packed.permutations(), stack); put(octaves, packed.octaves(), stack); put(samplerMetadata, packed.samplerMetadata(), stack);
                 graphResourcesGraph = graph;
@@ -352,9 +350,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             ByteBuffer blendInputs = stack.malloc(sampleCount * 8).order(ByteOrder.nativeOrder());
             for (int i = 0; i < sampleCount; i++) blendInputs.putFloat(0.0f).putFloat(1.0f);
             blendInputs.flip(); put(graphBlendInputs, blendInputs, stack);
-            ByteBuffer roots = stack.malloc(rootCount * 4).order(ByteOrder.nativeOrder());
-            for (int root : graph.routerRoots()) roots.putInt(root);
-            roots.flip(); put(graphRoots, roots, stack);
+            uploadGraphRoots(graph.routerRoots(), stack);
             check(vkResetCommandBuffer(commandBuffer, 0), "reset async graph-roots command buffer");
             check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin async graph-roots command buffer");
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipeline);
@@ -413,9 +409,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 put(permutations, packed.permutations(), stack); put(octaves, packed.octaves(), stack);
                 put(samplerMetadata, packed.samplerMetadata(), stack); graphResourcesGraph = graph;
             }
-            ByteBuffer roots = stack.malloc(rootCount * 4).order(ByteOrder.nativeOrder());
-            for (int root : graph.routerRoots()) roots.putInt(root);
-            roots.flip(); put(graphRoots, roots, stack);
+            uploadGraphRoots(graph.routerRoots(), stack);
             check(vkResetCommandBuffer(commandBuffer, 0), "reset grid command buffer");
             check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin grid command buffer");
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, gridPipeline);
@@ -551,9 +545,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 put(samplerMetadata, packed.samplerMetadata(), stack); graphResourcesGraph = graph;
             }
             uploadInterpolatorMap(graph, stack);
-            ByteBuffer roots = stack.malloc(rootCount * 4).order(ByteOrder.nativeOrder());
-            for (int root : graph.routerRoots()) roots.putInt(root);
-            roots.flip(); put(graphRoots, roots, stack);
+            uploadGraphRoots(graph.routerRoots(), stack);
             ByteBuffer metadata = outputMetadata.duplicate().order(ByteOrder.nativeOrder());
             metadata.limit(metadata.position() + chunkCount * GpuInterpolationBatch.METADATA_BYTES);
             put(interpolationMetadata, metadata, stack);
@@ -659,9 +651,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             ByteBuffer blendInputs = stack.malloc(sampleCount * 8).order(ByteOrder.nativeOrder());
             for (int i = 0; i < sampleCount; i++) blendInputs.putFloat(0.0f).putFloat(1.0f);
             blendInputs.flip(); put(graphBlendInputs, blendInputs, stack);
-            ByteBuffer roots = stack.malloc(rootCount * 4).order(ByteOrder.nativeOrder());
-            for (int root : graph.routerRoots()) roots.putInt(root);
-            roots.flip(); put(graphRoots, roots, stack); put(interpolationMetadata, metadata, stack);
+            uploadGraphRoots(graph.routerRoots(), stack); put(interpolationMetadata, metadata, stack);
             check(vkResetCommandBuffer(commandBuffer, 0), "reset fused command buffer");
             check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin fused command buffer");
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipeline);
@@ -895,6 +885,15 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             values.get(output);
             return output;
         }
+    }
+
+    private void uploadGraphRoots(int[] roots, MemoryStack stack) {
+        if (uploadedGraphRoots != null && java.util.Arrays.equals(uploadedGraphRoots, roots)) return;
+        ByteBuffer bytes = stack.malloc(roots.length * Integer.BYTES).order(ByteOrder.nativeOrder());
+        for (int root : roots) bytes.putInt(root);
+        bytes.flip();
+        put(graphRoots, bytes, stack);
+        uploadedGraphRoots = roots.clone();
     }
 
     private GpuDensityGraphBuffer.Packed packedGraph(GpuDensityGraph graph) {
