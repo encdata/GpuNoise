@@ -129,7 +129,7 @@ def rcon_packet(connection: socket.socket, request_id: int, packet_type: int, bo
     return response_id, response_type, response[8:-2].decode("utf-8", errors="replace")
 
 
-def start_chunky_with_rcon() -> None:
+def start_chunky_with_rcon() -> float:
     commands = (
         "chunky cancel",
         "chunky world minecraft:overworld",
@@ -152,7 +152,13 @@ def start_chunky_with_rcon() -> None:
                     if response_id != request_id:
                         raise ConnectionError(f"RCON returned response id {response_id} for {command!r}")
                     print(f"CI_CHUNKY_RCON command={command!r} response={response!r}", flush=True)
-                return
+                    if command == "chunky start":
+                        if "Task started" not in response:
+                            raise RuntimeError(f"Chunky did not confirm task start: {response!r}")
+                        # Chunky confirms its task over RCON but does not
+                        # reliably mirror that line into the server log. Use
+                        # the successful response as the run-time clock origin.
+                        return time.monotonic()
         except (OSError, ConnectionError) as error:
             last_error = error
             time.sleep(0.5)
@@ -327,9 +333,9 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                             f"terrain profile {terrain_profile} reached ready state without discovering: "
                             + ", ".join(missing_mods)
                         )
-                start_chunky_with_rcon()
+                chunky_started = start_chunky_with_rcon()
                 chunky_start_requested = True
-            if TASK_STARTED.search(line):
+            if chunky_started is None and TASK_STARTED.search(line):
                 chunky_started = observed_at
             if SERVER_CRASH.search(line):
                 raise RuntimeError(
