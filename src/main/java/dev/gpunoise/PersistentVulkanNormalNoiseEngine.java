@@ -20,6 +20,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private static final boolean FAST_GRAPH_MATH = Boolean.getBoolean("gpunoise.fastMath");
     static final int CAPACITY = 262_144;
     static final int GRAPH_NODE_CAPACITY = 2048;
+    private static final int GRAPH_NODE_STORAGE_CAPACITY = GRAPH_NODE_CAPACITY * 2;
     private static final long AQUIFER_INPUT_BYTES = Math.max(
             GpuAquiferNearestThree.MAX_PACKED_BYTES,
             (long) GpuAquiferSubstance.MAX_QUERIES * GpuAquiferSubstance.RECORD_BYTES);
@@ -108,7 +109,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             coordinates = buffer(CAPACITY * 16L, stack); // vec4 position; sampler id occupies unused w
             // Graph dispatches can return up to 16 router roots per sample.
             results = buffer(CAPACITY * (long) MAX_GRAPH_OUTPUTS * Float.BYTES, stack);
-            graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack); graphNodes = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack); graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 64L * 16L, stack); graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack); graphRoots = deviceLocalBuffer(64L, stack);
+            graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack); graphNodes = deviceLocalBuffer((long) GRAPH_NODE_STORAGE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack); graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 64L * 16L, stack); graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack); graphRoots = deviceLocalBuffer(64L, stack);
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
             interpolatedInputs = deviceLocalBuffer((long) INTERPOLATED_INPUT_FLOATS * Float.BYTES, stack);
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
@@ -171,7 +172,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             coordinates = buffer(CAPACITY * 16L, stack);
             results = buffer(CAPACITY * (long) MAX_GRAPH_OUTPUTS * Float.BYTES, stack);
             graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack);
-            graphNodes = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack);
+            graphNodes = deviceLocalBuffer((long) GRAPH_NODE_STORAGE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack);
             graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 64L * 16L, stack);
             graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack);
             graphRoots = deviceLocalBuffer(64L, stack);
@@ -572,7 +573,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipelineLayout, 0,
                     stack.longs(graphDescriptorSet), null);
             ByteBuffer blockPush = stack.malloc(16).order(ByteOrder.nativeOrder())
-                    .putInt(blockCount).putInt(packed.nodeCount()).putInt(outputRoots)
+                    .putInt(blockCount).putInt(packed.blockNodeCount())
+                    .putInt((packed.blockNodeOffset() << 5) | outputRoots)
                     .putInt(0x8000_0000 | markerCount).flip();
             vkCmdPushConstants(commandBuffer, graphPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, blockPush);
             vkCmdDispatch(commandBuffer, (blockCount + 63) / 64, 1, 1);

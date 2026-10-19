@@ -385,9 +385,11 @@ void main(){
         pExact=dvec3(p);
     }
 #endif
+    bool blockEvaluation=(reserved & BLOCK_EVALUATION)!=0u;
+    uint nodeBase=blockEvaluation ? (rootCount >> 5u) : 0u;
+    uint outputRootCount=blockEvaluation ? (rootCount & 31u) : rootCount;
     for(uint i=0;i<nodeCount;i++){
-        Node n=nodes[i];
-        if((reserved & BLOCK_EVALUATION)!=0u && (n.meta.y & BLOCK_SKIP_NODE)!=0u) continue;
+        Node n=nodes[nodeBase+i];
         uint op=n.ids.x; double v=0.0;
         if(op==1u)v=double(n.params.x);
         else if(op==2u)v=double(normalNoise(p*vec3(n.params.y,n.params.z,n.params.y),uint(n.params.x)));
@@ -398,7 +400,7 @@ void main(){
         else if(op==7u){
 #if !defined(GRID_INPUT)
             uint interpolationCount=reserved & 0x7fffffffu;
-            if((reserved & BLOCK_EVALUATION)!=0u && n.meta.z<interpolationCount)
+            if(blockEvaluation && n.meta.z<interpolationCount)
                 v=double(interpolatedInputs[sampleIndex*interpolationCount+n.meta.z]);
             else
 #endif
@@ -440,8 +442,8 @@ void main(){
         results[sampleIndex*outputStride+rootCount+marker]
             =float(values[interpolatorMap[1u+marker]]);
 #else
-    for (uint root = 0u; root < rootCount; root++)
-        if((reserved & BLOCK_EVALUATION)!=0u) blockResults[sampleIndex * rootCount + root] = float(values[rootNodes[root]]);
-        else results[sampleIndex * rootCount + root] = float(values[rootNodes[root]]);
+    for (uint root = 0u; root < outputRootCount; root++)
+        if(blockEvaluation) blockResults[sampleIndex * outputRootCount + root] = float(values[rootNodes[root]]);
+        else results[sampleIndex * outputRootCount + root] = float(values[rootNodes[root]]);
 #endif
 }

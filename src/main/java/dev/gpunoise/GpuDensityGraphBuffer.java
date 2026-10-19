@@ -16,7 +16,8 @@ final class GpuDensityGraphBuffer {
     private static final ByteBuffer MTH_SIN_TABLE_BYTES = createMthSinTableBytes();
     record Packed(ByteBuffer nodes, ByteBuffer permutations, ByteBuffer octaves,
                   ByteBuffer samplerMetadata, ByteBuffer splinePoints, ByteBuffer blendedMetadata,
-                  int nodeCount, int samplerCount, int blendedCount) {}
+                  int nodeCount, int blockNodeOffset, int blockNodeCount,
+                  int samplerCount, int blendedCount) {}
 
     private static final Map<String, Integer> OPCODES = Map.ofEntries(
             Map.entry("Constant", 1), Map.entry("Noise", 2), Map.entry("Ap2", 3),
@@ -66,9 +67,12 @@ final class GpuDensityGraphBuffer {
             throw new IllegalArgumentException("GPU graph needs " + graph.registerCount()
                     + " live registers; shader capacity is " + MAX_SHADER_REGISTERS);
         }
-        ByteBuffer output = ByteBuffer.allocateDirect(Math.multiplyExact(graph.nodes().size(), NODE_BYTES))
-                .order(ByteOrder.nativeOrder());
         boolean[] blockSkip = blockEvaluationSkipMask(graph);
+        int blockNodeCount = 0;
+        for (boolean skip : blockSkip) if (!skip) blockNodeCount++;
+        int blockNodeOffset = graph.nodes().size();
+        ByteBuffer output = ByteBuffer.allocateDirect(Math.multiplyExact(
+                Math.addExact(blockNodeOffset, blockNodeCount), NODE_BYTES)).order(ByteOrder.nativeOrder());
         int interpolationSlot = 0;
         for (int nodeIndex = 0; nodeIndex < graph.nodes().size(); nodeIndex++) {
             GpuDensityGraph.Node node = graph.nodes().get(nodeIndex);
@@ -85,6 +89,28 @@ final class GpuDensityGraphBuffer {
                 metadataZ = "Interpolated".equals(node.payload()) ? interpolationSlot++ : -1;
             }
             int metadataY = children.length | (blockSkip[nodeIndex] ? BLOCK_SKIP_FLAG : 0);
+            output.putInt(operation(node.payload())).putInt(metadataY).putInt(metadataZ).putInt(node.register());
+        }
+        // A dense second instruction stream lets block invocations avoid
+        // fetching marker-only nodes and branching over every graph node.
+        int blockInterpolationSlot = 0;
+        for (int nodeIndex = 0; nodeIndex < graph.nodes().size(); nodeIndex++) {
+            GpuDensityGraph.Node node = graph.nodes().get(nodeIndex);
+            int markerSlot = node.opcode().equals("Marker") && "Interpolated".equals(node.payload())
+                    ? blockInterpolationSlot++ : -1;
+            if (blockSkip[nodeIndex]) continue;
+            Integer opcode = OPCODES.get(node.opcode());
+            int[] children = node.children();
+            double[] constants = node.constants();
+            output.putInt(opcode).putInt(children.length > 0 ? children[0] : -1)
+                    .putInt(children.length > 1 ? children[1] : -1)
+                    .putInt(children.length > 2 ? children[2] : -1);
+            for (int i = 0; i < 4; i++) output.putFloat(i < constants.length ? (float) constants[i] : 0.0f);
+            int metadataZ = constants.length;
+            if (node.opcode().equals("Marker")) metadataZ = markerSlot;
+            // Block pass consumes interpolated markers directly from their
+            // per-block input; their child register is intentionally unused.
+            int metadataY = children.length;
             output.putInt(operation(node.payload())).putInt(metadataY).putInt(metadataZ).putInt(node.register());
         }
         ByteBuffer splinePoints = ByteBuffer.allocateDirect(graph.splines().size() * 64 * 16).order(ByteOrder.nativeOrder());
@@ -152,7 +178,8 @@ final class GpuDensityGraphBuffer {
         }
         return new Packed((ByteBuffer) output.flip(), (ByteBuffer) permutations.flip(),
                 (ByteBuffer) octaves.flip(), (ByteBuffer) metadata.flip(), (ByteBuffer) splinePoints.flip(),
-                (ByteBuffer) blendedMetadata.flip(), graph.nodes().size(), samplers.size(), graph.blended().size());
+                (ByteBuffer) blendedMetadata.flip(), graph.nodes().size(), blockNodeOffset, blockNodeCount,
+                samplers.size(), graph.blended().size());
     }
 
     /**
