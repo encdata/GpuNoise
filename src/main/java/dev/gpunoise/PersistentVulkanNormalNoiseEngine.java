@@ -18,6 +18,7 @@ import static org.lwjgl.vulkan.VK10.*;
 /** Reusable Vulkan resources for repeated NormalNoise submissions. */
 final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private static final boolean FAST_GRAPH_MATH = Boolean.getBoolean("gpunoise.fastMath");
+    private static final boolean GPU_TIMING_ENABLED = Boolean.getBoolean("gpunoise.profileTerrain");
     static final int CAPACITY = 262_144;
     static final int GRAPH_NODE_CAPACITY = 2048;
     private static final int GRAPH_NODE_STORAGE_CAPACITY = GRAPH_NODE_CAPACITY * 2;
@@ -331,7 +332,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
         int rootCount = graph.routerRoots().length;
         if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16) throw new IllegalArgumentException("density graph exceeds GPU capacity");
-        long preparationStarted = System.nanoTime();
+        long preparationStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
             writeGraphCoordinates(xs, ys, zs, sampleCount);
@@ -360,8 +361,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default()
                         .pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit async graph roots");
             }
-            inFlightFenceSubmittedNanos = System.nanoTime();
-            inFlightGraphPreparationNanos = inFlightFenceSubmittedNanos - preparationStarted;
+            inFlightFenceSubmittedNanos = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
+            inFlightGraphPreparationNanos = GPU_TIMING_ENABLED
+                    ? inFlightFenceSubmittedNanos - preparationStarted : 0L;
             inFlightSamples = sampleCount;
             inFlightRoots = rootCount;
             inFlightGraphRoots = new CompletableFuture<>();
@@ -389,7 +391,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         int rootCount = graph.routerRoots().length;
         int resultStride = rootCount + graph.interpolatedMarkerRegisters().length;
         if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16) throw new IllegalArgumentException("density graph exceeds GPU capacity");
-        long preparationStarted = System.nanoTime();
+        long preparationStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
             put(graphCoordinates, metadata, stack);
@@ -419,8 +421,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default()
                         .pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit grid roots");
             }
-            inFlightFenceSubmittedNanos = System.nanoTime();
-            inFlightGraphPreparationNanos = inFlightFenceSubmittedNanos - preparationStarted;
+            inFlightFenceSubmittedNanos = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
+            inFlightGraphPreparationNanos = GPU_TIMING_ENABLED
+                    ? inFlightFenceSubmittedNanos - preparationStarted : 0L;
             inFlightSamples = sampleCount; inFlightRoots = resultStride;
             inFlightGraphRoots = new CompletableFuture<>();
             return inFlightGraphRoots;
@@ -434,12 +437,13 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         if (status == VK_NOT_READY) return;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             check(status, "poll graph-roots fence");
-            long fenceDuration = System.nanoTime() - inFlightFenceSubmittedNanos;
-            long gpuCommandNanos = readGpuTimestamp(stack);
-            long readbackStarted = System.nanoTime();
+            long fenceDuration = GPU_TIMING_ENABLED
+                    ? System.nanoTime() - inFlightFenceSubmittedNanos : 0L;
+            long gpuCommandNanos = GPU_TIMING_ENABLED ? readGpuTimestamp(stack) : -1L;
+            long readbackStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
             float[] output = readResults(inFlightSamples, inFlightRoots, stack);
-            recordGraphFenceDuration(inFlightGraphPreparationNanos, fenceDuration, gpuCommandNanos,
-                    System.nanoTime() - readbackStarted);
+            if (GPU_TIMING_ENABLED) recordGraphFenceDuration(inFlightGraphPreparationNanos,
+                    fenceDuration, gpuCommandNanos, System.nanoTime() - readbackStarted);
             check(vkResetFences(device, fence), "reset async graph-roots fence");
             inFlightGraphRoots = null;
             future.complete(output);
@@ -561,7 +565,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 || (long) blockCount * markerCount > INTERPOLATED_INPUT_FLOATS
                 || (long) blockCount * outputRoots * Float.BYTES > interpolationOutput.size)
             throw new IllegalArgumentException("grid interpolation batch exceeds GPU capacity");
-        long preparationStarted = System.nanoTime();
+        long preparationStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
             ByteBuffer grids = gridMetadata.duplicate().order(ByteOrder.nativeOrder());
@@ -644,11 +648,11 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default()
                         .pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit grid interpolation");
             }
-            long submittedAt = System.nanoTime();
+            long submittedAt = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
             check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait grid interpolation");
-            long submitToFenceNanos = System.nanoTime() - submittedAt;
-            long[] stageGpuNanos = readTerrainGpuTimestamps(stack);
-            long readbackStarted = System.nanoTime();
+            long submitToFenceNanos = GPU_TIMING_ENABLED ? System.nanoTime() - submittedAt : 0L;
+            long[] stageGpuNanos = GPU_TIMING_ENABLED ? readTerrainGpuTimestamps(stack) : null;
+            long readbackStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
             check(vkResetFences(device, fence), "reset grid interpolation fence");
             float[] corners = readRootResults(sampleCount, rootCount, cornerStride, stack);
             FloatBuffer blockValues = persistentMappings.get(interpolationOutput).duplicate()
@@ -657,8 +661,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             blockValues.limit(blockCount * outputRoots);
             float[] blocks = new float[blockCount * outputRoots];
             blockValues.get(blocks);
-            recordTerrainBatchDuration(submittedAt - preparationStarted, submitToFenceNanos,
-                    stageGpuNanos, System.nanoTime() - readbackStarted);
+            if (GPU_TIMING_ENABLED) recordTerrainBatchDuration(submittedAt - preparationStarted,
+                    submitToFenceNanos, stageGpuNanos, System.nanoTime() - readbackStarted);
             return new GpuTerrainBatchResult(new GpuTerrainRootsResult(corners, 0, corners.length,
                     rootCount),
                     new GpuTerrainBlockResult(blocks, 0, blockCount, outputRoots,
@@ -1107,6 +1111,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long aquiferSubstancePipeline(MemoryStack s){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(aquiferSubstanceShader).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(aquiferSubstancePipelineLayout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),"aquifer substance pipeline");return h.get(0);}
     private long commandPool(MemoryStack s){VkCommandPoolCreateInfo i=VkCommandPoolCreateInfo.calloc(s).sType$Default().flags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT).queueFamilyIndex(queueFamily);LongBuffer h=s.longs(0);check(vkCreateCommandPool(device,i,null,h),"command pool");return h.get(0);}
     private long createTimestampQueryPool(MemoryStack stack) {
+        if (!GPU_TIMING_ENABLED) return 0L;
         IntBuffer count = stack.ints(0);
         vkGetPhysicalDeviceQueueFamilyProperties(physical, count, null);
         VkQueueFamilyProperties.Buffer families = VkQueueFamilyProperties.malloc(count.get(0), stack);
