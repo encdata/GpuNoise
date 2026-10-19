@@ -405,9 +405,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         if (substanceWriter.size() > 0 && gpunoise$terrainDecisionBatchLogged.compareAndSet(false, true)) {
             dev.gpunoise.GpuNoise.LOGGER.info(
                     "GPU terrain material decisions: queries={}, positiveDensityQueries={}, "
-                            + "aquiferQueries={}, acceptedDecisions={}, cpuFallback={}, "
+                            + "aquiferQueries={}, centerStatusLookups={}, centerStatusEvaluations={}, "
+                            + "centerStatusCacheHits={}, acceptedDecisions={}, cpuFallback={}, "
                             + "globalLavaQueries={}, vanillaParitySamples={}, vanillaParityMismatches={}",
                     substanceWriter.size(), positiveDensityDecisions, substanceWriter.size() - positiveDensityDecisions,
+                    queries.size() * 4L, fluidStatuses.size(),
+                    Math.max(0L, queries.size() * 4L - fluidStatuses.size()),
                     acceptedDecisions, substanceWriter.size() - acceptedDecisions, directLavaDecisions,
                     vanillaParitySamples, vanillaParityMismatches);
         }

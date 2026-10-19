@@ -110,6 +110,8 @@ public final class GpuAquiferDecisionData {
             return null;
         }
 
+        public int size() { return size; }
+
         public void put(long key, Aquifer.FluidStatus value) {
             if (value == null) throw new NullPointerException("fluid status");
             if ((long) (size + 1) * 10L >= (long) values.length * 7L) grow();
