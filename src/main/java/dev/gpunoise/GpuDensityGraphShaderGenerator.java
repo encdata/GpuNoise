@@ -63,7 +63,7 @@ final class GpuDensityGraphShaderGenerator {
             float p2 = nodes.getFloat();
             float p3 = nodes.getFloat();
             int operation = nodes.getInt();
-            int childCount = nodes.getInt();
+            int childCount = nodes.getInt() & ~GpuDensityGraphBuffer.BLOCK_SKIP_FLAG;
             int metadata = nodes.getInt();
             int result = nodes.getInt();
             if (opcode == 0) continue; // aliased interpolation marker; its register already has its value
