@@ -41,13 +41,6 @@ public final class GpuChunkDensityCache {
     private static final AtomicLong interpolatedReads = new AtomicLong();
     private static final AtomicLong blockReads = new AtomicLong();
     private static final AtomicLong lastReadLogBucket = new AtomicLong(-1L);
-    // doFill walks all block positions of a cell consecutively. Reuse the
-    // eight immutable final-density corners while evaluating that run.
-    private int cachedFinalGx = Integer.MIN_VALUE;
-    private int cachedFinalGy;
-    private int cachedFinalGz;
-    private float cachedFinal000, cachedFinal100, cachedFinal010, cachedFinal110;
-    private float cachedFinal001, cachedFinal101, cachedFinal011, cachedFinal111;
     // Terrain graph roots: final, initial, barrier, floodedness, spread, lava,
     // erosion, and depth.
     // All three are interpolated in one dispatch and kept in the same result
@@ -191,7 +184,7 @@ public final class GpuChunkDensityCache {
     boolean markSubmitted() { return submitted.compareAndSet(false, true); }
     boolean markCompleted() { return completed.compareAndSet(false, true); }
 
-    /** CPU trilinear interpolation over the same cell grid used by NoiseChunk. */
+    /** Exact GPU block result or exact cell-corner sample, with Java fallback outside those points. */
     public double density(DensityFunction.FunctionContext context) {
         if (!supportsRoot(GpuTerrainRoots.FINAL_DENSITY)) return Double.NaN;
         int rx = context.blockX() - minX;
@@ -358,66 +351,25 @@ public final class GpuChunkDensityCache {
         return sampleRoot(readyRoots, rx, ry, rz, root);
     }
 
-    /** Interpolates a root from an already validated and loaded chunk result. */
+    /** Reads an exact corner sample; non-corner values require verified per-block GPU output. */
     private double sampleRoot(GpuTerrainRootsResult values, int rx, int ry, int rz, int root) {
-        // The upper and east/south boundaries are real NoiseChunk samples:
-        // preliminary surface lookup evaluates at minY + height, and the
-        // cell grid itself includes x/z = 16. Use the final cell with t=1
-        // for those endpoints instead of falling back to CPU evaluation.
+        // Do not approximate arbitrary root evaluation by interpolating the
+        // final root's corners. NoiseChunk interpolates marked subexpressions
+        // and then evaluates the rest of the graph at each block, which is
+        // generally not equivalent for nonlinear roots. The GPU block pass
+        // serves verified per-block roots above; otherwise let the caller use
+        // its original Java function except at exact, parity-checked corners.
         if (values == null || root < 0 || root >= ROOTS || rx < 0 || rz < 0 || ry < 0
                 || rx > 16 || rz > 16 || ry > cellsY * cellHeight) return Double.NaN;
-        int gx, gy, gz;
-        float tx, ty, tz;
-        if (powerOfTwoCells) {
-            gx = Math.min(rx >> cellWidthShift, gridX - 2);
-            gy = Math.min(ry >> cellHeightShift, cellsY - 1);
-            gz = Math.min(rz >> cellWidthShift, gridZ - 2);
-            tx = (rx - (gx << cellWidthShift)) * inverseCellWidth;
-            ty = (ry - (gy << cellHeightShift)) * inverseCellHeight;
-            tz = (rz - (gz << cellWidthShift)) * inverseCellWidth;
-        } else {
-            gx = Math.min(rx / cellWidth, gridX - 2);
-            gy = Math.min(ry / cellHeight, cellsY - 1);
-            gz = Math.min(rz / cellWidth, gridZ - 2);
-            tx = (float)(rx - gx * cellWidth) * inverseCellWidth;
-            ty = (float)(ry - gy * cellHeight) * inverseCellHeight;
-            tz = (float)(rz - gz * cellWidth) * inverseCellWidth;
-        }
-        float c000, c100, c010, c110, c001, c101, c011, c111;
-        if (root == GpuTerrainRoots.FINAL_DENSITY
-                && gx == cachedFinalGx && gy == cachedFinalGy && gz == cachedFinalGz) {
-            c000 = cachedFinal000;
-            c100 = cachedFinal100;
-            c010 = cachedFinal010;
-            c110 = cachedFinal110;
-            c001 = cachedFinal001;
-            c101 = cachedFinal101;
-            c011 = cachedFinal011;
-            c111 = cachedFinal111;
-        } else {
-            c000 = value(values, gx, gy, gz, root);
-            c100 = value(values, gx + 1, gy, gz, root);
-            c010 = value(values, gx, gy + 1, gz, root);
-            c110 = value(values, gx + 1, gy + 1, gz, root);
-            c001 = value(values, gx, gy, gz + 1, root);
-            c101 = value(values, gx + 1, gy, gz + 1, root);
-            c011 = value(values, gx, gy + 1, gz + 1, root);
-            c111 = value(values, gx + 1, gy + 1, gz + 1, root);
-            if (root == GpuTerrainRoots.FINAL_DENSITY) {
-                cachedFinalGx = gx;
-                cachedFinalGy = gy;
-                cachedFinalGz = gz;
-                cachedFinal000 = c000;
-                cachedFinal100 = c100;
-                cachedFinal010 = c010;
-                cachedFinal110 = c110;
-                cachedFinal001 = c001;
-                cachedFinal101 = c101;
-                cachedFinal011 = c011;
-                cachedFinal111 = c111;
-            }
-        }
-        return lerp3(c000, c100, c010, c110, c001, c101, c011, c111, tx, ty, tz);
+        boolean aligned = powerOfTwoCells
+                ? ((rx & (cellWidth - 1)) | (ry & (cellHeight - 1)) | (rz & (cellWidth - 1))) == 0
+                : rx % cellWidth == 0 && ry % cellHeight == 0 && rz % cellWidth == 0;
+        if (!aligned) return Double.NaN;
+        int gx = powerOfTwoCells ? rx >> cellWidthShift : rx / cellWidth;
+        int gy = powerOfTwoCells ? ry >> cellHeightShift : ry / cellHeight;
+        int gz = powerOfTwoCells ? rz >> cellWidthShift : rz / cellWidth;
+        if (gx >= gridX || gy > cellsY || gz >= gridZ || root >= values.roots()) return Double.NaN;
+        return values.valueAt((gy * gridX + gx) * gridZ + gz, root);
     }
 
     /** Checks that the GPU returned the complete block volume and every selected root. */
@@ -441,10 +393,6 @@ public final class GpuChunkDensityCache {
             GpuNoise.LOGGER.info("GPU per-block terrain output materialized: blocks={}x{}x16, roots={}, interpolatedMarkers={}",
                     16, maxRelativeY, blocks.rootCount(), interpolatedMarkers);
         }
-    }
-
-    private float value(GpuTerrainRootsResult values, int gx, int gy, int gz, int root) {
-        return values.valueAtUnchecked((gy * gridX + gx) * gridZ + gz, root);
     }
 
     private double sampleExactRoot(int rx, int ry, int rz, int root) {
