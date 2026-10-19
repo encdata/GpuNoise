@@ -66,6 +66,8 @@ FULL_BLOCK_OUTPUT = os.environ.get("GPUNOISE_CI_FULL_BLOCK_OUTPUT", "true").lowe
 if FULL_BLOCK_OUTPUT not in {"true", "false"}:
     raise ValueError("GPUNOISE_BENCHMARK_FULL_BLOCK_OUTPUT must be true or false")
 FULL_BLOCK_OUTPUT = FULL_BLOCK_OUTPUT == "true"
+DENSITY_PARITY_CHUNK_X = int(os.environ.get("GPUNOISE_DENSITY_PARITY_CHUNK_X", "-17"))
+DENSITY_PARITY_CHUNK_Z = int(os.environ.get("GPUNOISE_DENSITY_PARITY_CHUNK_Z", "-18"))
 VERIFY_AQUIFER_GPU = os.environ.get("GPUNOISE_CI_VERIFY_AQUIFER", "false").lower()
 if VERIFY_AQUIFER_GPU not in {"true", "false"}:
     raise ValueError("GPUNOISE_CI_VERIFY_AQUIFER must be true or false")
@@ -248,6 +250,10 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
     ]
     if not force_cpu:
         jvm_overrides.append("-Dgpunoise.exactAquiferInputs=true")
+        jvm_overrides.extend((
+            "-Dgpunoise.verifyTerrainDensityChunkX=" + str(DENSITY_PARITY_CHUNK_X),
+            "-Dgpunoise.verifyTerrainDensityChunkZ=" + str(DENSITY_PARITY_CHUNK_Z),
+        ))
     process_env["JAVA_TOOL_OPTIONS"] = " ".join(
         value for value in (process_env.get("JAVA_TOOL_OPTIONS", ""), *jvm_overrides) if value
     )
@@ -365,6 +371,19 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
             if ("GPU aquifer inputs use exact Java roots; Vulkan center selection and substance decisions "
                     "remain enabled" not in run_log):
                 raise RuntimeError("GPU aquifer decisions did not use the exact Java input roots required for world parity")
+            density_differentials = re.findall(
+                r"GPU terrain density differential: chunks=(\d+), lastChunk=\((-?\d+),(-?\d+)\), "
+                r"samples=(\d+), exactMismatches=(\d+), signMismatches=(\d+), "
+                r"unsafeSignMismatches=(\d+),",
+                run_log)
+            if not any(int(chunks) > 0
+                       and int(chunk_x) == DENSITY_PARITY_CHUNK_X
+                       and int(chunk_z) == DENSITY_PARITY_CHUNK_Z
+                       and int(samples) > 0
+                       for chunks, chunk_x, chunk_z, samples, _exact, _sign, _unsafe in density_differentials):
+                raise RuntimeError(
+                    "GPU final-density differential did not sample the configured parity chunk "
+                    f"({DENSITY_PARITY_CHUNK_X},{DENSITY_PARITY_CHUNK_Z})")
             if max(counts[2] for counts in gpu_counts) <= 0:
                 if not c2me_java_fallback:
                     raise RuntimeError("GPU benchmark completed without any GPU terrain cache being consumed")

@@ -191,15 +191,16 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
                 double beardifierValue = gpunoise$zeroBeardifier ? 0.0 : beardifier.compute(context);
                 double gpuDensity = gpu + beardifierValue;
                 double cpuDensity = Double.NaN;
-                if (GpuTerrainDensityParity.enabled()) {
+                boolean traceDensity = GpuTerrainDensityParity.shouldCompare(
+                        context.blockX(), context.blockZ());
+                if (traceDensity) {
                     cpuDensity = vanillaFunction.compute(context) + beardifierValue;
                     GpuTerrainDensityParity.record(context.blockX(), context.blockY(), context.blockZ(),
                             cpuDensity, gpuDensity);
                 }
                 if (GpuAquiferSubstance.nearDensityDecisionThreshold(gpuDensity)) {
                     GpuTerrainProfiler.recordJavaRootFallback(GpuTerrainRoots.FINAL_DENSITY);
-                    return GpuTerrainDensityParity.enabled()
-                            ? cpuDensity : vanillaFunction.compute(context) + beardifierValue;
+                    return traceDensity ? cpuDensity : vanillaFunction.compute(context) + beardifierValue;
                 }
                 GpuTerrainProfiler.recordGpuFinalDensity(lookupStart);
                 gpunoise$markGpuUse(cache);
