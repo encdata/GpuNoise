@@ -569,8 +569,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
         int rootCount = graph.routerRootCount();
         int outputRoots = GpuTerrainRuntime.terrainBlockOutputRootCount();
-        int[] markerRegisters = graph.interpolatedMarkerRegisters();
-        int markerCount = markerRegisters.length;
+        int markerCount = graph.interpolatedMarkerCount();
         int cornerStride = rootCount + markerCount;
         int sampleCount = Math.multiplyExact(chunkCount, samplesPerChunk);
         int blockCount = Math.multiplyExact(chunkCount, blocksPerChunk);
