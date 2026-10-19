@@ -208,11 +208,10 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
                 return gpuDensity;
             }
             GpuTerrainProfiler.recordJavaRootFallback(GpuTerrainRoots.FINAL_DENSITY);
-            if (cache.supportsRoot(GpuTerrainRoots.FINAL_DENSITY)
-                    && cache.contains(context.blockX(), context.blockY(), context.blockZ())) {
-                throw new IllegalStateException("Authoritative GPU density cache returned NaN at "
-                        + context.blockX() + "," + context.blockY() + "," + context.blockZ());
-            }
+            // NaN is the cache's explicit exact-Java fallback signal for an
+            // unchecked interior sample or an out-of-grid dependency. Graph
+            // support alone does not guarantee that this coordinate has a
+            // parity-verified per-block value.
         }
         return vanillaFunction.compute(context);
     }
