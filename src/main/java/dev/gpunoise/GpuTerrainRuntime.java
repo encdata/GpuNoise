@@ -426,9 +426,9 @@ public final class GpuTerrainRuntime {
         return 12;
     }
 
-    /** Materialize final/initial density and aquifer inputs in the block-grid pass. */
+    /** Materialize all router roots in the GPU block-grid pass. */
     static int terrainBlockOutputRootCount() {
-        return 6;
+        return terrainOutputRootCount();
     }
 
     static java.util.concurrent.CompletionStage<GpuFusedResult> submitFusedDirect(int[] x, int[] y, int[] z,
