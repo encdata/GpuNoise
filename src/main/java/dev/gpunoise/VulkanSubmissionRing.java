@@ -269,12 +269,19 @@ final class VulkanSubmissionRing implements AutoCloseable {
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
         }
+        IllegalStateException stopped = new IllegalStateException("GPU submission ring stopped");
+        GraphRootsRequest graphRequest;
+        while ((graphRequest = pendingGraphRoots.poll()) != null)
+            graphRequest.future.completeExceptionally(stopped);
+        GraphRootsGridRequest gridRequest;
+        while ((gridRequest = pendingGraphGrids.poll()) != null)
+            gridRequest.future.completeExceptionally(stopped);
         AquiferNearestRequest request;
         while ((request = pendingAquiferNearest.poll()) != null)
-            request.future.completeExceptionally(new IllegalStateException("GPU submission ring stopped"));
+            request.future.completeExceptionally(stopped);
         AquiferSubstanceRequest substanceRequest;
         while ((substanceRequest = pendingAquiferSubstance.poll()) != null)
-            substanceRequest.future.completeExceptionally(new IllegalStateException("GPU submission ring stopped"));
+            substanceRequest.future.completeExceptionally(stopped);
         for (int i = slots.length - 1; i >= 0; i--) {
             if (slots[i] != null) slots[i].close();
         }
