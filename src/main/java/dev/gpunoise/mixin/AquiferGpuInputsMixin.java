@@ -7,6 +7,7 @@ import dev.gpunoise.GpuTerrainRuntime;
 import dev.gpunoise.GpuTerrainRoots;
 import dev.gpunoise.GpuAquiferCoordinatePlanner;
 import dev.gpunoise.GpuAquiferNearestThree;
+import dev.gpunoise.GpuAquiferRuntimeMode;
 import dev.gpunoise.GpuAquiferSubstance;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQuery;
 import dev.gpunoise.GpuAquiferDecisionData.Decision;
@@ -146,6 +147,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private void gpunoise$buildGpuDecisionTable(GpuChunkDensityCache cache,
                                                  dev.gpunoise.GpuNoiseChunkAccess noiseAccess,
                                                  PositionalRandomFactory randomFactory) {
+        boolean c2meAquifer = GpuAquiferRuntimeMode.c2meAquiferRewriteEnabled();
         final int minX = cache.minX(), minY = cache.minY(), minZ = cache.minZ();
         final int height = cache.height();
         Decision[] decisions = new Decision[Math.multiplyExact(height, 256)];
@@ -180,7 +182,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                             Math.floorDiv(y + 1, 12), Math.floorDiv(z - 5, 16));
                     int[][] centers = neighborhoods.get(key);
                     if (centers == null) {
-                        centers = GpuAquiferNearestThree.centersForQuery(randomFactory, new int[]{x, y, z});
+                        centers = c2meAquifer
+                                ? GpuAquiferNearestThree.centersForC2meQuery(randomFactory, new int[]{x, y, z})
+                                : GpuAquiferNearestThree.centersForQuery(randomFactory, new int[]{x, y, z});
                         neighborhoods.put(key, centers);
                     }
                     double barrier = cache.aquiferBarrier(x, y, z);
@@ -219,9 +223,10 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             for (int row = 0; row < selectedRows.length / GpuAquiferNearestThree.OUTPUT_INTS; row++) {
                 AquiferQuery query = queries.get(queryOffset++);
                 int base = row * GpuAquiferNearestThree.OUTPUT_INTS;
-                int first = selectedRows[base], second = selectedRows[base + 1], third = selectedRows[base + 2];
-                int distance0 = selectedRows[base + 3], distance1 = selectedRows[base + 4];
-                int distance2 = selectedRows[base + 5];
+                int first = selectedRows[base], second = selectedRows[base + 1];
+                int third = selectedRows[base + 2], fourth = selectedRows[base + 3];
+                int distance0 = selectedRows[base + 4], distance1 = selectedRows[base + 5];
+                int distance2 = selectedRows[base + 6], distance3 = selectedRows[base + 7];
                 if (gpunoise$verifyAquifer) {
                     int[] expectedNearest = GpuAquiferNearestThree.select(
                             new int[]{query.x, query.y, query.z}, query.centers);
@@ -229,14 +234,15 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     if (selectedRows[base] != expectedNearest[0]
                             || selectedRows[base + 1] != expectedNearest[1]
                             || selectedRows[base + 2] != expectedNearest[2]
-                            || distance0 != expectedNearest[3] || distance1 != expectedNearest[4]
-                            || distance2 != expectedNearest[5]) {
+                            || selectedRows[base + 3] != expectedNearest[3]
+                            || distance0 != expectedNearest[4] || distance1 != expectedNearest[5]
+                            || distance2 != expectedNearest[6] || distance3 != expectedNearest[7]) {
                         nearestParityMismatches++;
                         if (nearestFirstMismatch == null) {
                             nearestFirstMismatch = "query=(" + query.x + "," + query.y + "," + query.z
                                     + "), expected=" + java.util.Arrays.toString(expectedNearest)
-                                    + ", gpu=[" + first + "," + second + "," + third + ","
-                                    + distance0 + "," + distance1 + "," + distance2 + "]";
+                                    + ", gpu=[" + first + "," + second + "," + third + "," + fourth + ","
+                                    + distance0 + "," + distance1 + "," + distance2 + "," + distance3 + "]";
                         }
                         continue;
                     }
@@ -244,21 +250,28 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 if (first < 0 || first >= GpuAquiferNearestThree.CANDIDATES
                         || second < 0 || second >= GpuAquiferNearestThree.CANDIDATES
                         || third < 0 || third >= GpuAquiferNearestThree.CANDIDATES
-                        || first == second || first == third || second == third
-                        || distance0 < 0 || distance1 < 0 || distance2 < 0) continue;
+                        || fourth < 0 || fourth >= GpuAquiferNearestThree.CANDIDATES
+                        || first == second || first == third || first == fourth
+                        || second == third || second == fourth || third == fourth
+                        || distance0 < 0 || distance1 < 0 || distance2 < 0 || distance3 < 0) continue;
                 Aquifer.FluidStatus status0 = gpunoise$getAquiferStatus(BlockPos.asLong(
                         query.centers[first][0], query.centers[first][1], query.centers[first][2]));
                 Aquifer.FluidStatus status1 = gpunoise$getAquiferStatus(BlockPos.asLong(
                         query.centers[second][0], query.centers[second][1], query.centers[second][2]));
                 Aquifer.FluidStatus status2 = gpunoise$getAquiferStatus(BlockPos.asLong(
                         query.centers[third][0], query.centers[third][1], query.centers[third][2]));
+                Aquifer.FluidStatus status3 = gpunoise$getAquiferStatus(BlockPos.asLong(
+                        query.centers[fourth][0], query.centers[fourth][1], query.centers[fourth][2]));
                 BlockState nearestState = status0.at(query.y);
                 GpuAquiferSubstance.Input gpuInput = new GpuAquiferSubstance.Input(
                         query.density, query.barrier, query.y,
                         gpunoise$fluidLevel(status0), gpunoise$fluidLevel(status1),
-                        gpunoise$fluidLevel(status2), distance0, distance1, distance2,
+                        gpunoise$fluidLevel(status2), gpunoise$fluidLevel(status3),
+                        distance0, distance1, distance2, distance3,
                         gpunoise$fluidKind(status0.at(query.y)), gpunoise$fluidKind(status1.at(query.y)),
-                        gpunoise$fluidKind(status2.at(query.y)), 0, false, query.belowIsLava, 0);
+                        gpunoise$fluidKind(status2.at(query.y)), gpunoise$fluidKind(status3.at(query.y)),
+                        gpunoise$statusEqualityMask(status0, status1, status2, status3),
+                        0, false, query.belowIsLava, c2meAquifer, 0);
                 inputs.add(gpuInput);
                 pending.add(new PendingDecision(query.index, nearestState,
                         new DensityFunction.SinglePointContext(query.x, query.y, query.z),
@@ -356,6 +369,23 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     @org.spongepowered.asm.mixin.Unique
     private static int gpunoise$fluidLevel(Aquifer.FluidStatus status) {
         return ((AquiferFluidStatusAccessor) (Object) status).gpunoise$fluidLevel();
+    }
+
+    @org.spongepowered.asm.mixin.Unique
+    private static int gpunoise$statusEqualityMask(Aquifer.FluidStatus status0,
+                                                    Aquifer.FluidStatus status1,
+                                                    Aquifer.FluidStatus status2,
+                                                    Aquifer.FluidStatus status3) {
+        Aquifer.FluidStatus[] statuses = {status0, status1, status2, status3};
+        int mask = 0;
+        int bit = 0;
+        for (int first = 0; first < statuses.length; first++) {
+            for (int second = first + 1; second < statuses.length; second++) {
+                if (statuses[first].equals(statuses[second])) mask |= 1 << bit;
+                bit++;
+            }
+        }
+        return mask;
     }
 
     @Override

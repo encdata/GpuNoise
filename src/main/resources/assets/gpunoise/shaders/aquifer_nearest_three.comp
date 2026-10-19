@@ -9,11 +9,15 @@ struct Selection {
     int first;
     int second;
     int third;
+    int fourth;
     int firstDistance;
     int secondDistance;
     int thirdDistance;
+    int fourthDistance;
     uint reserved0;
     uint reserved1;
+    uint reserved2;
+    uint reserved3;
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer Queries { Query items[]; };
@@ -25,30 +29,39 @@ void main() {
     if (queryIndex >= count) return;
 
     Query query = items[queryIndex];
-    int indices[3] = int[3](-1, -1, -1);
-    int distances[3] = int[3](2147483647, 2147483647, 2147483647);
+    int indices[4] = int[4](-1, -1, -1, -1);
+    int distances[4] = int[4](2147483647, 2147483647, 2147483647, 2147483647);
     for (int i = 0; i < 12; i++) {
         ivec3 delta = query.centers[i].xyz - query.point.xyz;
         int distance = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
         // NoiseBasedAquifer uses inclusive comparisons for all three ranks.
         if (distances[0] >= distance) {
+            indices[3] = indices[2]; distances[3] = distances[2];
             indices[2] = indices[1]; distances[2] = distances[1];
             indices[1] = indices[0]; distances[1] = distances[0];
             indices[0] = i; distances[0] = distance;
         } else if (distances[1] >= distance) {
+            indices[3] = indices[2]; distances[3] = distances[2];
             indices[2] = indices[1]; distances[2] = distances[1];
             indices[1] = i; distances[1] = distance;
         } else if (distances[2] >= distance) {
+            indices[3] = indices[2]; distances[3] = distances[2];
             indices[2] = i; distances[2] = distance;
+        } else if (distances[3] >= distance) {
+            indices[3] = i; distances[3] = distance;
         }
     }
 
     values[queryIndex].first = indices[0];
     values[queryIndex].second = indices[1];
     values[queryIndex].third = indices[2];
+    values[queryIndex].fourth = indices[3];
     values[queryIndex].firstDistance = distances[0];
     values[queryIndex].secondDistance = distances[1];
     values[queryIndex].thirdDistance = distances[2];
+    values[queryIndex].fourthDistance = distances[3];
     values[queryIndex].reserved0 = 0u;
     values[queryIndex].reserved1 = 0u;
+    values[queryIndex].reserved2 = 0u;
+    values[queryIndex].reserved3 = 0u;
 }

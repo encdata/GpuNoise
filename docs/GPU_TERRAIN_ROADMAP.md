@@ -184,12 +184,12 @@ parity checks.
 - Start from `Aquifer.NoiseBasedAquifer.computeSubstance` for the pinned game
   version. Preserve its order: positive density returns the caller's default
   solid; lava from the global picker wins for non-positive density; otherwise
-  choose the nearest three aquifer centers, evaluate their fluid statuses and
+  choose four nearest aquifer centers, evaluate their fluid statuses and
   similarities, test barrier pressure, and return the selected status or air.
   Keep the flowing-fluid update bit alongside the result; it affects later
   chunk fluid scheduling even when the chosen block state is unchanged.
 - Use integer world coordinates and exact floor division for aquifer grid
-  coordinates. The three nearest random centers are sampled from the 2x3x2
+  coordinates. The four nearest random centers are sampled from the 2x3x2
   neighborhood using 16x12x16 grid spacing and bounded offsets (10, 9, 10).
   Stable tie handling matters because the third-nearest selection feeds both
   similarity and pressure decisions.
@@ -205,7 +205,7 @@ parity checks.
   component; it is a validated kernel boundary, not yet eligible to decide
   blocks near a pressure threshold until precision behavior is compared with
   vanilla's double calculation and a safe threshold fallback is implemented.
-- A second standalone kernel selects the nearest three centers from the exact
+- A second standalone kernel selects the four nearest centers from the exact
   12 candidates. Its packed query carries xyz plus 12 center xyz records;
   output carries selected indices and squared integer distances. Selection
   preserves vanilla's strict first/second comparisons and inclusive third

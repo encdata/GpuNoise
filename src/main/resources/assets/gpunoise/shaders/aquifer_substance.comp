@@ -8,16 +8,20 @@ struct InputRecord {
     int level0;
     int level1;
     int level2;
+    int level3;
     int distance0;
     int distance1;
     int distance2;
+    int distance3;
     uint kind0;
     uint kind1;
     uint kind2;
+    uint kind3;
+    uint statusEqualityMask;
     uint globalStateId;
-    uint globalIsLava;
-    uint belowIsLava;
+    uint flags;
     uint nearestStateId;
+    uint reserved;
 };
 struct OutputRecord { uint action; uint stateId; uint schedule; uint reserved; };
 
@@ -31,6 +35,9 @@ const uint LAVA = 2u;
 const uint RETURN_DEFAULT = 0u;
 const uint RETURN_STATE = 1u;
 const uint CPU_FALLBACK = 2u;
+const uint FLAG_GLOBAL_LAVA = 1u;
+const uint FLAG_BELOW_LAVA = 2u;
+const uint FLAG_C2ME_AQUIFER = 4u;
 const float PRECISION_EPSILON = 5.0e-3;
 const float FLOWING_UPDATE_SIMILARITY = 1.0 - float(12 * 12 - 10 * 10) / 25.0;
 
@@ -61,6 +68,10 @@ void emit(uint i, uint action, uint stateId, uint schedule) {
     values[i].reserved = 0u;
 }
 
+bool sameStatus(InputRecord r, uint bit) {
+    return (r.statusEqualityMask & (1u << bit)) != 0u;
+}
+
 void main() {
     uint i = gl_GlobalInvocationID.x;
     if (i >= count) return;
@@ -73,7 +84,7 @@ void main() {
         emit(i, RETURN_DEFAULT, 0u, 0u);
         return;
     }
-    if (r.globalIsLava != 0u) {
+    if ((r.flags & FLAG_GLOBAL_LAVA) != 0u) {
         emit(i, RETURN_STATE, r.globalStateId, 0u);
         return;
     }
@@ -82,13 +93,17 @@ void main() {
         return;
     }
 
+    bool c2meAquifer = (r.flags & FLAG_C2ME_AQUIFER) != 0u;
     float similarity01 = similarity(r.distance0, r.distance1);
+    float similarity02 = similarity(r.distance0, r.distance2);
+    float similarity12 = similarity(r.distance1, r.distance2);
     if (similarity01 <= 0.0) {
         emit(i, RETURN_STATE, r.nearestStateId,
-                similarity01 >= FLOWING_UPDATE_SIMILARITY ? 1u : 0u);
+                similarity01 >= FLOWING_UPDATE_SIMILARITY
+                        && (!c2meAquifer || !sameStatus(r, 0u)) ? 1u : 0u);
         return;
     }
-    if (r.kind0 == WATER && r.belowIsLava != 0u) {
+    if (r.kind0 == WATER && (r.flags & FLAG_BELOW_LAVA) != 0u) {
         emit(i, RETURN_STATE, r.nearestStateId, 1u);
         return;
     }
@@ -105,7 +120,6 @@ void main() {
         return;
     }
 
-    float similarity02 = similarity(r.distance0, r.distance2);
     if (similarity02 > 0.0) {
         float contribution02 = similarity01 * similarity02 * pressure(r.y,
                 r.level0, r.level2, r.kind0, r.kind2, r.barrier);
@@ -120,9 +134,9 @@ void main() {
         }
     }
 
-    float similarity12 = similarity(r.distance1, r.distance2);
     if (similarity12 > 0.0) {
-        float contribution12 = similarity12 * pressure(r.y,
+        float contribution12 = (c2meAquifer ? similarity01 * similarity12 : similarity12)
+                * pressure(r.y,
                 r.level1, r.level2, r.kind1, r.kind2, r.barrier);
         float thirdResult = r.density + contribution12;
         if (abs(thirdResult) <= PRECISION_EPSILON) {
@@ -134,5 +148,16 @@ void main() {
             return;
         }
     }
-    emit(i, RETURN_STATE, r.nearestStateId, 1u);
+    if (!c2meAquifer) {
+        emit(i, RETURN_STATE, r.nearestStateId, 1u);
+        return;
+    }
+    bool mayFlow01 = !sameStatus(r, 0u);
+    bool mayFlow12 = similarity12 >= FLOWING_UPDATE_SIMILARITY && !sameStatus(r, 3u);
+    bool mayFlow02 = similarity02 >= FLOWING_UPDATE_SIMILARITY && !sameStatus(r, 1u);
+    bool schedule = mayFlow01 || mayFlow12 || mayFlow02
+            || (similarity02 >= FLOWING_UPDATE_SIMILARITY
+            && similarity(r.distance0, r.distance3) >= FLOWING_UPDATE_SIMILARITY
+            && !sameStatus(r, 2u));
+    emit(i, RETURN_STATE, r.nearestStateId, schedule ? 1u : 0u);
 }

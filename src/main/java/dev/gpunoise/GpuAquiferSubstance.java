@@ -5,7 +5,7 @@ import java.nio.ByteOrder;
 
 /** Packed contract and double-precision reference for vanilla aquifer results. */
 public final class GpuAquiferSubstance {
-    public static final int RECORD_BYTES = 64;
+    public static final int RECORD_BYTES = 80;
     public static final int OUTPUT_INTS = 4;
     public static final int MAX_QUERIES = GpuAquiferNearestThree.MAX_QUERIES;
     public static final int OTHER = 0;
@@ -28,12 +28,14 @@ public final class GpuAquiferSubstance {
         ByteBuffer packed = ByteBuffer.allocateDirect(inputs.length * RECORD_BYTES)
                 .order(ByteOrder.nativeOrder());
         for (Input input : inputs) {
-            packed.putFloat((float) input.density).putFloat((float) input.barrier)
-                    .putInt(input.y).putInt(input.level0).putInt(input.level1).putInt(input.level2)
-                    .putInt(input.distance0).putInt(input.distance1).putInt(input.distance2)
-                    .putInt(input.kind0).putInt(input.kind1).putInt(input.kind2)
-                    .putInt(input.globalStateId).putInt(input.globalIsLava ? 1 : 0)
-                    .putInt(input.belowIsLava ? 1 : 0).putInt(input.nearestStateId);
+            int flags = (input.globalIsLava ? 1 : 0) | (input.belowIsLava ? 2 : 0)
+                    | (input.c2meAquifer ? 4 : 0);
+            packed.putFloat((float) input.density).putFloat((float) input.barrier).putInt(input.y)
+                    .putInt(input.level0).putInt(input.level1).putInt(input.level2).putInt(input.level3)
+                    .putInt(input.distance0).putInt(input.distance1).putInt(input.distance2).putInt(input.distance3)
+                    .putInt(input.kind0).putInt(input.kind1).putInt(input.kind2).putInt(input.kind3)
+                    .putInt(input.statusEqualityMask).putInt(input.globalStateId).putInt(flags)
+                    .putInt(input.nearestStateId).putInt(0);
         }
         return packed.flip();
     }
@@ -47,9 +49,12 @@ public final class GpuAquiferSubstance {
             return output(CPU_FALLBACK, 0, false);
 
         double similarity01 = similarity(input.distance0, input.distance1);
+        double similarity02 = similarity(input.distance0, input.distance2);
+        double similarity12 = similarity(input.distance1, input.distance2);
         if (similarity01 <= 0.0) {
             return output(RETURN_STATE, input.nearestStateId,
-                    similarity01 >= FLOWING_UPDATE_SIMILARITY);
+                    similarity01 >= FLOWING_UPDATE_SIMILARITY
+                            && (!input.c2meAquifer || !sameStatus(input, 0, 1)));
         }
         if (input.kind0 == WATER && input.belowIsLava)
             return output(RETURN_STATE, input.nearestStateId, true);
@@ -60,7 +65,6 @@ public final class GpuAquiferSubstance {
         if (nearThreshold(firstResult)) return output(CPU_FALLBACK, 0, false);
         if (firstResult > 0.0) return output(RETURN_DEFAULT, 0, false);
 
-        double similarity02 = similarity(input.distance0, input.distance2);
         if (similarity02 > 0.0) {
             double contribution02 = similarity01 * similarity02
                     * pressure(input.y, input.level0, input.level2,
@@ -70,16 +74,24 @@ public final class GpuAquiferSubstance {
             if (secondResult > 0.0) return output(RETURN_DEFAULT, 0, false);
         }
 
-        double similarity12 = similarity(input.distance1, input.distance2);
         if (similarity12 > 0.0) {
-            double contribution12 = similarity12
+            double contribution12 = (input.c2meAquifer ? similarity01 * similarity12 : similarity12)
                     * pressure(input.y, input.level1, input.level2,
                             input.kind1, input.kind2, input.barrier);
             double thirdResult = input.density + contribution12;
             if (nearThreshold(thirdResult)) return output(CPU_FALLBACK, 0, false);
             if (thirdResult > 0.0) return output(RETURN_DEFAULT, 0, false);
         }
-        return output(RETURN_STATE, input.nearestStateId, true);
+        if (!input.c2meAquifer) return output(RETURN_STATE, input.nearestStateId, true);
+
+        boolean mayFlow01 = !sameStatus(input, 0, 1);
+        boolean mayFlow12 = similarity12 >= FLOWING_UPDATE_SIMILARITY && !sameStatus(input, 1, 2);
+        boolean mayFlow02 = similarity02 >= FLOWING_UPDATE_SIMILARITY && !sameStatus(input, 0, 2);
+        boolean schedule = mayFlow01 || mayFlow12 || mayFlow02
+                || (similarity02 >= FLOWING_UPDATE_SIMILARITY
+                && similarity(input.distance0, input.distance3) >= FLOWING_UPDATE_SIMILARITY
+                && !sameStatus(input, 0, 3));
+        return output(RETURN_STATE, input.nearestStateId, schedule);
     }
 
     static double similarity(int firstDistance, int secondDistance) {
@@ -110,10 +122,35 @@ public final class GpuAquiferSubstance {
         return new int[]{action, stateId, schedule ? 1 : 0, 0};
     }
 
+    private static boolean sameStatus(Input input, int first, int second) {
+        int bit = switch (first * 4 + second) {
+            case 1, 4 -> 0;
+            case 2, 8 -> 1;
+            case 3, 12 -> 2;
+            case 6, 9 -> 3;
+            case 7, 13 -> 4;
+            case 11, 14 -> 5;
+            default -> throw new IllegalArgumentException("invalid aquifer status pair");
+        };
+        return (input.statusEqualityMask & (1 << bit)) != 0;
+    }
+
     public record Input(double density, double barrier, int y,
-                 int level0, int level1, int level2,
-                 int distance0, int distance1, int distance2,
-                 int kind0, int kind1, int kind2,
-                 int globalStateId, boolean globalIsLava, boolean belowIsLava,
-                 int nearestStateId) {}
+                 int level0, int level1, int level2, int level3,
+                 int distance0, int distance1, int distance2, int distance3,
+                 int kind0, int kind1, int kind2, int kind3,
+                 int statusEqualityMask, int globalStateId, boolean globalIsLava,
+                 boolean belowIsLava, boolean c2meAquifer, int nearestStateId) {
+        public Input(double density, double barrier, int y,
+                     int level0, int level1, int level2,
+                     int distance0, int distance1, int distance2,
+                     int kind0, int kind1, int kind2,
+                     int globalStateId, boolean globalIsLava, boolean belowIsLava,
+                     int nearestStateId) {
+            this(density, barrier, y, level0, level1, level2, 0,
+                    distance0, distance1, distance2, 0,
+                    kind0, kind1, kind2, OTHER, 0, globalStateId,
+                    globalIsLava, belowIsLava, false, nearestStateId);
+        }
+    }
 }

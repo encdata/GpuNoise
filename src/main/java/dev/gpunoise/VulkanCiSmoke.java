@@ -490,18 +490,40 @@ public final class VulkanCiSmoke {
             }
             if (!java.util.Arrays.deepEquals(plannedCenters, expectedCenters))
                 throw new IllegalStateException("Aquifer positional-random neighborhood mismatch");
+            int[][] plannedC2meCenters = GpuAquiferNearestThree.centersForC2meQuery(
+                    positionalRandom, negativeQuery);
+            int[][] expectedC2meCenters = new int[GpuAquiferNearestThree.CANDIDATES][3];
+            int c2meIndex = 0;
+            for (int gy = -1; gy <= 1; gy++) {
+                for (int gz = 0; gz <= 1; gz++) {
+                    for (int gx = 0; gx <= 1; gx++) {
+                        RandomSource random = positionalRandom.at(baseX + gx, baseY + gy, baseZ + gz);
+                        expectedC2meCenters[c2meIndex++] = new int[]{(baseX + gx) * 16 + random.nextInt(10),
+                                (baseY + gy) * 12 + random.nextInt(9), (baseZ + gz) * 16 + random.nextInt(10)};
+                    }
+                }
+            }
+            if (!java.util.Arrays.deepEquals(plannedC2meCenters, expectedC2meCenters))
+                throw new IllegalStateException("C2ME aquifer positional-random scan order mismatch");
             // Four equal-distance centers pin vanilla's inclusive tie order
             // across all three nearest slots.
             centers[0][0] = new int[]{queries[0][0] + 1, queries[0][1], queries[0][2]};
             centers[0][1] = new int[]{queries[0][0] - 1, queries[0][1], queries[0][2]};
             centers[0][2] = new int[]{queries[0][0], queries[0][1] + 1, queries[0][2]};
             centers[0][3] = new int[]{queries[0][0], queries[0][1], queries[0][2] + 1};
+            for (int i = 4; i < GpuAquiferNearestThree.CANDIDATES; i++)
+                centers[0][i] = new int[]{queries[0][0] + 100 + i,
+                        queries[0][1] + 100 + i, queries[0][2] + 100 + i};
+            int[] expectedTieOrder = {3, 2, 1, 0, 1, 1, 1, 1, 0, 0, 0, 0};
+            if (!java.util.Arrays.equals(expectedTieOrder,
+                    GpuAquiferNearestThree.select(queries[0], centers[0])))
+                throw new IllegalStateException("Aquifer equal-distance center order differs from vanilla");
             ByteBuffer nearestInput = GpuAquiferNearestThree.pack(queries, centers);
             ByteBuffer queuedGridMetadata = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder());
             queuedGridMetadata.putInt(-16).putInt(-8).putInt(32)
                     .putInt(2).putInt(2).putInt(2).putInt(1).putInt(1).flip();
             var queuedGrid = ring.submitGraphRootsGrid(graph, queuedGridMetadata, 1, 8);
-            System.out.println("Vulkan CI smoke: dispatching aquifer nearest-three selection");
+            System.out.println("Vulkan CI smoke: dispatching four-center aquifer selection");
             var nearestFuture = ring.submitAquiferNearestThree(nearestInput, queryCount);
             GpuAquiferSubstance.Input[] substanceCases = {
                     new GpuAquiferSubstance.Input(0.2, 0.25, 50,
@@ -530,6 +552,21 @@ public final class VulkanCiSmoke {
                             40, 24, 12, 10, 55, 60,
                             GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
                             GpuAquiferSubstance.OTHER, 0, false, false, 413),
+                    new GpuAquiferSubstance.Input(-0.2, 0.25, 50,
+                            40, 24, 12, 0, 10, 35, 60, 0,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            1, 0, false, false, true, 414),
+                    new GpuAquiferSubstance.Input(-0.2, 0.25, 50,
+                            40, 24, 12, 0, 10, 35, 60, 0,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            0, 0, false, false, true, 415),
+                    new GpuAquiferSubstance.Input(-0.2, 0.25, 50,
+                            40, 40, 40, 40, 1, 2, 3, 4,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            0b111111, 0, false, false, true, 416),
                     new GpuAquiferSubstance.Input(-0.2, 0.25, 50,
                             40, 24, 12, 10, 11, 12,
                             GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
@@ -566,13 +603,13 @@ public final class VulkanCiSmoke {
             int[] nearest = nearestFuture.get(60, TimeUnit.SECONDS);
             int[] substanceResults = substanceFuture.get(60, TimeUnit.SECONDS);
             assertConstantResults("queued terrain grid", queuedGrid.get(60, TimeUnit.SECONDS), 8);
-            System.out.println("Vulkan CI smoke: aquifer nearest-three selection completed");
+            System.out.println("Vulkan CI smoke: four-center aquifer selection completed");
             for (int q = 0; q < queryCount; q++) {
                 int[] expected = GpuAquiferNearestThree.select(queries[q], centers[q]);
                 for (int field = 0; field < GpuAquiferNearestThree.OUTPUT_INTS; field++) {
                     int actual = nearest[q * GpuAquiferNearestThree.OUTPUT_INTS + field];
                     if (actual != expected[field]) {
-                        throw new IllegalStateException("Aquifer nearest-three mismatch at query " + q
+                        throw new IllegalStateException("Aquifer four-center selection mismatch at query " + q
                                 + ", field " + field + ": expected " + expected[field] + ", got " + actual);
                     }
                 }
@@ -591,7 +628,7 @@ public final class VulkanCiSmoke {
         }
 
         System.out.println("Vulkan CI smoke passed on " + device.name()
-                + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, and shared 12-root terrain lattices; aquifer pressure, nearest-three selection, and substance decisions matched Java reference cases.");
+                + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, and shared 12-root terrain lattices; aquifer pressure, four-center selection, and vanilla/C2ME substance decisions matched Java reference cases.");
     }
 
     private static void verifyTranslatorRegistry() {

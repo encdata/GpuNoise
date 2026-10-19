@@ -50,8 +50,8 @@ public final class GpuWorldgenDependency {
 
     /**
      * Validates candidate coordinates against this strict dependency and sends
-     * bounded nearest-center batches to Vulkan. Each output row contains three
-     * center indices, their squared distances, and two reserved words.
+     * bounded nearest-center batches to Vulkan. Each output row contains four
+     * center indices, their squared distances, and four reserved words.
      */
     public CompletionStage<int[]> selectNearestAquiferCenters(PositionalRandomFactory factory,
                                                                int[][] blockQueries) {
@@ -69,8 +69,11 @@ public final class GpuWorldgenDependency {
             int batchCount = Math.min(GpuAquiferNearestThree.MAX_QUERIES, blockQueries.length - offset);
             int[][] queries = Arrays.copyOfRange(blockQueries, offset, offset + batchCount);
             int[][][] centers = new int[batchCount][][];
+            boolean c2meAquifer = GpuAquiferRuntimeMode.c2meAquiferRewriteEnabled();
             for (int i = 0; i < batchCount; i++) {
-                centers[i] = GpuAquiferNearestThree.centersForQuery(factory, queries[i]);
+                centers[i] = c2meAquifer
+                        ? GpuAquiferNearestThree.centersForC2meQuery(factory, queries[i])
+                        : GpuAquiferNearestThree.centersForQuery(factory, queries[i]);
                 for (int[] center : centers[i]) {
                     if (!contains(center[0], center[1], center[2]))
                         return CompletableFuture.failedStage(new IllegalStateException(
