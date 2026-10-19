@@ -184,6 +184,16 @@ double javaFloatOperation(uint operation,double leftValue,double rightValue){
         else if(isinf(right))result=left;
         else result=float(double(left)-trunc(double(left)/double(right))*double(right));
     }
+    else if(operation==8u){
+        if(isnan(left)||isnan(right))result=uintBitsToFloat(0x7fc00000u);
+        else if(left==0.0&&right==0.0)result=(((floatBitsToUint(left)|floatBitsToUint(right))&0x80000000u)!=0u)?-0.0:0.0;
+        else result=left<right?left:right;
+    }
+    else if(operation==9u){
+        if(isnan(left)||isnan(right))result=uintBitsToFloat(0x7fc00000u);
+        else if(left==0.0&&right==0.0)result=(((floatBitsToUint(left)&floatBitsToUint(right))&0x80000000u)!=0u)?-0.0:0.0;
+        else result=left>right?left:right;
+    }
     return double(result);
 }
 double javaNumericCast(uint operation,double value){

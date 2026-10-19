@@ -147,6 +147,11 @@ public final class VulkanCiSmoke {
                     new float[]{0.0f, 1.0f, 0.0f, 1.0f, 2.0f, 3.0f});
             assertNumericFixture(ring, GpuDensityExpressionSmoke.floatMathFixture(),
                     "float Math and Mth.square", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.floatMinMaxEdgeFixture(),
+                    "float Math.min/max NaN and signed zero",
+                    new float[]{1.0f, 1.0f, 0.0f, 0.0f},
+                    new float[]{-1.0f, -1.0f, 0.0f, 0.0f},
+                    new float[]{0.0f, 1.0f, 2.0f, 3.0f});
             assertNumericFixture(ring, GpuDensityExpressionSmoke.dynamicClampFixture(),
                     "dynamic double/float Mth.clamp", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.transcendentalMathFixture(),

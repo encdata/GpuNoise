@@ -76,6 +76,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new FloatMathDensity());
     }
 
+    static VulkanBranchFixture floatMinMaxEdgeFixture() {
+        return graphFixture(new FloatMinMaxEdgeDensity());
+    }
+
     static VulkanBranchFixture dynamicClampFixture() {
         return graphFixture(new DynamicClampDensity());
     }
@@ -750,6 +754,8 @@ final class GpuDensityExpressionSmoke {
     }
 
     private static void verifyBytecodeFrontend() {
+        verifyStandaloneMath(new FloatMathDensity(), "float Math.min/max");
+        verifyStandaloneMath(new FloatMinMaxEdgeDensity(), "float Math.min/max NaN and signed zero");
         NormalNoise noise = NormalNoise.create(RandomSource.create(811L), -2, 1.0, 0.5);
         DensityFunction accessorDensity = new DensityAccessorFunction(
                 new ConstantReferenceDensity(0.125));
@@ -1576,6 +1582,21 @@ final class GpuDensityExpressionSmoke {
             return Math.min(x * 0.125F, Math.max(z * -0.25F, -2.5F)) * 0.1
                     + Math.abs(z * -0.03125F) * 0.05
                     + net.minecraft.util.Mth.square(x * 0.0078125F) * 0.125;
+        }
+    }
+
+    private static final class FloatMinMaxEdgeDensity extends NumericSmokeDensity {
+        @Override public double compute(FunctionContext context) {
+            float xZero = context.blockX() * -0.0F;
+            float yZero = context.blockY() * -0.0F;
+            float nan = (float) context.blockX() / (float) context.blockY();
+            return switch (context.blockZ()) {
+                case 0 -> Math.min(xZero, yZero);
+                case 1 -> Math.max(xZero, yZero);
+                case 2 -> Math.min(nan, xZero);
+                case 3 -> Math.max(yZero, nan);
+                default -> Math.min(xZero, yZero);
+            };
         }
     }
 

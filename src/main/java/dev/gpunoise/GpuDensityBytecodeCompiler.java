@@ -1065,6 +1065,13 @@ final class GpuDensityBytecodeCompiler {
                 stack.add(Value.value(result, constant));
                 return;
             }
+            if ((owner.equals("java/lang/Math") || owner.equals("java/lang/StrictMath")
+                    || owner.equals("net/minecraft/util/Mth")) && descriptor.equals("(FF)F")
+                    && arguments.length == 2 && (name.equals("min") || name.equals("max"))) {
+                stack.add(floatMathBinary(name.equals("min") ? "FMIN" : "FMAX",
+                        arguments[0], arguments[1]));
+                return;
+            }
             if ((owner.equals("java/lang/Math") || owner.equals("java/lang/StrictMath"))
                     && name.equals("atan2") && descriptor.equals("(DD)D")
                     && arguments.length == 2) {
@@ -1384,6 +1391,8 @@ final class GpuDensityBytecodeCompiler {
                     case "FMUL" -> a * b;
                     case "FDIV" -> a / b;
                     case "FCOPY_SIGN" -> Math.copySign(a, b);
+                    case "FMIN" -> Math.min(a, b);
+                    case "FMAX" -> Math.max(a, b);
                     default -> throw new AssertionError(operation);
                 };
                 if (Float.isFinite(result)) constant = (double) result;

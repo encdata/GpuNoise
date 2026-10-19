@@ -477,6 +477,8 @@ final class GpuDensityGraphBuffer {
             case "FDIV" -> 4;
             case "FREM" -> 5;
             case "FCOPY_SIGN" -> 7;
+            case "FMIN" -> 8;
+            case "FMAX" -> 9;
             case "FNEG" -> 6;
             case "I2F" -> 1;
             case "D2F" -> 2;
