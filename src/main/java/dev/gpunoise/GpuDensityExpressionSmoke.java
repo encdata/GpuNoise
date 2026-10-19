@@ -428,6 +428,24 @@ final class GpuDensityExpressionSmoke {
         }
         GpuDensityGraphBuffer.pack(deduplicated);
 
+        DensityFunction interpolationSource = DensityFunctions.constant(2.0);
+        DensityFunction interpolationMarker = DensityFunctions.constant(2.0);
+        DensityFunction otherInput = DensityFunctions.constant(3.0);
+        DensityFunction combined = DensityFunctions.constant(5.0);
+        GpuDensityGraph markerGraph = GpuDensityGraphLowerer.lower(new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{2.0}, null),
+                        new GpuDensityGraph.Node("Marker", new int[]{0}, new double[0], "Interpolated"),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{3.0}, null),
+                        new GpuDensityGraph.Node("GpuMath", new int[]{1, 2}, new double[0], "ADD")),
+                new int[]{3}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(interpolationSource, interpolationMarker, otherInput, combined)));
+        GpuDensityGraphBuffer.Packed markerPacked = GpuDensityGraphBuffer.pack(markerGraph);
+        int markerChildFlags = markerPacked.nodes().getInt(36);
+        if ((markerChildFlags & GpuDensityGraphBuffer.BLOCK_SKIP_FLAG) == 0) {
+            throw new AssertionError("block pass should skip a node used only by an interpolated marker");
+        }
+
         DensityFunction first = DensityFunctions.constant(1.0);
         DensityFunction second = DensityFunctions.constant(2.0);
         GpuDensityGraph source = new GpuDensityGraph(

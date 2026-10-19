@@ -126,8 +126,9 @@ public final class GpuNoise {
             try {
                 GpuDensityGraph fullGraph = GpuDensityGraphLowerer.lower(GpuDensityGraphCompiler.compile(router));
                 GpuDensityGraphBuffer.Packed packedGraph = GpuDensityGraphBuffer.pack(fullGraph);
-                LOGGER.info("GPU density graph discovered: {} nodes, {} router roots, {} noise samplers; packed {} bytes for GPU lowering.",
-                        fullGraph.nodes().size(), fullGraph.routerRoots().length, fullGraph.noises().size(), packedGraph.nodes().capacity());
+                LOGGER.info("GPU density graph discovered: {} nodes, {} router roots, {} noise samplers; block pass skips {} marker-only nodes; packed {} bytes for GPU lowering.",
+                        fullGraph.nodes().size(), fullGraph.routerRoots().length, fullGraph.noises().size(),
+                        packedGraph.blockSkippedNodeCount(), packedGraph.nodes().capacity());
                 if (VulkanComputeProbe.supportsFloat64(device)) {
                     VulkanBootstrapThread.callUnchecked(() -> {
                         GpuTerrainRuntime.verifyGraph(fullGraph, router);

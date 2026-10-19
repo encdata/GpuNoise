@@ -10,12 +10,13 @@ import net.minecraft.world.level.levelgen.synth.NormalNoise;
 final class GpuDensityGraphBuffer {
     static final int NODE_BYTES = 48;
     static final int MAX_SHADER_REGISTERS = 256;
+    static final int BLOCK_SKIP_FLAG = 0x8000_0000;
     private static final int MTH_SIN_TABLE_SIZE = 65_536;
     private static final float[] MTH_SIN_TABLE = createMthSinTable();
     private static final ByteBuffer MTH_SIN_TABLE_BYTES = createMthSinTableBytes();
     record Packed(ByteBuffer nodes, ByteBuffer permutations, ByteBuffer octaves,
                   ByteBuffer samplerMetadata, ByteBuffer splinePoints, ByteBuffer blendedMetadata,
-                  int nodeCount, int samplerCount, int blendedCount) {}
+                  int nodeCount, int samplerCount, int blendedCount, int blockSkippedNodeCount) {}
 
     private static final Map<String, Integer> OPCODES = Map.ofEntries(
             Map.entry("Constant", 1), Map.entry("Noise", 2), Map.entry("Ap2", 3),
@@ -61,8 +62,10 @@ final class GpuDensityGraphBuffer {
         }
         ByteBuffer output = ByteBuffer.allocateDirect(Math.multiplyExact(graph.nodes().size(), NODE_BYTES))
                 .order(ByteOrder.nativeOrder());
+        boolean[] blockSkip = blockEvaluationSkipMask(graph);
         int interpolationSlot = 0;
-        for (GpuDensityGraph.Node node : graph.nodes()) {
+        for (int nodeIndex = 0; nodeIndex < graph.nodes().size(); nodeIndex++) {
+            GpuDensityGraph.Node node = graph.nodes().get(nodeIndex);
             Integer opcode = OPCODES.get(node.opcode());
             if (opcode == null) throw new IllegalArgumentException("No GPU opcode for " + node.opcode());
             int[] children = node.children();
@@ -75,7 +78,8 @@ final class GpuDensityGraphBuffer {
             if (node.opcode().equals("Marker")) {
                 metadataZ = "Interpolated".equals(node.payload()) ? interpolationSlot++ : -1;
             }
-            output.putInt(operation(node.payload())).putInt(children.length).putInt(metadataZ).putInt(node.register());
+            int metadataY = children.length | (blockSkip[nodeIndex] ? BLOCK_SKIP_FLAG : 0);
+            output.putInt(operation(node.payload())).putInt(metadataY).putInt(metadataZ).putInt(node.register());
         }
         ByteBuffer splinePoints = ByteBuffer.allocateDirect(graph.splines().size() * 64 * 16).order(ByteOrder.nativeOrder());
         for (int splineIndex = 0; splineIndex < graph.splines().size(); splineIndex++) {
@@ -140,9 +144,67 @@ final class GpuDensityGraphBuffer {
                     .putDouble(value.smearScaleMultiplier());
             for (int i = 0; i < 6; i++) blendedMetadata.putInt(0); // pad record to 192 bytes
         }
+        int blockSkippedNodeCount = 0;
+        for (boolean skip : blockSkip) if (skip) blockSkippedNodeCount++;
         return new Packed((ByteBuffer) output.flip(), (ByteBuffer) permutations.flip(),
                 (ByteBuffer) octaves.flip(), (ByteBuffer) metadata.flip(), (ByteBuffer) splinePoints.flip(),
-                (ByteBuffer) blendedMetadata.flip(), graph.nodes().size(), samplers.size(), graph.blended().size());
+                (ByteBuffer) blendedMetadata.flip(), graph.nodes().size(), samplers.size(), graph.blended().size(),
+                blockSkippedNodeCount);
+    }
+
+    /**
+     * Marks instructions that cannot affect a block-evaluation output. An
+     * interpolated marker's child is intentionally not a dependency in the
+     * block pass because that marker is supplied from the cell-corner pass.
+     */
+    private static boolean[] blockEvaluationSkipMask(GpuDensityGraph graph) {
+        List<GpuDensityGraph.Node> nodes = graph.nodes();
+        int[] lastProducer = new int[graph.registerCount()];
+        java.util.Arrays.fill(lastProducer, -1);
+        int[][] childProducers = new int[nodes.size()][];
+        for (int index = 0; index < nodes.size(); index++) {
+            GpuDensityGraph.Node node = nodes.get(index);
+            int[] children = node.children();
+            int[] producers = new int[children.length];
+            for (int child = 0; child < children.length; child++) {
+                int register = children[child];
+                if (register < 0 || register >= lastProducer.length || lastProducer[register] < 0) {
+                    throw new IllegalArgumentException("GPU node " + index
+                            + " reads a register before it is produced: " + register);
+                }
+                producers[child] = lastProducer[register];
+            }
+            childProducers[index] = producers;
+            if (node.register() < 0 || node.register() >= lastProducer.length) {
+                throw new IllegalArgumentException("GPU node " + index
+                        + " writes an invalid register: " + node.register());
+            }
+            lastProducer[node.register()] = index;
+        }
+
+        boolean[] active = new boolean[nodes.size()];
+        java.util.ArrayDeque<Integer> work = new java.util.ArrayDeque<>();
+        int[] roots = graph.routerRoots();
+        for (int root = 0; root < roots.length; root++) {
+            if (!graph.supportsRouterRoot(root)) continue;
+            int register = roots[root];
+            if (register < 0 || register >= lastProducer.length || lastProducer[register] < 0) {
+                throw new IllegalArgumentException("GPU router root " + root
+                        + " reads an invalid register: " + register);
+            }
+            work.addLast(lastProducer[register]);
+        }
+        while (!work.isEmpty()) {
+            int index = work.removeLast();
+            if (active[index]) continue;
+            active[index] = true;
+            GpuDensityGraph.Node node = nodes.get(index);
+            if (node.opcode().equals("Marker") && "Interpolated".equals(node.payload())) continue;
+            for (int producer : childProducers[index]) work.addLast(producer);
+        }
+        boolean[] skip = new boolean[nodes.size()];
+        for (int index = 0; index < skip.length; index++) skip[index] = !active[index];
+        return skip;
     }
 
     private static int perlinPermutationBytes(MinecraftPerlinData data) {
