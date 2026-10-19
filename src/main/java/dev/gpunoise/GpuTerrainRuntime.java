@@ -193,7 +193,8 @@ public final class GpuTerrainRuntime {
     public static java.util.concurrent.CompletableFuture<GpuChunkDensityCache> prepareChunk(
             Blender blender, RandomState randomState, StructureManager structures, ChunkAccess chunk,
             int minCellY, int cellCountY, NoiseSettings settings) {
-        if (!gpuOnlyWorldgenAvailable() || !matchesTerrainRouter(randomState) || cellCountY <= 0) {
+        if (!gpuOnlyWorldgenAvailable() || !matchesTerrainRouter(randomState)
+                || blender != Blender.empty() || cellCountY <= 0) {
             cpuFallbackChunks.incrementAndGet();
             return java.util.concurrent.CompletableFuture.failedFuture(
                     new IllegalStateException("GPU terrain pipeline is unavailable"));
@@ -215,8 +216,9 @@ public final class GpuTerrainRuntime {
     }
 
     public static java.util.concurrent.CompletableFuture<GpuChunkDensityCache> prepareChunkForBiomes(
-            RandomState randomState, ChunkAccess chunk, NoiseSettings settings) {
-        if (!gpuOnlyWorldgenAvailable() || !matchesTerrainRouter(randomState)) {
+            Blender blender, RandomState randomState, ChunkAccess chunk, NoiseSettings settings) {
+        if (!gpuOnlyWorldgenAvailable() || !matchesTerrainRouter(randomState)
+                || blender != Blender.empty()) {
             return java.util.concurrent.CompletableFuture.failedFuture(
                     new IllegalStateException("GPU terrain pipeline is unavailable"));
         }

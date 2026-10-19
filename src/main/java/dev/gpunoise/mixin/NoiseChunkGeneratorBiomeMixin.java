@@ -39,7 +39,7 @@ abstract class NoiseChunkGeneratorBiomeMixin {
         }
         NoiseSettings settings = generatorSettings().value().noiseSettings()
                 .clampToHeightAccessor(chunk.getHeightAccessorForGeneration());
-        return GpuTerrainRuntime.prepareChunkForBiomes(randomState, chunk, settings).thenComposeAsync(cache -> {
+        return GpuTerrainRuntime.prepareChunkForBiomes(blender, randomState, chunk, settings).thenComposeAsync(cache -> {
             // createBiomes() schedules its real work in its own supplyAsync
             // task. A ThreadLocal bound around original.call() would not be
             // visible there and could remain attached to this worker. The
