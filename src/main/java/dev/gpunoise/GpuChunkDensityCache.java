@@ -94,13 +94,18 @@ public final class GpuChunkDensityCache {
     }
 
     public static void prefetch(int minX, int minZ, NoiseSettings settings) {
-        PREFETCHED.computeIfAbsent(chunkKey(minX >> 4, minZ >> 4),
-                ignored -> new GpuChunkDensityCache(minX, minZ, settings, null));
+        prefetchOwned(minX, minZ, () -> new GpuChunkDensityCache(minX, minZ, settings, null));
     }
 
     public static void prefetchStrict(int minX, int minZ, NoiseSettings settings, PositionalRandomFactory aquiferRandom) {
-        PREFETCHED.computeIfAbsent(chunkKey(minX >> 4, minZ >> 4),
-                ignored -> createStrict(minX, minZ, settings, aquiferRandom));
+        prefetchOwned(minX, minZ, () -> createStrict(minX, minZ, settings, aquiferRandom));
+    }
+
+    private static void prefetchOwned(int minX, int minZ, java.util.function.Supplier<GpuChunkDensityCache> creator) {
+        long key = chunkKey(minX >> 4, minZ >> 4);
+        if (PREFETCHED.containsKey(key)) return;
+        GpuChunkDensityCache cache = GpuTerrainAreaRegistry.claim(minX, minZ, creator);
+        PREFETCHED.putIfAbsent(key, cache);
     }
 
     /**
@@ -116,7 +121,9 @@ public final class GpuChunkDensityCache {
                 if (dx == 0 && dz == 0) continue;
                 int minX = centerMinX + dx * 16;
                 int minZ = centerMinZ + dz * 16;
-                GpuTerrainAreaRegistry.claim(minX, minZ, () -> create(minX, minZ, settings));
+                GpuChunkDensityCache cache = GpuTerrainAreaRegistry.tryClaim(
+                        minX, minZ, () -> create(minX, minZ, settings));
+                if (cache != null) putPrefetched(minX, minZ, cache);
             }
         }
     }
@@ -145,6 +152,14 @@ public final class GpuChunkDensityCache {
 
     public static void putPrefetched(int minX, int minZ, GpuChunkDensityCache cache) {
         PREFETCHED.put(chunkKey(minX >> 4, minZ >> 4), cache);
+    }
+
+    static void clearPrefetched() {
+        PREFETCHED.clear();
+    }
+
+    static void removePrefetched(GpuChunkDensityCache cache) {
+        PREFETCHED.remove(chunkKey(cache.minX() >> 4, cache.minZ() >> 4), cache);
     }
 
     public CompletionStage<Void> ready() {

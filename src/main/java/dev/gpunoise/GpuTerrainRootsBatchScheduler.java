@@ -28,7 +28,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
             Math.min(MAX_CHUNKS, Long.getLong("gpunoise.terrainBatchTargetChunks", 96L)));
     /** Bound producer bursts without converting temporary overload into CPU fallback. */
     private static final int PENDING_QUEUE_CAPACITY = (int) Math.max(256L,
-            Math.min(16_384L, Long.getLong("gpunoise.terrainQueueCapacity", 4_096L)));
+            Math.min(16_384L, Long.getLong("gpunoise.terrainQueueCapacity", 512L)));
     private static final int MAX_INPUT = PersistentVulkanNormalNoiseEngine.CAPACITY;
     // Give C2ME enough time to enqueue the rest of the local 10x10 area. The
     // deadline is still bounded, so an isolated request is dispatched

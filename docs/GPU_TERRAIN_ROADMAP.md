@@ -126,6 +126,14 @@ parity checks.
   CI correctness runs use 50 ms and verify that the selected batch
   configuration reaches the dedicated server. Batch fill and dispatch latency
   remain available for local runtime profiling; CI does not collect CPS.
+  Retained terrain caches now have a bounded live budget (default 128, tunable
+  with `gpunoise.terrainCacheBudget`); speculative tile prefetch skips work
+  when the budget is full, while requested chunks apply backpressure until a
+  cache is released. The roots queue defaults to 512 pending grids rather than
+  allowing a large producer burst to accumulate thousands of requests. These
+  limits protect full-block output from exhausting the heap under parallel
+  chunk generation; tune them against the target server's memory and profiling
+  data.
   An opt-in `gpunoise.fastMath` shader variant rounds generic density add,
   subtract, multiply, and divide through FP32 while keeping the default
   FP64 path intact. CI runs the full Vulkan parity fixtures and terrain-grid

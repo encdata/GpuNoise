@@ -68,6 +68,7 @@ public final class GpuChunkFillCoordinator implements AutoCloseable {
                 else GpuChunkDensityCache.prefetch(x, z, item.work.settings());
                 item.cache = GpuChunkDensityCache.takePrefetched(x, z);
             } catch (Throwable error) {
+                GpuTerrainRuntime.releaseGpuCache(item.cache);
                 item.result.completeExceptionally(error);
             }
         }
@@ -78,6 +79,7 @@ public final class GpuChunkFillCoordinator implements AutoCloseable {
             if (item.result.isDone()) continue;
             item.cache.ready().whenComplete((ignored, failure) -> {
                 if (failure != null) {
+                    GpuTerrainRuntime.releaseGpuCache(item.cache);
                     item.result.completeExceptionally(failure);
                     return;
                 }
@@ -90,6 +92,7 @@ public final class GpuChunkFillCoordinator implements AutoCloseable {
                             }
                         }, fillExecutor)
                         .whenComplete((chunk, error) -> {
+                            GpuTerrainRuntime.releaseGpuCache(item.cache);
                             if (error != null) item.result.completeExceptionally(error);
                             else item.result.complete(chunk);
                         });
