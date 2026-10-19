@@ -251,7 +251,7 @@ final class GpuDensityGraphLowerer {
                     && Set.of("ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "MIN", "MAX",
                             "EXPR_ADD", "EXPR_SUBTRACT", "EXPR_MULTIPLY", "EXPR_DIVIDE",
                             "EXPR_MIN", "EXPR_MAX", "REMAINDER", "EXPR_REMAINDER", "ATAN2", "EXPR_ATAN2",
-                            "POW", "EXPR_POW")
+                            "POW", "EXPR_POW", "COPY_SIGN", "EXPR_COPY_SIGN")
                             .contains(node.payload());
             case "GpuCompare" -> children == 2 && constants == 0
                     && node.payload() != null && Set.of("EQ", "NE", "LT", "LE", "GT", "GE",

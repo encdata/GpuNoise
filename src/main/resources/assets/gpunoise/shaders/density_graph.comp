@@ -221,6 +221,12 @@ double javaPow(double baseValue,double exponent){
     double magnitude=double(pow(float(abs(baseValue)),float(exponent)));
     return baseValue<0.0&&oddExponent?-magnitude:magnitude;
 }
+double javaCopySign(double magnitude,double sign){
+    uvec2 magnitudeBits=unpackDouble2x32(magnitude);
+    uvec2 signBits=unpackDouble2x32(sign);
+    magnitudeBits.y=(magnitudeBits.y&0x7fffffffu)|(signBits.y&0x80000000u);
+    return packDouble2x32(magnitudeBits);
+}
 double grad64(uint base,int i,dvec3 d){return dot(dvec3(G[perm(base,i)&15u]),d);}
 double improvedSmear64(dvec3 pos, vec4 params, uint base, double yScale, double yMax){
     dvec3 v=pos+dvec3(params.xyz); dvec3 cell=floor(v); dvec3 d=v-cell;
@@ -420,7 +426,7 @@ void main(){
 #endif
         }
         else if(op==20u){v=n.meta.x==0u?pExact.x:(n.meta.x==1u?pExact.y:pExact.z);}
-        else if(op==21u){double x=values[n.ids.y],y=values[n.ids.z];if(n.meta.x==1u)v=graphAdd(x,y);else if(n.meta.x==2u)v=graphSubtract(x,y);else if(n.meta.x==3u)v=graphMultiply(x,y);else if(n.meta.x==4u)v=graphDivide(x,y);else if(n.meta.x==5u)v=javaMin(x,y);else if(n.meta.x==7u)v=javaRemainder(x,y);else if(n.meta.x==8u)v=javaAtan2(x,y);else if(n.meta.x==9u)v=javaPow(x,y);else v=javaMax(x,y);}
+        else if(op==21u){double x=values[n.ids.y],y=values[n.ids.z];if(n.meta.x==1u)v=graphAdd(x,y);else if(n.meta.x==2u)v=graphSubtract(x,y);else if(n.meta.x==3u)v=graphMultiply(x,y);else if(n.meta.x==4u)v=graphDivide(x,y);else if(n.meta.x==5u)v=javaMin(x,y);else if(n.meta.x==7u)v=javaRemainder(x,y);else if(n.meta.x==8u)v=javaAtan2(x,y);else if(n.meta.x==9u)v=javaPow(x,y);else if(n.meta.x==10u)v=javaCopySign(x,y);else v=javaMax(x,y);}
         else if(op==22u)v=compareValues(values[n.ids.y],values[n.ids.z],n.meta.x)?1.0:0.0;
         else if(op==23u)v=values[n.ids.y]!=0.0?values[n.ids.z]:values[n.ids.w];
         else if(op==24u)v=javaIntOperation(n.meta.x,values[n.ids.y],n.meta.x==6u?0.0:values[n.ids.z]);

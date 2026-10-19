@@ -15,7 +15,7 @@ import net.minecraft.world.level.levelgen.synth.NormalNoise;
  * unsupported bytecode remains on the CPU path.
  */
 public final class GpuDensityExpression {
-    public enum Operation { ADD, SUBTRACT, MULTIPLY, DIVIDE, MIN, MAX, REMAINDER, ATAN2, POW }
+    public enum Operation { ADD, SUBTRACT, MULTIPLY, DIVIDE, MIN, MAX, REMAINDER, ATAN2, POW, COPY_SIGN }
     public enum Mapping {
         ABS, SQUARE, CUBE, HALF_NEGATIVE, QUARTER_NEGATIVE, SQUEEZE,
         FLOOR, CEIL, SQRT, SIN, COS, EXP, LOG, TANH, SIN_FLOAT, COS_FLOAT, SQRT_FLOAT
@@ -159,6 +159,7 @@ public final class GpuDensityExpression {
                             && !"MULTIPLY".equals(operation) && !"DIVIDE".equals(operation)
                             && !"ATAN2".equals(operation)
                             && !"POW".equals(operation)
+                            && !"COPY_SIGN".equals(operation)
                             && !"MIN".equals(operation) && !"MAX".equals(operation)
                             && !"REMAINDER".equals(operation)) {
                         return "GpuMath(" + operation + ")";
@@ -222,6 +223,7 @@ public final class GpuDensityExpression {
                         case REMAINDER -> left % right;
                         case ATAN2 -> Math.atan2(left, right);
                         case POW -> Math.pow(left, right);
+                        case COPY_SIGN -> Math.copySign(left, right);
                     };
                 }
                 case "GpuCompare" -> {
@@ -413,6 +415,7 @@ public final class GpuDensityExpression {
                     case REMAINDER -> leftConstant % rightConstant;
                     case ATAN2 -> Math.atan2(leftConstant, rightConstant);
                     case POW -> Math.pow(leftConstant, rightConstant);
+                    case COPY_SIGN -> Math.copySign(leftConstant, rightConstant);
                 };
                 if (Double.isFinite(folded) && (double) (float) folded == folded) return constant(folded);
             }

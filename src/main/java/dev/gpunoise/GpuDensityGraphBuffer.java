@@ -399,6 +399,7 @@ final class GpuDensityGraphBuffer {
             case "REMAINDER", "EXPR_REMAINDER" -> 7;
             case "ATAN2", "EXPR_ATAN2" -> 8;
             case "POW", "EXPR_POW" -> 9;
+            case "COPY_SIGN", "EXPR_COPY_SIGN" -> 10;
             case "EQ" -> 11;
             case "NE" -> 12;
             case "LT" -> 13;

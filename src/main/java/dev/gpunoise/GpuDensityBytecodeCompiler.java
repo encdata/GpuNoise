@@ -882,6 +882,13 @@ final class GpuDensityBytecodeCompiler {
         }
 
         private void mathCall(String owner, String name, String descriptor, Value[] arguments) {
+            if ((owner.equals("java/lang/Math") || owner.equals("java/lang/StrictMath"))
+                    && name.equals("copySign") && descriptor.equals("(DD)D")
+                    && arguments.length == 2) {
+                stack.add(mathBinary(GpuDensityExpression.Operation.COPY_SIGN,
+                        arguments[0], arguments[1]));
+                return;
+            }
             if (owner.equals("net/minecraft/util/Mth") && name.equals("sqrt")
                     && descriptor.equals("(F)F") && arguments.length == 1) {
                 Value input = arguments[0];
@@ -1697,6 +1704,7 @@ final class GpuDensityBytecodeCompiler {
                 case REMAINDER -> a % b;
                 case ATAN2 -> Math.atan2(a, b);
                 case POW -> Math.pow(a, b);
+                case COPY_SIGN -> Math.copySign(a, b);
             };
             return Double.isFinite(result) ? (double) (float) result : null;
         }
