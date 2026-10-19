@@ -422,8 +422,8 @@ void main(){
         else if(op==16u){double x=values[n.ids.y];v=(x>=double(n.params.x)&&x<double(n.params.y))?values[n.ids.z]:values[n.ids.w];}
         else if(op==17u){double rarity=double(spaghettiRarity(float(values[n.ids.y]),n.meta.x==0u?0u:1u));v=rarity*double(abs(normalNoise(p/float(rarity),uint(n.params.x))));}
 #if !defined(GRID_INPUT)
-        uint interpolationCount=interpolatorMap[0];
         if(reserved!=0u){
+            uint interpolationCount=interpolatorMap[0];
             uint interpolationSlot=interpolatorMap[1u+16u+n.meta.w];
             if(interpolationSlot<interpolationCount)
                 v=double(interpolatedInputs[sampleIndex*interpolationCount+interpolationSlot]);
