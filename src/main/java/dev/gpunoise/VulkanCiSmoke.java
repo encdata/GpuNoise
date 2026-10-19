@@ -881,7 +881,7 @@ public final class VulkanCiSmoke {
             GpuDensityExpressionSmoke.VulkanBranchFixture fixture, String label,
             float[] x, float[] y, float[] z) throws Exception {
         float[] actual = ring.submitGraphRoots(fixture.graph(), x, y, z).get(60, TimeUnit.SECONDS);
-        int rootCount = fixture.graph().routerRoots().length;
+        int rootCount = fixture.graph().routerRootCount();
         if (rootCount == 0 || !fixture.graph().supportsRouterRoot(0)) {
             throw new IllegalStateException(label + " has no supported GPU root at output zero");
         }

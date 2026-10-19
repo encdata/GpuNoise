@@ -272,7 +272,7 @@ public final class GpuTerrainRuntime {
     static synchronized void installTerrainGraph(GpuDensityGraph graph, NoiseRouter router) {
         if (engine == null) throw new IllegalStateException("GPU engine is not started");
         if (graph == null || router == null) throw new IllegalArgumentException("terrain graph and router are required");
-        int routerRootCount = graph.routerRoots().length;
+        int routerRootCount = graph.routerRootCount();
         if (routerRootCount > 16) {
             throw new IllegalArgumentException("GPU terrain graph has " + routerRootCount
                     + " roots; the Vulkan root table supports at most 16");
@@ -343,7 +343,7 @@ public final class GpuTerrainRuntime {
                 new IllegalStateException("GPU terrain graph provider is not installed"));
         return ring.submitGraphRootsGrid(metadata, chunkCount, samplesPerChunk)
                 .thenApply(values -> {
-                    int roots = graph.routerRoots().length;
+                    int roots = graph.routerRootCount();
                     int markers = graph.interpolatedMarkerCount();
                     return new GpuTerrainRootsResult(values, 0, values.length, roots, roots + markers, markers);
                 });
@@ -375,8 +375,8 @@ public final class GpuTerrainRuntime {
             return ring.submitGraphRootsGrid(gridMetadata, chunkCount, samplesPerChunk)
                     .thenApply(values -> new GpuTerrainBatchResult(
                             new GpuTerrainRootsResult(values, 0, values.length,
-                                    terrainGraph.routerRoots().length,
-                                    terrainGraph.routerRoots().length
+                                    terrainGraph.routerRootCount(),
+                                    terrainGraph.routerRootCount()
                                             + terrainGraph.interpolatedMarkerCount(),
                                     terrainGraph.interpolatedMarkerCount()),
                             new GpuTerrainBlockResult(new float[0], 0, 0, 1, 16, 0, 16)));
@@ -405,7 +405,7 @@ public final class GpuTerrainRuntime {
                 new IllegalStateException("GPU terrain graph provider is not installed"));
         return ring.submitGraphRoots(graph, x, y, z, sampleCount)
                 .thenApply(values -> new GpuTerrainRootsResult(values, 0, values.length,
-                        graph.routerRoots().length));
+                        graph.routerRootCount()));
     }
 
     static java.util.concurrent.CompletionStage<float[]> submitInterpolation(float[] corners, java.nio.ByteBuffer metadata,
@@ -427,7 +427,7 @@ public final class GpuTerrainRuntime {
 
     static int terrainRootCount() {
         GpuDensityGraph graph = terrainGraph;
-        return graph == null ? 1 : graph.routerRoots().length;
+        return graph == null ? 1 : graph.routerRootCount();
     }
 
     /** Number of roots currently materialized into the per-block terrain output. */
@@ -553,9 +553,9 @@ public final class GpuTerrainRuntime {
                 router.barrierNoise(), router.fluidLevelFloodednessNoise(), router.fluidLevelSpreadNoise(),
                 router.lavaNoise(), router.erosion(), router.depth(), router.temperature(),
                 router.vegetation(), router.continents(), router.ridges()};
-        if (graph.routerRoots().length != cpu.length) {
+        if (graph.routerRootCount() != cpu.length) {
             verifiedTerrainRootMask = 0;
-            GpuNoise.LOGGER.warn("GPU compact terrain graph has {} roots; expected {}", graph.routerRoots().length, cpu.length);
+            GpuNoise.LOGGER.warn("GPU compact terrain graph has {} roots; expected {}", graph.routerRootCount(), cpu.length);
             return;
         }
         int count = 512;
@@ -680,7 +680,7 @@ public final class GpuTerrainRuntime {
             verifyBlendedNoiseNodes(current, graph, x, y, z);
             float worst = 0.0f;
             float[] allRoots = current.submitGraphRoots(graph, x, y, z);
-            for (int root = 0; root < graph.routerRoots().length; root++) {
+            for (int root = 0; root < graph.routerRootCount(); root++) {
                 float maxError = 0.0f;
                 int maxIndex = -1;
                 float maxGpu = 0.0f;
@@ -688,7 +688,7 @@ public final class GpuTerrainRuntime {
                 for (int i = 0; i < count; i++) {
                     double expected = cpuRoots[root].compute(new DensityFunction.SinglePointContext(
                             (int) x[i], (int) y[i], (int) z[i]));
-                    float gpu = allRoots[i * graph.routerRoots().length + root];
+                    float gpu = allRoots[i * graph.routerRootCount() + root];
                     float error = Math.abs(gpu - (float) expected);
                     if (error > maxError) {
                         maxError = error;

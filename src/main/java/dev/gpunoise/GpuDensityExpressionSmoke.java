@@ -571,7 +571,7 @@ final class GpuDensityExpressionSmoke {
 
         GpuDensityGraph compiledGraph = GpuDensityGraphCompiler.compileDensityFunction(density, true);
         GpuDensityGraph loweredGraph = GpuDensityGraphLowerer.lower(compiledGraph);
-        if (loweredGraph.routerRoots().length != 1 || loweredGraph.registerCount() <= 0) {
+        if (loweredGraph.routerRootCount() != 1 || loweredGraph.registerCount() <= 0) {
             throw new AssertionError("custom density did not survive graph lowering as one GPU root");
         }
         boolean hasDependencyMarker = false;

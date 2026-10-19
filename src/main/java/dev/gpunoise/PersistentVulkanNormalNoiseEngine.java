@@ -304,7 +304,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         if (xs.length != ys.length || xs.length != zs.length || sampleCount < 0 || sampleCount > xs.length || sampleCount > CAPACITY)
             throw new IllegalArgumentException("invalid graph batch");
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
-        int rootCount = graph.routerRoots().length;
+        int rootCount = graph.routerRootCount();
         if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16) throw new IllegalArgumentException("density graph exceeds GPU capacity");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
@@ -345,7 +345,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         if (xs.length != ys.length || xs.length != zs.length || sampleCount < 0 || sampleCount > xs.length || sampleCount > CAPACITY)
             throw new IllegalArgumentException("invalid graph batch");
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
-        int rootCount = graph.routerRoots().length;
+        int rootCount = graph.routerRootCount();
         if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16) throw new IllegalArgumentException("density graph exceeds GPU capacity");
         long preparationStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -403,7 +403,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         metadata.limit(chunkCount * 32);
         if (graph == null) throw new IllegalStateException("GPU terrain graph is not installed");
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
-        int rootCount = graph.routerRoots().length;
+        int rootCount = graph.routerRootCount();
         int resultStride = rootCount + graph.interpolatedMarkerCount();
         if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16) throw new IllegalArgumentException("density graph exceeds GPU capacity");
         long preparationStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
@@ -567,7 +567,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             throw new IllegalArgumentException("invalid grid interpolation batch");
         if (graph == null) throw new IllegalArgumentException("terrain graph is not installed");
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
-        int rootCount = graph.routerRoots().length;
+        int rootCount = graph.routerRootCount();
         int outputRoots = GpuTerrainRuntime.terrainBlockOutputRootCount();
         int[] markerRegisters = graph.interpolatedMarkerRegisters();
         int markerCount = markerRegisters.length;
@@ -692,7 +692,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 || sampleCount > CAPACITY)
             throw new IllegalArgumentException("invalid fused graph batch");
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
-        int rootCount = graph.routerRoots().length;
+        int rootCount = graph.routerRootCount();
         int blockCount = Math.multiplyExact(chunkCount, blocksPerChunk);
         int outputRoots = GpuTerrainRuntime.terrainOutputRootCount();
         if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16 || outputRoots > rootCount

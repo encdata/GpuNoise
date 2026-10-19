@@ -127,7 +127,7 @@ public final class GpuNoise {
                 GpuDensityGraph fullGraph = GpuDensityGraphLowerer.lower(GpuDensityGraphCompiler.compile(router));
                 GpuDensityGraphBuffer.Packed packedGraph = GpuDensityGraphBuffer.pack(fullGraph);
                 LOGGER.info("GPU density graph discovered: {} nodes, {} router roots, {} noise samplers; packed {} bytes for GPU lowering.",
-                        fullGraph.nodes().size(), fullGraph.routerRoots().length, fullGraph.noises().size(),
+                        fullGraph.nodes().size(), fullGraph.routerRootCount(), fullGraph.noises().size(),
                         packedGraph.nodes().capacity());
                 if (VulkanComputeProbe.supportsFloat64(device)) {
                     VulkanBootstrapThread.callUnchecked(() -> {
@@ -155,7 +155,7 @@ public final class GpuNoise {
                     }
                 }
                 LOGGER.info("GPU terrain runtime graph: {} nodes, {} required terrain/aquifer roots.",
-                        terrainGraph.nodes().size(), terrainGraph.routerRoots().length);
+                        terrainGraph.nodes().size(), terrainGraph.routerRootCount());
                 VulkanBootstrapThread.callUnchecked(() -> {
                     GpuTerrainRuntime.verifyCompactTerrainGraph(validationGraph, router);
                     return null;

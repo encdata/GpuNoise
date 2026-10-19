@@ -90,6 +90,8 @@ record GpuDensityGraph(List<Node> nodes, int[] routerRoots, List<NormalNoise> no
         return root >= 0 && root < routerRoots.length && (supportedRouterRootMask & (1 << root)) != 0;
     }
 
+    int routerRootCount() { return routerRoots.length; }
+
     /** Registers whose NoiseChunk marker requires per-function cell interpolation. */
     int[] interpolatedMarkerRegisters() {
         int[] registers = new int[interpolatedMarkerCount];
