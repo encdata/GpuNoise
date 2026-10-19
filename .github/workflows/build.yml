@@ -29,12 +29,6 @@ on:
 permissions:
   contents: read
 
-# Serialize same-ref dedicated-server checks so concurrent worldgen test
-# servers do not contend for memory, CPU, and Vulkan resources.
-concurrency:
-  group: gpunoise-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -103,20 +97,78 @@ jobs:
           path: build/ci-mods/*.jar
           if-no-files-found: error
 
-      - name: Run dedicated C2ME Chunky worldgen checks
+  worldgen:
+    name: C2ME Chunky / ${{ matrix.profile }}
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        profile:
+          - without-terrain-mods
+          - tectonic-overworld-stack
+          - expanded-biome-stacks
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Mesa Lavapipe and Vulkan tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes mesa-vulkan-drivers vulkan-tools
+
+      - name: Verify Mesa Lavapipe is available
+        run: |
+          icd="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f \( -iname '*lvp*.json' -o -iname '*lavapipe*.json' \) -print -quit)"
+          test -n "$icd"
+          echo "Using Mesa ICD: $icd"
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+          export VK_ICD_FILENAMES="$icd"
+          vulkaninfo --summary | tee /tmp/vulkan-summary.txt
+          grep -Eqi 'llvmpipe|lavapipe' /tmp/vulkan-summary.txt
+
+      - name: Download GPU Noise mod
+        uses: actions/download-artifact@v4
+        with:
+          name: gpunoise-mod-${{ github.sha }}
+          path: build/libs
+
+      - name: Download worldgen test mods
+        uses: actions/download-artifact@v4
+        with:
+          name: gpunoise-benchmark-mods-${{ github.sha }}
+          path: build/ci-mods
+
+      - name: Verify downloaded artifacts
+        run: |
+          python3 tools/ci/verify_mod_artifact.py build/libs/*-all.jar
+          python3 -c 'from pathlib import Path; files=list(Path("build/ci-mods").glob("*.jar")); assert files, "worldgen mod artifact is empty"; print(f"Verified {len(files)} worldgen mod jars")'
+
+      - name: Run CPU and GPU Chunky checks for selected profile
         env:
           GPUNOISE_CHUNKY_RADIUS_BLOCKS: ${{ inputs.chunky_radius_blocks || '250' }}
           GPUNOISE_TERRAIN_BATCH_WINDOW_MS: ${{ inputs.terrain_batch_window_ms || '50' }}
           GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS: ${{ inputs.terrain_batch_target_chunks || '96' }}
           GPUNOISE_TERRAIN_BATCH_REGION_RADIUS: ${{ inputs.terrain_batch_region_radius || '2' }}
           GPUNOISE_CI_FULL_BLOCK_OUTPUT: true
-        run: python3 tools/ci/runserver_benchmark.py
+        run: python3 tools/ci/runserver_benchmark.py --profile '${{ matrix.profile }}'
 
       - name: Upload worldgen test logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gpunoise-ci-results-${{ github.sha }}
+          name: gpunoise-ci-results-${{ matrix.profile }}-${{ github.sha }}
           path: |
             build/reports/ci/*.log
             hs_err_pid*.log

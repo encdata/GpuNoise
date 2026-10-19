@@ -391,8 +391,14 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
 
 def main() -> int:
     prepare_only = sys.argv[1:] == ["--prepare-mods"]
+    profile = None
     if sys.argv[1:] and not prepare_only:
-        raise ValueError("usage: runserver_benchmark.py [--prepare-mods]")
+        if len(sys.argv) != 3 or sys.argv[1] != "--profile":
+            choices = ", ".join(("without-terrain-mods", *TERRAIN_TEST_PROFILES))
+            raise ValueError(f"usage: runserver_benchmark.py [--prepare-mods | --profile PROFILE]; profiles: {choices}")
+        profile = sys.argv[2]
+        if profile not in ("without-terrain-mods", *TERRAIN_TEST_PROFILES):
+            raise ValueError(f"unknown worldgen profile {profile!r}")
     downloaded_mods = ROOT / "build" / "ci-mods"
     fetch_mods(downloaded_mods)
     if prepare_only:
@@ -402,7 +408,8 @@ def main() -> int:
         return 0
     print(
         f"CI_WORLDGEN_CONFIG radius_blocks={CHUNKY_RADIUS_BLOCKS} "
-        f"test_cases={1 + len(TERRAIN_TEST_PROFILES)} repetitions={WORLDGEN_CHECK_REPETITIONS} "
+        f"test_cases={1 + len(TERRAIN_TEST_PROFILES)} selected_profile={profile or 'all'} "
+        f"repetitions={WORLDGEN_CHECK_REPETITIONS} "
         f"terrain_mods={len(TERRAIN_MODS)} modded_profiles={len(TERRAIN_TEST_PROFILES)} "
         f"batch_window_ms={BATCH_WINDOW_MS} "
         f"batch_target_chunks={BATCH_TARGET_CHUNKS} "
@@ -410,10 +417,11 @@ def main() -> int:
         flush=True,
     )
     completed_cases: list[str] = []
-    cases: tuple[tuple[str, str | None], ...] = (
+    all_cases: tuple[tuple[str, str | None], ...] = (
         (("without-terrain-mods", None),)
         + tuple((profile, profile) for profile in TERRAIN_TEST_PROFILES)
     )
+    cases = tuple(case for case in all_cases if profile is None or case[0] == profile)
     for case_name, terrain_profile in cases:
         counts: dict[str, int] = {}
         for mode in ("cpu", "gpu"):
