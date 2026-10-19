@@ -525,6 +525,18 @@ public final class VulkanCiSmoke {
             var queuedGrid = ring.submitGraphRootsGrid(graph, queuedGridMetadata, 1, 8);
             System.out.println("Vulkan CI smoke: dispatching four-center aquifer selection");
             var nearestFuture = ring.submitAquiferNearestThree(nearestInput, queryCount);
+            GpuAquiferSubstance.Input weightedThirdPressureCase =
+                    new GpuAquiferSubstance.Input(-0.02, -0.3748834, 22,
+                            23, 23, 63, 23, 90, 113, 137, 150,
+                            GpuAquiferSubstance.WATER, GpuAquiferSubstance.WATER,
+                            GpuAquiferSubstance.WATER, GpuAquiferSubstance.WATER,
+                            0, 0, false, false, false, 417);
+            GpuAquiferSubstance.Input positiveDensityThresholdCase =
+                    new GpuAquiferSubstance.Input(0.001, 0.25, 22,
+                            23, 23, 63, 23, 90, 113, 137, 150,
+                            GpuAquiferSubstance.WATER, GpuAquiferSubstance.WATER,
+                            GpuAquiferSubstance.WATER, GpuAquiferSubstance.WATER,
+                            0, 0, false, false, false, 418);
             GpuAquiferSubstance.Input[] substanceCases = {
                     new GpuAquiferSubstance.Input(0.2, 0.25, 50,
                             40, 24, 12, 1, 10, 20,
@@ -595,11 +607,8 @@ public final class VulkanCiSmoke {
                     // Vanilla weights the second/third pressure pair by both
                     // nearest similarities. Omitting similarity01 incorrectly
                     // turns this retained water result into air/default.
-                    new GpuAquiferSubstance.Input(-0.02, -0.3748834, 22,
-                            23, 23, 63, 23, 90, 113, 137, 150,
-                            GpuAquiferSubstance.WATER, GpuAquiferSubstance.WATER,
-                            GpuAquiferSubstance.WATER, GpuAquiferSubstance.WATER,
-                            0, 0, false, false, false, 417),
+                    weightedThirdPressureCase,
+                    positiveDensityThresholdCase,
                     // Second/third is the deciding pressure pair.
                     new GpuAquiferSubstance.Input(-0.5, 0.0, 30,
                             30, 30, 30, 1, 2, 3,
@@ -633,11 +642,14 @@ public final class VulkanCiSmoke {
                     }
                 }
             }
-            int[] weightedThirdPressure = GpuAquiferSubstance.evaluate(
-                    substanceCases[substanceCases.length - 2]);
+            int[] weightedThirdPressure = GpuAquiferSubstance.evaluate(weightedThirdPressureCase);
             if (weightedThirdPressure[0] != GpuAquiferSubstance.RETURN_STATE
                     || weightedThirdPressure[1] != 417 || weightedThirdPressure[2] != 1) {
                 throw new IllegalStateException("Vanilla second/third pressure contribution lost its nearest-similarity weight");
+            }
+            if (GpuAquiferSubstance.evaluate(positiveDensityThresholdCase)[0]
+                    != GpuAquiferSubstance.CPU_FALLBACK) {
+                throw new IllegalStateException("Positive density near zero must use exact Java evaluation");
             }
         }
 

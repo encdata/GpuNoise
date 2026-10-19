@@ -1,6 +1,7 @@
 package dev.gpunoise.mixin;
 
 import dev.gpunoise.GpuChunkDensityCache;
+import dev.gpunoise.GpuAquiferSubstance;
 import dev.gpunoise.GpuNoiseChunkAccess;
 import dev.gpunoise.GpuAquiferDecisionAccess;
 import dev.gpunoise.GpuNoiseInterpolatorAccess;
@@ -186,6 +187,10 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
             long lookupStart = GpuTerrainProfiler.beginPhase();
             double gpu = cache.finalDensity(context.blockX(), context.blockY(), context.blockZ());
             if (!Double.isNaN(gpu)) {
+                if (GpuAquiferSubstance.nearDensityDecisionThreshold(gpu)) {
+                    GpuTerrainProfiler.recordJavaRootFallback(GpuTerrainRoots.FINAL_DENSITY);
+                    return vanillaFunction.compute(context);
+                }
                 GpuTerrainProfiler.recordGpuFinalDensity(lookupStart);
                 gpunoise$markGpuUse(cache);
                 return gpunoise$zeroBeardifier ? gpu : gpu + beardifier.compute(context);
@@ -214,6 +219,10 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
             long lookupStart = GpuTerrainProfiler.beginPhase();
             double gpu = cache.initialDensity(context.blockX(), context.blockY(), context.blockZ());
             if (!Double.isNaN(gpu)) {
+                if (GpuAquiferSubstance.nearDensityDecisionThreshold(gpu)) {
+                    GpuTerrainProfiler.recordJavaRootFallback(GpuTerrainRoots.INITIAL_DENSITY);
+                    return vanillaFunction.compute(context);
+                }
                 GpuTerrainProfiler.recordGpuInitialDensity(lookupStart);
                 gpunoise$markGpuUse(cache);
                 return gpu;

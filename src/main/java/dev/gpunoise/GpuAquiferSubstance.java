@@ -22,6 +22,11 @@ public final class GpuAquiferSubstance {
 
     private GpuAquiferSubstance() {}
 
+    /** Returns true when GPU rounding can change the density sign decision. */
+    public static boolean nearDensityDecisionThreshold(double density) {
+        return Double.isFinite(density) && Math.abs(density) <= PRECISION_EPSILON;
+    }
+
     public static ByteBuffer pack(Input[] inputs) {
         if (inputs.length == 0 || inputs.length > MAX_QUERIES)
             throw new IllegalArgumentException("invalid aquifer substance batch");
@@ -43,9 +48,10 @@ public final class GpuAquiferSubstance {
     /** Output words are action, state ID, schedule-fluid-update, reserved. */
     public static int[] evaluate(Input input) {
         if (!Double.isFinite(input.density)) return output(CPU_FALLBACK, 0, false);
+        if (nearDensityDecisionThreshold(input.density)) return output(CPU_FALLBACK, 0, false);
         if (input.density > 0.0) return output(RETURN_DEFAULT, 0, false);
         if (input.globalIsLava) return output(RETURN_STATE, input.globalStateId, false);
-        if (!Double.isFinite(input.barrier) || Math.abs(input.density) <= PRECISION_EPSILON)
+        if (!Double.isFinite(input.barrier))
             return output(CPU_FALLBACK, 0, false);
 
         double similarity01 = similarity(input.distance0, input.distance1);
