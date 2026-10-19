@@ -34,10 +34,12 @@ public final class GpuAquiferDecisionData {
         public final BlockState selectedState;
         public final DensityFunction.FunctionContext context;
         public final double density;
+        public final GpuAquiferSubstance.Input gpuInput;
         public PendingDecision(int index, BlockState selectedState,
-                               DensityFunction.FunctionContext context, double density) {
+                               DensityFunction.FunctionContext context, double density,
+                               GpuAquiferSubstance.Input gpuInput) {
             this.index = index; this.selectedState = selectedState;
-            this.context = context; this.density = density;
+            this.context = context; this.density = density; this.gpuInput = gpuInput;
         }
     }
 

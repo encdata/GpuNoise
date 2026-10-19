@@ -165,12 +165,13 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     Aquifer.FluidStatus global = globalFluidPicker.computeFluid(x, y, z);
                     BlockState globalState = global.at(y);
                     if (globalState.is(Blocks.LAVA)) {
-                        inputs.add(new GpuAquiferSubstance.Input(density, 0.0, y,
+                        GpuAquiferSubstance.Input gpuInput = new GpuAquiferSubstance.Input(density, 0.0, y,
                                 0, 0, 0, 0, 0, 0,
                                 GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
-                                GpuAquiferSubstance.OTHER, 0, true, false, 0));
+                                GpuAquiferSubstance.OTHER, 0, true, false, 0);
+                        inputs.add(gpuInput);
                         pending.add(new PendingDecision(index, globalState,
-                                new DensityFunction.SinglePointContext(x, y, z), density));
+                                new DensityFunction.SinglePointContext(x, y, z), density, gpuInput));
                         directLavaDecisions++;
                         continue;
                     }
@@ -252,13 +253,16 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 Aquifer.FluidStatus status2 = gpunoise$getAquiferStatus(BlockPos.asLong(
                         query.centers[third][0], query.centers[third][1], query.centers[third][2]));
                 BlockState nearestState = status0.at(query.y);
-                inputs.add(new GpuAquiferSubstance.Input(query.density, query.barrier, query.y,
+                GpuAquiferSubstance.Input gpuInput = new GpuAquiferSubstance.Input(
+                        query.density, query.barrier, query.y,
                         gpunoise$fluidLevel(status0), gpunoise$fluidLevel(status1),
                         gpunoise$fluidLevel(status2), distance0, distance1, distance2,
                         gpunoise$fluidKind(status0.at(query.y)), gpunoise$fluidKind(status1.at(query.y)),
-                        gpunoise$fluidKind(status2.at(query.y)), 0, false, query.belowIsLava, 0));
+                        gpunoise$fluidKind(status2.at(query.y)), 0, false, query.belowIsLava, 0);
+                inputs.add(gpuInput);
                 pending.add(new PendingDecision(query.index, nearestState,
-                        new DensityFunction.SinglePointContext(query.x, query.y, query.z), query.density));
+                        new DensityFunction.SinglePointContext(query.x, query.y, query.z),
+                        query.density, gpuInput));
             }
         }
         if (gpunoise$verifyAquifer) {
@@ -309,7 +313,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                     + "), density=" + source.density + ", vanillaState=" + vanilla
                                     + ", gpuState=" + state + ", vanillaSchedule=" + vanillaSchedule
                                     + ", gpuSchedule=" + (outputs[base + 2] != 0)
-                                    + ", gpuAction=" + action;
+                                    + ", gpuAction=" + action + ", gpuInput=" + source.gpuInput;
                         }
                         continue;
                     }
