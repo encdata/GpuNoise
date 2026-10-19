@@ -277,7 +277,8 @@ public final class GpuTerrainRuntime {
         terrainRing = submissionRing;
         terrainGraph = graph;
         terrainRouter = router;
-        GpuNoise.LOGGER.info("GPU terrain graph registerCount={}", graph.registerCount());
+        GpuNoise.LOGGER.info("GPU terrain graph: nodes={}, registers={}, block pass skips {} marker-only nodes",
+                graph.nodes().size(), graph.registerCount(), GpuDensityGraphBuffer.blockSkippedNodeCount(graph));
         terrainRootsScheduler = new GpuTerrainRootsBatchScheduler();
         terrainProvider = null;
         terrainScheduler = null;

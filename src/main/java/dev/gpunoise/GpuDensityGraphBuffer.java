@@ -16,7 +16,7 @@ final class GpuDensityGraphBuffer {
     private static final ByteBuffer MTH_SIN_TABLE_BYTES = createMthSinTableBytes();
     record Packed(ByteBuffer nodes, ByteBuffer permutations, ByteBuffer octaves,
                   ByteBuffer samplerMetadata, ByteBuffer splinePoints, ByteBuffer blendedMetadata,
-                  int nodeCount, int samplerCount, int blendedCount, int blockSkippedNodeCount) {}
+                  int nodeCount, int samplerCount, int blendedCount) {}
 
     private static final Map<String, Integer> OPCODES = Map.ofEntries(
             Map.entry("Constant", 1), Map.entry("Noise", 2), Map.entry("Ap2", 3),
@@ -34,6 +34,12 @@ final class GpuDensityGraphBuffer {
 
     static float mthCos(float value) {
         return MTH_SIN_TABLE[(int) (value * 10430.378F + 16384.0F) & (MTH_SIN_TABLE_SIZE - 1)];
+    }
+
+    static int blockSkippedNodeCount(GpuDensityGraph graph) {
+        int skipped = 0;
+        for (boolean skip : blockEvaluationSkipMask(graph)) if (skip) skipped++;
+        return skipped;
     }
 
     static ByteBuffer mthSinTableBytes() {
@@ -144,12 +150,9 @@ final class GpuDensityGraphBuffer {
                     .putDouble(value.smearScaleMultiplier());
             for (int i = 0; i < 6; i++) blendedMetadata.putInt(0); // pad record to 192 bytes
         }
-        int blockSkippedNodeCount = 0;
-        for (boolean skip : blockSkip) if (skip) blockSkippedNodeCount++;
         return new Packed((ByteBuffer) output.flip(), (ByteBuffer) permutations.flip(),
                 (ByteBuffer) octaves.flip(), (ByteBuffer) metadata.flip(), (ByteBuffer) splinePoints.flip(),
-                (ByteBuffer) blendedMetadata.flip(), graph.nodes().size(), samplers.size(), graph.blended().size(),
-                blockSkippedNodeCount);
+                (ByteBuffer) blendedMetadata.flip(), graph.nodes().size(), samplers.size(), graph.blended().size());
     }
 
     /**
