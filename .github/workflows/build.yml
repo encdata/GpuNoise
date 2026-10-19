@@ -168,6 +168,7 @@ jobs:
           GPUNOISE_TERRAIN_BATCH_REGION_RADIUS: ${{ inputs.terrain_batch_region_radius || '2' }}
           GPUNOISE_CI_FULL_BLOCK_OUTPUT: true
           GPUNOISE_CI_VERIFY_AQUIFER: true
+          GPUNOISE_CI_TRACE_AQUIFER_BLOCK: '-502,-39,-509'
         run: python3 tools/ci/runserver_benchmark.py --profile '${{ matrix.profile }}'
 
       - name: Upload worldgen test logs

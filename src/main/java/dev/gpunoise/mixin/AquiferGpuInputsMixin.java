@@ -36,6 +36,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.Objects;
 
 /** Feeds the GPU floodedness root into vanilla's aquifer surface calculation. */
@@ -70,6 +71,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private static final AtomicBoolean gpunoise$terrainDecisionBatchLogged = new AtomicBoolean();
 
     @org.spongepowered.asm.mixin.Unique
+    private static final AtomicLong gpunoise$terrainDecisionQueryCount = new AtomicLong();
+
+    @org.spongepowered.asm.mixin.Unique
+    private static final AtomicLong gpunoise$terrainDecisionPositiveCount = new AtomicLong();
+
+    @org.spongepowered.asm.mixin.Unique
     private static final AtomicBoolean gpunoise$aquiferPreflightLogged = new AtomicBoolean();
 
     @org.spongepowered.asm.mixin.Unique
@@ -85,6 +92,18 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
 
     @org.spongepowered.asm.mixin.Unique
     private static final boolean gpunoise$verifyAquifer = Boolean.getBoolean("gpunoise.verifyAquiferGpu");
+
+    @org.spongepowered.asm.mixin.Unique
+    private static final int gpunoise$traceAquiferX = Integer.getInteger(
+            "gpunoise.traceAquiferBlockX", Integer.MIN_VALUE);
+
+    @org.spongepowered.asm.mixin.Unique
+    private static final int gpunoise$traceAquiferY = Integer.getInteger(
+            "gpunoise.traceAquiferBlockY", Integer.MIN_VALUE);
+
+    @org.spongepowered.asm.mixin.Unique
+    private static final int gpunoise$traceAquiferZ = Integer.getInteger(
+            "gpunoise.traceAquiferBlockZ", Integer.MIN_VALUE);
 
     @Invoker("getAquiferStatus")
     protected abstract Aquifer.FluidStatus gpunoise$getAquiferStatus(long position);
@@ -151,6 +170,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         int index = decisions.indexOfMatch(context.blockX(), context.blockY(), context.blockZ(), density);
         if (index < 0) return;
         shouldScheduleFluidUpdate = decisions.schedulesFluidUpdate(index);
+        if (gpunoise$isTraceAquiferBlock(context.blockX(), context.blockY(), context.blockZ())) {
+            dev.gpunoise.GpuNoise.LOGGER.info(
+                    "GPU_AQUIFER_TRACE_APPLIED block=({}, {}, {}) index={} state={} scheduleFluidUpdate={}",
+                    context.blockX(), context.blockY(), context.blockZ(), index,
+                    decisions.state(index), shouldScheduleFluidUpdate);
+        }
         cir.setReturnValue(decisions.state(index));
     }
 
@@ -372,6 +397,13 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     BlockState vanilla = gpunoise$invokeVanillaComputeSubstance(context, density);
                     boolean vanillaSchedule = shouldScheduleFluidUpdate;
                     vanillaParitySamples++;
+                    if (gpunoise$isTraceAquiferBlock(context.blockX(), context.blockY(), context.blockZ())) {
+                        dev.gpunoise.GpuNoise.LOGGER.info(
+                                "GPU_AQUIFER_TRACE_PARITY block=({}, {}, {}) density={} "
+                                        + "vanillaState={} gpuState={} vanillaSchedule={} gpuSchedule={} action={}",
+                                context.blockX(), context.blockY(), context.blockZ(), density,
+                                vanilla, state, vanillaSchedule, scheduleFluidUpdate, action);
+                    }
                     if (!Objects.equals(vanilla, state) || vanillaSchedule != scheduleFluidUpdate) {
                         vanillaParityMismatches++;
                         if (substanceFirstMismatch == null) {
@@ -402,13 +434,16 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     vanillaParitySamples, vanillaParityMismatches,
                     substanceFirstMismatch == null ? "none" : substanceFirstMismatch);
         }
-        if (substanceWriter.size() > 0 && gpunoise$terrainDecisionBatchLogged.compareAndSet(false, true)) {
+        long cumulativeQueries = gpunoise$terrainDecisionQueryCount.addAndGet(substanceWriter.size());
+        long cumulativePositive = gpunoise$terrainDecisionPositiveCount.addAndGet(positiveDensityDecisions);
+        if (cumulativePositive > 0
+                && gpunoise$terrainDecisionBatchLogged.compareAndSet(false, true)) {
             dev.gpunoise.GpuNoise.LOGGER.info(
                     "GPU terrain material decisions: queries={}, positiveDensityQueries={}, "
                             + "aquiferQueries={}, centerStatusLookups={}, centerStatusEvaluations={}, "
                             + "centerStatusCacheHits={}, acceptedDecisions={}, cpuFallback={}, "
                             + "globalLavaQueries={}, vanillaParitySamples={}, vanillaParityMismatches={}",
-                    substanceWriter.size(), positiveDensityDecisions, substanceWriter.size() - positiveDensityDecisions,
+                    cumulativeQueries, cumulativePositive, cumulativeQueries - cumulativePositive,
                     queries.size() * 4L, fluidStatuses.size(),
                     Math.max(0L, queries.size() * 4L - fluidStatuses.size()),
                     acceptedDecisions, substanceWriter.size() - acceptedDecisions, directLavaDecisions,
@@ -425,6 +460,14 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             cache.put(position, status);
         }
         return status;
+    }
+
+    @org.spongepowered.asm.mixin.Unique
+    private static boolean gpunoise$isTraceAquiferBlock(int x, int y, int z) {
+        return gpunoise$traceAquiferX != Integer.MIN_VALUE
+                && gpunoise$traceAquiferX == x
+                && gpunoise$traceAquiferY == y
+                && gpunoise$traceAquiferZ == z;
     }
 
     @org.spongepowered.asm.mixin.Unique

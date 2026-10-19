@@ -77,6 +77,16 @@ VERIFY_AQUIFER_GPU = os.environ.get("GPUNOISE_CI_VERIFY_AQUIFER", "false").lower
 if VERIFY_AQUIFER_GPU not in {"true", "false"}:
     raise ValueError("GPUNOISE_CI_VERIFY_AQUIFER must be true or false")
 VERIFY_AQUIFER_GPU = VERIFY_AQUIFER_GPU == "true"
+TRACE_AQUIFER_BLOCK = os.environ.get("GPUNOISE_CI_TRACE_AQUIFER_BLOCK", "").strip()
+if TRACE_AQUIFER_BLOCK:
+    try:
+        TRACE_AQUIFER_BLOCK_COORDS = tuple(int(value.strip()) for value in TRACE_AQUIFER_BLOCK.split(","))
+    except ValueError as error:
+        raise ValueError("GPUNOISE_CI_TRACE_AQUIFER_BLOCK must be x,y,z") from error
+    if len(TRACE_AQUIFER_BLOCK_COORDS) != 3:
+        raise ValueError("GPUNOISE_CI_TRACE_AQUIFER_BLOCK must be x,y,z")
+else:
+    TRACE_AQUIFER_BLOCK_COORDS = ()
 TASK_DONE = re.compile(
     r"Task finished for .*?Processed:\s*([\d,]+) chunks \(([^)]+)%\),"
 )
@@ -264,6 +274,13 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
     ]
     if not force_cpu:
         jvm_overrides.append("-Dgpunoise.exactAquiferInputs=true")
+        if TRACE_AQUIFER_BLOCK_COORDS:
+            trace_x, trace_y, trace_z = TRACE_AQUIFER_BLOCK_COORDS
+            jvm_overrides.extend((
+                f"-Dgpunoise.traceAquiferBlockX={trace_x}",
+                f"-Dgpunoise.traceAquiferBlockY={trace_y}",
+                f"-Dgpunoise.traceAquiferBlockZ={trace_z}",
+            ))
         jvm_overrides.extend((
             "-Dgpunoise.verifyTerrainDensityChunkX=" + str(DENSITY_PARITY_CHUNK_X),
             "-Dgpunoise.verifyTerrainDensityChunkZ=" + str(DENSITY_PARITY_CHUNK_Z),
@@ -418,7 +435,7 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                       flush=True)
             material_batches = re.findall(
                 r"GPU terrain material decisions: queries=(\d+), positiveDensityQueries=(\d+), "
-                r"aquiferQueries=(\d+), acceptedDecisions=(\d+), cpuFallback=(\d+)", run_log)
+                r"aquiferQueries=(\d+), .*?acceptedDecisions=(\d+), cpuFallback=(\d+)", run_log)
             if not material_batches and not c2me_java_fallback:
                 skip_reasons = re.findall(r"GPU aquifer decision preflight skipped: ([^\r\n]+)", run_log)
                 reason_detail = "; ".join(dict.fromkeys(skip_reasons)) or "no preflight skip reason was logged"
@@ -426,10 +443,10 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                     "GPU benchmark did not execute the chunk-batched terrain material decision shader: "
                     + reason_detail
                 )
-            if material_batches and any(int(queries) == 0 or int(positive) == 0
-                                        for queries, positive, _aquifer, _accepted, _fallback in material_batches):
+            if material_batches and (sum(int(row[0]) for row in material_batches) == 0
+                                     or sum(int(row[1]) for row in material_batches) == 0):
                 raise RuntimeError(
-                    "GPU terrain material dispatch did not classify positive-density solid/air decisions")
+                    "GPU terrain material dispatch did not classify any positive-density solid/air rows")
             if VERIFY_AQUIFER_GPU and material_batches:
                 nearest_results = re.findall(
                     r"GPU aquifer nearest parity: samples=(\d+), mismatches=(\d+)",
@@ -447,6 +464,21 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                         or any(int(mismatches) != 0 for _, mismatches in parity_results)):
                     raise RuntimeError(
                         "GPU aquifer substance decisions did not produce passing runtime parity samples")
+            if TRACE_AQUIFER_BLOCK_COORDS:
+                trace_x, trace_y, trace_z = TRACE_AQUIFER_BLOCK_COORDS
+                trace_block = f"block=({trace_x}, {trace_y}, {trace_z})"
+                trace_lines = [line for line in run_log.splitlines()
+                               if "GPU_AQUIFER_TRACE_PARITY" in line and trace_block in line]
+                trace_applied = any("GPU_AQUIFER_TRACE_APPLIED" in line and trace_block in line
+                                    for line in run_log.splitlines())
+                if not trace_lines or not trace_applied:
+                    raise RuntimeError(
+                        f"GPU aquifer trace did not cover prepared and applied decision at {trace_block}")
+                if not any("vanillaSchedule=true" in line and "gpuSchedule=true" in line
+                           or "vanillaSchedule=false" in line and "gpuSchedule=false" in line
+                           for line in trace_lines):
+                    raise RuntimeError(
+                        f"GPU aquifer trace schedule differs from vanilla at {trace_block}: {trace_lines[-1]}")
             fallback_chunks = max(counts[3] for counts in gpu_counts)
             if fallback_chunks != 0:
                 raise RuntimeError(
