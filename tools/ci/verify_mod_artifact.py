@@ -75,6 +75,18 @@ def verify(path: Path) -> None:
             ):
                 raise ValueError("Embedded mod payload repeats the early locator module")
 
+            nested_mixin_classes = sorted(
+                name for name in mod_entries
+                if name.startswith("dev/gpunoise/mixin/")
+                and name.endswith(".class")
+                and "$" in name.rsplit("/", 1)[-1]
+            )
+            if nested_mixin_classes:
+                raise ValueError(
+                    "Mixin packages cannot contain referenced nested helper classes; "
+                    f"move these classes to the regular mod package: {nested_mixin_classes[:12]}"
+                )
+
             metadata = json.loads(mod.read(METADATA))
         jars = metadata.get("jars")
         expected = [library_entry("lwjgl-vulkan")]
