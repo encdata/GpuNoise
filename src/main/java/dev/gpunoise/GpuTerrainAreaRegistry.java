@@ -5,6 +5,9 @@ import java.util.concurrent.Semaphore;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.function.Supplier;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /** Shared ownership table for speculative terrain caches. */
 final class GpuTerrainAreaRegistry {
@@ -15,63 +18,76 @@ final class GpuTerrainAreaRegistry {
     private static final int MAX_PREFETCH_TILES = 4096;
     private static final ConcurrentHashMap<Long, GpuChunkDensityCache> CLAIMED = new ConcurrentHashMap<>();
     private static final Semaphore CACHE_SLOTS = new Semaphore(MAX_LIVE_CACHES);
-    private static final Object CLAIM_LOCK = new Object();
+    // Claims for different chunks can build and submit concurrently. The
+    // lifecycle lock only prevents shutdown clearing the registry mid-claim;
+    // its read side permits independent cache creation in parallel.
+    private static final ReentrantReadWriteLock CACHE_LIFECYCLE = new ReentrantReadWriteLock();
     private static final LinkedHashMap<Long, Boolean> PREFETCHED_TILES = new LinkedHashMap<>();
 
     private GpuTerrainAreaRegistry() {}
 
     static GpuChunkDensityCache claim(int minX, int minZ, Supplier<GpuChunkDensityCache> creator) {
         long key = key(minX >> 4, minZ >> 4);
-        GpuChunkDensityCache existing = CLAIMED.get(key);
-        if (existing != null) return existing;
-        acquireSlot();
-        synchronized (CLAIM_LOCK) {
-            existing = CLAIMED.get(key);
-            if (existing != null) {
-                CACHE_SLOTS.release();
-                return existing;
-            }
+        Lock lifecycle = CACHE_LIFECYCLE.readLock();
+        lifecycle.lock();
+        try {
+            GpuChunkDensityCache existing = CLAIMED.get(key);
+            if (existing != null) return existing;
+            acquireSlot();
+            AtomicBoolean created = new AtomicBoolean();
             try {
-                GpuChunkDensityCache created = creator.get();
-                CLAIMED.put(key, created);
-                return created;
+                GpuChunkDensityCache result = CLAIMED.computeIfAbsent(key, ignored -> {
+                    created.set(true);
+                    return creator.get();
+                });
+                if (!created.get()) CACHE_SLOTS.release();
+                return result;
             } catch (RuntimeException | Error failure) {
                 CACHE_SLOTS.release();
                 throw failure;
             }
+        } finally {
+            lifecycle.unlock();
         }
     }
 
     /** Speculative work never waits for memory; the requested chunk can claim the slot later. */
     static GpuChunkDensityCache tryClaim(int minX, int minZ, Supplier<GpuChunkDensityCache> creator) {
         long key = key(minX >> 4, minZ >> 4);
-        GpuChunkDensityCache existing = CLAIMED.get(key);
-        if (existing != null) return existing;
-        if (!CACHE_SLOTS.tryAcquire()) return null;
-        synchronized (CLAIM_LOCK) {
-            existing = CLAIMED.get(key);
-            if (existing != null) {
-                CACHE_SLOTS.release();
-                return existing;
-            }
+        Lock lifecycle = CACHE_LIFECYCLE.readLock();
+        lifecycle.lock();
+        try {
+            GpuChunkDensityCache existing = CLAIMED.get(key);
+            if (existing != null) return existing;
+            if (!CACHE_SLOTS.tryAcquire()) return null;
+            AtomicBoolean created = new AtomicBoolean();
             try {
-                GpuChunkDensityCache created = creator.get();
-                CLAIMED.put(key, created);
-                return created;
+                GpuChunkDensityCache result = CLAIMED.computeIfAbsent(key, ignored -> {
+                    created.set(true);
+                    return creator.get();
+                });
+                if (!created.get()) CACHE_SLOTS.release();
+                return result;
             } catch (RuntimeException | Error failure) {
                 CACHE_SLOTS.release();
                 throw failure;
             }
+        } finally {
+            lifecycle.unlock();
         }
     }
 
     static void release(GpuChunkDensityCache cache) {
         if (cache == null) return;
-        synchronized (CLAIM_LOCK) {
+        Lock lifecycle = CACHE_LIFECYCLE.readLock();
+        lifecycle.lock();
+        try {
             if (CLAIMED.remove(key(cache.minX() >> 4, cache.minZ() >> 4), cache)) {
                 GpuChunkDensityCache.removePrefetched(cache);
                 CACHE_SLOTS.release();
             }
+        } finally {
+            lifecycle.unlock();
         }
     }
 
@@ -90,15 +106,19 @@ final class GpuTerrainAreaRegistry {
     }
 
     static void clear() {
-        synchronized (CLAIM_LOCK) {
+        Lock lifecycle = CACHE_LIFECYCLE.writeLock();
+        lifecycle.lock();
+        try {
             int released = CLAIMED.size();
             CLAIMED.clear();
             CACHE_SLOTS.release(released);
+            synchronized (GpuTerrainAreaRegistry.class) {
+                PREFETCHED_TILES.clear();
+            }
+            GpuChunkDensityCache.clearPrefetched();
+        } finally {
+            lifecycle.unlock();
         }
-        synchronized (GpuTerrainAreaRegistry.class) {
-            PREFETCHED_TILES.clear();
-        }
-        GpuChunkDensityCache.clearPrefetched();
     }
 
     private static void acquireSlot() {
