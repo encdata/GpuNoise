@@ -466,6 +466,10 @@ final class GpuDensityExpressionSmoke {
                 || interpolationLowered.interpolatedMarkerRegisters()[0] != interpolationLowered.nodes().get(0).register()) {
             throw new AssertionError("exclusive interpolation markers should export their child's live register");
         }
+        if (!interpolationLowered.routerRootsWithInterpolatedMarkers()[0]
+                || lowered.routerRootsWithInterpolatedMarkers()[0]) {
+            throw new AssertionError("block parity classification must follow interpolation markers through router roots");
+        }
         GpuDensityGraph sharedMarkerValue = new GpuDensityGraph(
                 java.util.List.of(
                         new GpuDensityGraph.Node("Constant", new int[0], new double[]{7.0}, null),
@@ -475,6 +479,10 @@ final class GpuDensityExpressionSmoke {
         GpuDensityGraph sharedLowered = GpuDensityGraphLowerer.lower(sharedMarkerValue);
         if (sharedLowered.nodes().get(0).register() == sharedLowered.nodes().get(1).register()) {
             throw new AssertionError("an interpolated marker must not alias a child also exported as a router root");
+        }
+        boolean[] sharedMarkerDependencies = sharedLowered.routerRootsWithInterpolatedMarkers();
+        if (sharedMarkerDependencies[0] || !sharedMarkerDependencies[1]) {
+            throw new AssertionError("shared router roots must retain independent interpolation-marker dependencies");
         }
     }
 

@@ -204,6 +204,7 @@ public final class GpuChunkDensityCache {
         if (GpuTerrainRuntime.terrainBlockOutputEnabled()) {
             GpuTerrainBlockResult blocks = readyBlocks;
             if (blocks != null && !blocks.isEmpty()
+                    && blocks.outputIndexForRoot(GpuTerrainRoots.FINAL_DENSITY) >= 0
                     && rx < 16 && ry < maxRelativeY && rz < 16) {
                 if (READ_STATS_ENABLED) {
                     long direct = blockReads.incrementAndGet();

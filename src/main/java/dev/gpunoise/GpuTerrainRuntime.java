@@ -40,6 +40,9 @@ public final class GpuTerrainRuntime {
             Math.max(16, Runtime.getRuntime().availableProcessors() * 2));
     /** Roots verified against both the compact graph and real cell-grid layout. */
     private static volatile int verifiedTerrainRootMask;
+    /** Roots additionally checked as exact per-block values without NoiseChunk markers. */
+    private static volatile int verifiedTerrainBlockRootMask;
+    private static volatile boolean terrainBlockOutputVerificationComplete;
     private static final ThreadLocal<Boolean> GPU_DENSITY_REQUIRED =
             ThreadLocal.withInitial(() -> Boolean.FALSE);
     private static final ThreadLocal<GpuChunkDensityCache> ACTIVE_FILL_CACHE =
@@ -290,6 +293,8 @@ public final class GpuTerrainRuntime {
         terrainRing = submissionRing;
         terrainGraph = graph;
         terrainRouter = router;
+        verifiedTerrainBlockRootMask = 0;
+        terrainBlockOutputVerificationComplete = false;
         GpuNoise.LOGGER.info("GPU terrain graph: nodes={}, registers={}, block pass skips {} marker-only nodes",
                 graph.nodes().size(), graph.registerCount(), skippedBlockNodes);
         terrainRootsScheduler = new GpuTerrainRootsBatchScheduler();
@@ -389,7 +394,13 @@ public final class GpuTerrainRuntime {
     }
 
     static boolean terrainBlockOutputEnabled() {
-        return FULL_BLOCK_OUTPUT && supportsTerrainRoot(GpuTerrainRoots.FINAL_DENSITY);
+        if (!FULL_BLOCK_OUTPUT) return false;
+        if (!terrainBlockOutputVerificationComplete) {
+            // Startup verification needs one full block-result batch before
+            // it can decide which roots are safe to keep on the block path.
+            return supportsTerrainRoot(GpuTerrainRoots.FINAL_DENSITY);
+        }
+        return terrainBlockOutputRootMask() != 0;
     }
 
     static GpuDensityGraph currentTerrainGraph() {
@@ -466,7 +477,9 @@ public final class GpuTerrainRuntime {
         GpuDensityGraph graph = terrainGraph;
         if (graph == null) return (1 << GpuTerrainRoots.COUNT) - 1;
         int rootLimit = Math.min(GpuTerrainRoots.COUNT, graph.routerRootCount());
-        return supportedTerrainRootMask() & ((1 << rootLimit) - 1);
+        int verified = terrainBlockOutputVerificationComplete
+                ? verifiedTerrainBlockRootMask : supportedTerrainRootMask();
+        return verified & ((1 << rootLimit) - 1);
     }
 
     static java.util.concurrent.CompletionStage<GpuFusedResult> submitFusedDirect(int[] x, int[] y, int[] z,
@@ -618,6 +631,8 @@ public final class GpuTerrainRuntime {
         GpuTerrainRootsBatchScheduler scheduler = terrainRootsScheduler;
         if (scheduler == null) {
             verifiedTerrainRootMask = 0;
+            verifiedTerrainBlockRootMask = 0;
+            terrainBlockOutputVerificationComplete = true;
             return;
         }
         int cellWidth = settings.getCellWidth();
@@ -674,13 +689,65 @@ public final class GpuTerrainRuntime {
                 }
             }
             verifiedTerrainRootMask &= gridVerifiedRoots;
+            int verifiedBlockRoots = verifyTerrainBlockOutputs(graph, cpu, batch.blocks(), settings);
+            verifiedTerrainBlockRootMask = verifiedBlockRoots & verifiedTerrainRootMask;
+            terrainBlockOutputVerificationComplete = true;
             GpuNoise.LOGGER.info("GPU terrain grid parity: {} samples, {}/{} roots verified, verifiedMask=0x{}",
                     grid.sampleCount(), Integer.bitCount(verifiedTerrainRootMask), supportedRoots,
                     Integer.toHexString(verifiedTerrainRootMask));
+            GpuNoise.LOGGER.info("GPU terrain block parity: {}/{} roots verified without interpolation-marker dependencies, verifiedMask=0x{}",
+                    Integer.bitCount(verifiedTerrainBlockRootMask), graph.routerRootCount(),
+                    Integer.toHexString(verifiedTerrainBlockRootMask));
         } catch (Throwable failure) {
             verifiedTerrainRootMask = 0;
+            verifiedTerrainBlockRootMask = 0;
+            terrainBlockOutputVerificationComplete = true;
             GpuNoise.LOGGER.warn("GPU terrain grid parity dispatch failed; terrain remains CPU-owned.", failure);
         }
+    }
+
+    /**
+     * Checks GPU block outputs against Java at every block in the startup
+     * chunk, but only for roots independent of NoiseChunk interpolation
+     * markers. Those markers must be sampled by NoiseChunk's cell state and
+     * cannot be validated with a plain SinglePointContext.
+     */
+    private static int verifyTerrainBlockOutputs(GpuDensityGraph graph, DensityFunction[] cpu,
+                                                  GpuTerrainBlockResult blocks, NoiseSettings settings) {
+        if (blocks == null || blocks.isEmpty()) return 0;
+        boolean[] markerDependent = graph.routerRootsWithInterpolatedMarkers();
+        int verified = 0;
+        int blockHeight = settings.height();
+        int minY = settings.minY();
+        for (int root = 0; root < cpu.length; root++) {
+            if (!graph.supportsRouterRoot(root) || markerDependent[root]
+                    || blocks.outputIndexForRoot(root) < 0) continue;
+            float worst = 0.0f;
+            int worstX = 0, worstY = 0, worstZ = 0;
+            for (int y = 0; y < blockHeight; y++) {
+                for (int z = 0; z < 16; z++) {
+                    for (int x = 0; x < 16; x++) {
+                        float actual = blocks.valueAt(x, y, z, root);
+                        float expected = (float) cpu[root].compute(
+                                new DensityFunction.SinglePointContext(x, minY + y, z));
+                        float error = root == GpuTerrainRoots.FINAL_DENSITY
+                                ? GpuTerrainParity.decisionError(actual, expected)
+                                : GpuTerrainParity.error(actual, expected);
+                        if (error > worst) {
+                            worst = error;
+                            worstX = x;
+                            worstY = minY + y;
+                            worstZ = z;
+                        }
+                    }
+                }
+            }
+            boolean passes = worst < GRAPH_PARITY_EPSILON;
+            if (passes) verified |= 1 << root;
+            GpuNoise.LOGGER.info("GPU terrain block root '{}' exact Java parity: maxError={}, at ({},{},{}), parity={}",
+                    GpuTerrainRoots.name(root), worst, worstX, worstY, worstZ, passes);
+        }
+        return verified;
     }
 
     static void verifyGraph(GpuDensityGraph graph, NoiseRouter router) {

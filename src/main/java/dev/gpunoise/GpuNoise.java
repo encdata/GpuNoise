@@ -195,6 +195,13 @@ public final class GpuNoise {
                             validationGraph.nodes().size(), activeTerrainGraph.nodes().size(),
                             Integer.toHexString(verifiedRootMask));
                     GpuTerrainRuntime.installTerrainGraph(activeTerrainGraph, router);
+                    if (terrainSettings != null) {
+                        GpuDensityGraph parityGraph = activeTerrainGraph;
+                        VulkanBootstrapThread.callUnchecked(() -> {
+                            GpuTerrainRuntime.verifyTerrainGrid(parityGraph, router, terrainSettings);
+                            return null;
+                        });
+                    }
                 }
                 if (verifiedRootMask != 0) {
                     if (terrainSettings != null) GpuTerrainRuntime.warmTerrainGpu(terrainSettings);

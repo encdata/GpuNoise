@@ -104,6 +104,27 @@ record GpuDensityGraph(List<Node> nodes, int[] routerRoots, List<NormalNoise> no
         return registers;
     }
 
+    /** True for roots whose per-block value depends on NoiseChunk interpolation markers. */
+    boolean[] routerRootsWithInterpolatedMarkers() {
+        boolean[] registerDependsOnInterpolation = new boolean[registerCount];
+        for (Node node : nodes) {
+            boolean depends = node.opcode().equals("Marker") && "Interpolated".equals(node.payload());
+            for (int child : node.children()) {
+                if (child >= 0 && registerDependsOnInterpolation[child]) depends = true;
+            }
+            if (node.register() >= 0 && node.register() < registerDependsOnInterpolation.length) {
+                registerDependsOnInterpolation[node.register()] = depends;
+            }
+        }
+        boolean[] rootsDepend = new boolean[routerRoots.length];
+        for (int root = 0; root < routerRoots.length; root++) {
+            int register = routerRoots[root];
+            rootsDepend[root] = register >= 0 && register < registerDependsOnInterpolation.length
+                    && registerDependsOnInterpolation[register];
+        }
+        return rootsDepend;
+    }
+
     private static int countInterpolatedMarkers(List<Node> nodes) {
         int count = 0;
         for (Node node : nodes) {
