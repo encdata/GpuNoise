@@ -19,6 +19,7 @@ import net.minecraft.world.level.levelgen.NoiseSettings;
 import net.minecraft.world.level.levelgen.Aquifer;
 import net.minecraft.world.level.biome.Climate;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -33,6 +34,13 @@ import org.spongepowered.asm.mixin.gen.Invoker;
 /** Replaces only the final terrain-density evaluation with the GPU slab. */
 @Mixin(NoiseChunk.class)
 abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
+    @Unique private static final double gpunoise$surfaceDensityThreshold = 0.390625;
+    @Unique private static final double gpunoise$surfaceThresholdEpsilon =
+            GpuTerrainRuntime.GRAPH_PARITY_EPSILON;
+    @Unique private static final boolean gpunoise$verifyAquiferSurface =
+            Boolean.getBoolean("gpunoise.verifyAquiferGpu");
+    @Unique private static final AtomicBoolean gpunoise$aquiferSurfaceMismatchLogged = new AtomicBoolean();
+
     @Invoker("preliminarySurfaceLevel")
     protected abstract int gpunoise$invokePreliminarySurfaceLevel(int x, int z);
     @Shadow @Final private NoiseSettings noiseSettings;
@@ -222,20 +230,34 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     @Redirect(method = "computePreliminarySurfaceLevel", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/world/level/levelgen/DensityFunction;compute(Lnet/minecraft/world/level/levelgen/DensityFunction$FunctionContext;)D"))
     private double gpunoise$useGpuInitialDensity(DensityFunction vanillaFunction, DensityFunction.FunctionContext context) {
-        // C2ME's aquifer fluid-surface estimate depends on initial density.
-        // Keep this input on the exact active Java graph just like final
-        // density until the GPU numeric ABI can reproduce its decisions.
-        if (dev.gpunoise.GpuAquiferRuntimeMode.c2meAquiferRewriteEnabled()) {
-            return vanillaFunction.compute(context);
-        }
+        // Vanilla and C2ME scan this same initial-density lattice to find the
+        // preliminary fluid surface. The GPU terrain batch already contains
+        // these cell-grid values. The scan only branches on 0.390625, so keep
+        // that decision exact and send values within the graph parity epsilon
+        // of its threshold back to Java.
         GpuChunkDensityCache cache = gpunoise$getActiveCache();
         if (cache != null) {
             long lookupStart = GpuTerrainProfiler.beginPhase();
             double gpu = cache.initialDensity(context.blockX(), context.blockY(), context.blockZ());
             if (!Double.isNaN(gpu)) {
-                if (GpuAquiferSubstance.nearDensityDecisionThreshold(gpu)) {
+                if (GpuAquiferSubstance.nearDensityDecisionThreshold(gpu)
+                        || Math.abs(gpu - gpunoise$surfaceDensityThreshold)
+                                <= gpunoise$surfaceThresholdEpsilon) {
                     GpuTerrainProfiler.recordJavaRootFallback(GpuTerrainRoots.INITIAL_DENSITY);
                     return vanillaFunction.compute(context);
+                }
+                if (gpunoise$verifyAquiferSurface) {
+                    double java = vanillaFunction.compute(context);
+                    if ((gpu > gpunoise$surfaceDensityThreshold)
+                            != (java > gpunoise$surfaceDensityThreshold)) {
+                        if (gpunoise$aquiferSurfaceMismatchLogged.compareAndSet(false, true)) {
+                            dev.gpunoise.GpuNoise.LOGGER.warn(
+                                    "GPU preliminary aquifer surface decision mismatch at ({}, {}, {}): GPU={}, Java={}; using Java for this sample.",
+                                    context.blockX(), context.blockY(), context.blockZ(), gpu, java);
+                        }
+                        GpuTerrainProfiler.recordJavaRootFallback(GpuTerrainRoots.INITIAL_DENSITY);
+                        return java;
+                    }
                 }
                 GpuTerrainProfiler.recordGpuInitialDensity(lookupStart);
                 gpunoise$markGpuUse(cache);

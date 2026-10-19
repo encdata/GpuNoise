@@ -409,6 +409,10 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
 
         if not force_cpu:
             run_log = log_path.read_text(encoding="utf-8")
+            if VERIFY_AQUIFER_GPU and "GPU preliminary aquifer surface decision mismatch" in run_log:
+                raise RuntimeError(
+                    "GPU preliminary aquifer surface decisions diverged from Java; Java fallback was used"
+                )
             if not gpu_counts:
                 raise RuntimeError("GPU server completed without reporting terrain cache state")
             if "GPU aquifer inputs use Vulkan cache roots; parity verifier compares decisions against Java" not in run_log:

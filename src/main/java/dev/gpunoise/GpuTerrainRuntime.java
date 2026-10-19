@@ -19,7 +19,7 @@ import net.minecraft.world.level.levelgen.DensityFunction;
 
 /** Runtime bridge used by the vanilla DensityFunctions.Noise fill hook. */
 public final class GpuTerrainRuntime {
-    private static final float GRAPH_PARITY_EPSILON = 5.0E-3f;
+    public static final float GRAPH_PARITY_EPSILON = 5.0E-3f;
     private static volatile GpuDevice device;
     private static volatile PersistentVulkanNormalNoiseEngine engine;
     private static volatile VulkanSubmissionRing submissionRing;
