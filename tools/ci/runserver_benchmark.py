@@ -88,6 +88,7 @@ GPU_BATCH_WINDOW = re.compile(
     r"searchRadiusRegions=(\d+)"
 )
 GPU_SHADER_VARIANT = re.compile(r"GPU density shader variant: registers=(\d+), fastMath=(true|false)")
+C2ME_AQUIFER_OVERRIDE = "Setting vanillaWorldGenOptimizations.optimizeAquifer to false (defined in system property)"
 
 
 def fetch_mods(destination: Path) -> None:
@@ -241,9 +242,16 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
         command.append(f"-Dgpunoise.terrainBatchTargetChunks={BATCH_TARGET_CHUNKS}")
         command.append(f"-Dgpunoise.terrainBatchRegionRadius={BATCH_REGION_RADIUS}")
     print(f"Starting {mode} dedicated Chunky worldgen check (full_block_output={FULL_BLOCK_OUTPUT})", flush=True)
+    process_env = os.environ.copy()
+    c2me_override = (
+        "-Dc2me.base.config.override.vanillaWorldGenOptimizations.optimizeAquifer=false"
+    )
+    process_env["JAVA_TOOL_OPTIONS"] = " ".join(
+        value for value in (process_env.get("JAVA_TOOL_OPTIONS", ""), c2me_override) if value
+    )
     process = subprocess.Popen(
         command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, bufsize=1, start_new_session=True,
+        text=True, bufsize=1, start_new_session=True, env=process_env,
     )
     lines: queue.Queue[tuple[str, float] | None] = queue.Queue()
 
@@ -285,6 +293,11 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
             line, observed_at = event
             if not chunky_start_requested and SERVER_READY.search(line):
                 server_log = log_path.read_text(encoding="utf-8", errors="replace")
+                if C2ME_AQUIFER_OVERRIDE not in server_log:
+                    raise RuntimeError(
+                        f"{mode} server did not confirm C2ME's vanilla aquifer override; "
+                        "GPU and CPU worldgen would use an unverified aquifer contract"
+                    )
                 if not GPU_NOISE_MOD_LIST.search(server_log):
                     raise RuntimeError(
                         f"{mode} dedicated server reached ready state without GPU Noise in NeoForge's mod list"
