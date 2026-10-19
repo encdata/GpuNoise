@@ -203,6 +203,12 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     @Redirect(method = "computePreliminarySurfaceLevel", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/world/level/levelgen/DensityFunction;compute(Lnet/minecraft/world/level/levelgen/DensityFunction$FunctionContext;)D"))
     private double gpunoise$useGpuInitialDensity(DensityFunction vanillaFunction, DensityFunction.FunctionContext context) {
+        // C2ME's aquifer fluid-surface estimate depends on initial density.
+        // Keep this input on the exact active Java graph just like final
+        // density until the GPU numeric ABI can reproduce its decisions.
+        if (dev.gpunoise.GpuAquiferRuntimeMode.c2meAquiferRewriteEnabled()) {
+            return vanillaFunction.compute(context);
+        }
         GpuChunkDensityCache cache = gpunoise$getActiveCache();
         if (cache != null) {
             long lookupStart = GpuTerrainProfiler.beginPhase();
