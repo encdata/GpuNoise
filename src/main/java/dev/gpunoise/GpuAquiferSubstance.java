@@ -7,7 +7,8 @@ import java.util.List;
 
 /** Packed contract and double-precision reference for vanilla aquifer results. */
 public final class GpuAquiferSubstance {
-    public static final int RECORD_BYTES = 76;
+    /** 17 words: density, barrier, y, levels, distances, kinds, status mask, flags. */
+    public static final int RECORD_BYTES = 68;
     /** One packed uint per block: low two bits are action, bit two schedules fluid work. */
     public static final int OUTPUT_INTS = 1;
     /**
@@ -85,8 +86,7 @@ public final class GpuAquiferSubstance {
                 .putInt(input.level0).putInt(input.level1).putInt(input.level2).putInt(input.level3)
                 .putInt(input.distance0).putInt(input.distance1).putInt(input.distance2).putInt(input.distance3)
                 .putInt(input.kind0).putInt(input.kind1).putInt(input.kind2).putInt(input.kind3)
-                .putInt(input.statusEqualityMask).putInt(input.globalStateId).putInt(flags)
-                .putInt(input.nearestStateId);
+                .putInt(input.statusEqualityMask).putInt(flags);
     }
 
     /** Incremental direct-buffer staging for chunk-sized aquifer decisions. */
@@ -110,18 +110,17 @@ public final class GpuAquiferSubstance {
                     input.level2, input.level3, input.distance0, input.distance1,
                     input.distance2, input.distance3, input.kind0, input.kind1,
                     input.kind2, input.kind3, input.statusEqualityMask,
-                    input.globalStateId, input.globalIsLava, input.belowIsLava,
-                    input.c2meAquifer, input.nearestStateId);
+                    input.globalIsLava, input.belowIsLava, input.c2meAquifer);
         }
 
         public void addPositiveDensity(double density, int y, boolean c2meAquifer) {
             write(density, 0.0, y, 0, 0, 0, 0, 0, 0, 0, 0,
-                    OTHER, OTHER, OTHER, OTHER, 0, 0, false, false, c2meAquifer, 0);
+                    OTHER, OTHER, OTHER, OTHER, 0, false, false, c2meAquifer);
         }
 
-        public void addGlobalLava(double density, int y, int stateId, boolean c2meAquifer) {
+        public void addGlobalLava(double density, int y, boolean c2meAquifer) {
             write(density, 0.0, y, 0, 0, 0, 0, 0, 0, 0, 0,
-                    OTHER, OTHER, OTHER, OTHER, 0, stateId, true, false, c2meAquifer, 0);
+                    OTHER, OTHER, OTHER, OTHER, 0, true, false, c2meAquifer);
         }
 
         public void addAquifer(double density, double barrier, int y,
@@ -131,8 +130,7 @@ public final class GpuAquiferSubstance {
                         int statusEqualityMask, boolean belowIsLava, boolean c2meAquifer) {
             write(density, barrier, y, level0, level1, level2, level3,
                     distance0, distance1, distance2, distance3, kind0, kind1,
-                    kind2, kind3, statusEqualityMask, 0, false, belowIsLava,
-                    c2meAquifer, 0);
+                    kind2, kind3, statusEqualityMask, false, belowIsLava, c2meAquifer);
         }
 
         public List<ByteBuffer> finish() {
@@ -150,9 +148,8 @@ public final class GpuAquiferSubstance {
                            int level0, int level1, int level2, int level3,
                            int distance0, int distance1, int distance2, int distance3,
                            int kind0, int kind1, int kind2, int kind3,
-                           int statusEqualityMask, int globalStateId,
-                           boolean globalIsLava, boolean belowIsLava,
-                           boolean c2meAquifer, int nearestStateId) {
+                           int statusEqualityMask, boolean globalIsLava,
+                           boolean belowIsLava, boolean c2meAquifer) {
             if (finished) throw new IllegalStateException("aquifer batch writer is already finished");
             if (size >= expectedRows) throw new IllegalStateException("aquifer batch exceeded its chunk capacity");
             if (current == null || !current.hasRemaining()) {
@@ -168,8 +165,7 @@ public final class GpuAquiferSubstance {
                     .putInt(level0).putInt(level1).putInt(level2).putInt(level3)
                     .putInt(distance0).putInt(distance1).putInt(distance2).putInt(distance3)
                     .putInt(kind0).putInt(kind1).putInt(kind2).putInt(kind3)
-                    .putInt(statusEqualityMask).putInt(globalStateId).putInt(flags)
-                    .putInt(nearestStateId);
+                    .putInt(statusEqualityMask).putInt(flags);
             size++;
         }
     }

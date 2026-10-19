@@ -18,9 +18,7 @@ struct InputRecord {
     uint kind2;
     uint kind3;
     uint statusEqualityMask;
-    uint globalStateId;
     uint flags;
-    uint nearestStateId;
 };
 layout(std430, set = 0, binding = 0) readonly buffer Inputs { InputRecord items[]; };
 layout(std430, set = 0, binding = 1) writeonly buffer Outputs { uint values[]; };

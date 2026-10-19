@@ -215,7 +215,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                 0, 0, 0, 0, 0, 0,
                                 GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
                                 GpuAquiferSubstance.OTHER, 0, true, false, 0) : null;
-                        substanceWriter.addGlobalLava(density, y, 0, c2meAquifer);
+                        substanceWriter.addGlobalLava(density, y, c2meAquifer);
                         pending.add(index, globalState, context, density, diagnosticInput);
                         directLavaDecisions++;
                         continue;
