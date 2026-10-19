@@ -31,6 +31,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
     private final ConcurrentLinkedQueue<GraphRootsGridRequest> pendingGraphGrids = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<AquiferNearestRequest> pendingAquiferNearest = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<AquiferSubstanceRequest> pendingAquiferSubstance = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<AquiferFluidStatusRequest> pendingAquiferFluidStatus = new ConcurrentLinkedQueue<>();
     /** The auxiliary kernel shares the slot command buffer with async graph work. */
     private boolean aquiferKernelInFlight;
     private final ScheduledExecutorService completion = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -121,7 +122,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
                     AquiferNearestRequest nearest = pendingAquiferNearest.poll();
                     AquiferSubstanceRequest substance = nearest == null
                             ? pendingAquiferSubstance.poll() : null;
-                    if (nearest == null && substance == null) return;
+                    AquiferFluidStatusRequest fluidStatus = nearest == null && substance == null
+                            ? pendingAquiferFluidStatus.poll() : null;
+                    if (nearest == null && substance == null && fluidStatus == null) return;
                     aquiferKernelInFlight = true;
                     try {
                         completion.execute(() -> {
@@ -130,14 +133,21 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                     nearest.future.complete(slot.submitAquiferNearestThree(
                                             nearest.records, nearest.count));
                                 } else {
-                                    substance.future.complete(slot.submitAquiferSubstance(
-                                            substance.records, substance.count));
+                                    if (substance != null) {
+                                        substance.future.complete(slot.submitAquiferSubstance(
+                                                substance.records, substance.count));
+                                    } else {
+                                        fluidStatus.future.complete(slot.submitAquiferFluidStatus(
+                                                fluidStatus.records, fluidStatus.count));
+                                    }
                                 }
                             } catch (Throwable failure) {
                                 if (nearest != null) nearest.future.completeExceptionally(new IllegalStateException(
                                         "GPU ring aquifer nearest-three dispatch failed", failure));
-                                else substance.future.completeExceptionally(new IllegalStateException(
+                                else if (substance != null) substance.future.completeExceptionally(new IllegalStateException(
                                         "GPU ring aquifer substance dispatch failed", failure));
+                                else fluidStatus.future.completeExceptionally(new IllegalStateException(
+                                        "GPU ring aquifer fluid-status dispatch failed", failure));
                             } finally {
                                 synchronized (VulkanSubmissionRing.this) {
                                     aquiferKernelInFlight = false;
@@ -148,7 +158,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
                     } catch (RuntimeException stopped) {
                         aquiferKernelInFlight = false;
                         if (nearest != null) nearest.future.completeExceptionally(stopped);
-                        else substance.future.completeExceptionally(stopped);
+                        else if (substance != null) substance.future.completeExceptionally(stopped);
+                        else fluidStatus.future.completeExceptionally(stopped);
                     }
                     return;
                 }
@@ -227,6 +238,13 @@ final class VulkanSubmissionRing implements AutoCloseable {
     CompletableFuture<int[]> submitAquiferSubstance(ByteBuffer records, int count) {
         CompletableFuture<int[]> future = new CompletableFuture<>();
         pendingAquiferSubstance.add(new AquiferSubstanceRequest(records.duplicate(), count, future));
+        drainGraphRoots();
+        return future;
+    }
+
+    CompletableFuture<int[]> submitAquiferFluidStatus(ByteBuffer records, int count) {
+        CompletableFuture<int[]> future = new CompletableFuture<>();
+        pendingAquiferFluidStatus.add(new AquiferFluidStatusRequest(records.duplicate(), count, future));
         drainGraphRoots();
         return future;
     }
@@ -313,6 +331,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
         AquiferSubstanceRequest substanceRequest;
         while ((substanceRequest = pendingAquiferSubstance.poll()) != null)
             substanceRequest.future.completeExceptionally(stopped);
+        AquiferFluidStatusRequest fluidStatusRequest;
+        while ((fluidStatusRequest = pendingAquiferFluidStatus.poll()) != null)
+            fluidStatusRequest.future.completeExceptionally(stopped);
         for (int i = slots.length - 1; i >= 0; i--) {
             if (slots[i] != null) slots[i].close();
         }
@@ -324,4 +345,5 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                          CompletableFuture<float[]> future) {}
     private record AquiferNearestRequest(ByteBuffer records, int count, CompletableFuture<int[]> future) {}
     private record AquiferSubstanceRequest(ByteBuffer records, int count, CompletableFuture<int[]> future) {}
+    private record AquiferFluidStatusRequest(ByteBuffer records, int count, CompletableFuture<int[]> future) {}
 }

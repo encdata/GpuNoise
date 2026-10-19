@@ -849,6 +849,22 @@ public final class VulkanCiSmoke {
             }
             var substanceFuture = ring.submitAquiferSubstance(
                     GpuAquiferSubstance.pack(substanceCases), substanceCases.length);
+            GpuAquiferFluidStatus.Input[] fluidStatusCases = aquiferFluidStatusCases();
+            int[] fluidStatusResults = ring.submitAquiferFluidStatus(
+                    GpuAquiferFluidStatus.pack(fluidStatusCases), fluidStatusCases.length)
+                    .get(60, TimeUnit.SECONDS);
+            for (int row = 0; row < fluidStatusCases.length; row++) {
+                int[] expected = GpuAquiferFluidStatus.evaluate(fluidStatusCases[row]);
+                int base = row * GpuAquiferFluidStatus.OUTPUT_INTS;
+                for (int field = 0; field < GpuAquiferFluidStatus.OUTPUT_INTS; field++) {
+                    if (fluidStatusResults[base + field] != expected[field]) {
+                        throw new IllegalStateException("C2ME OCL fluid-status mismatch at row " + row
+                                + ", field " + field + ", expected=" + expected[field]
+                                + ", actual=" + fluidStatusResults[base + field]);
+                    }
+                }
+            }
+            System.out.println("Vulkan CI smoke: C2ME OCL aquifer fluid-status prefill parity completed");
             // The Tectonic integration profile can produce 576-block-high
             // chunks. Exercise the largest observed volume through both
             // decision kernels in one dispatch each.
@@ -1158,6 +1174,39 @@ public final class VulkanCiSmoke {
                         + ": expected " + expected + ", got " + values[index]);
             }
         }
+    }
+
+    private static GpuAquiferFluidStatus.Input[] aquiferFluidStatusCases() {
+        float[] drySurface = new float[GpuAquiferFluidStatus.SURFACE_SAMPLES];
+        int[] dryLevels = new int[GpuAquiferFluidStatus.GLOBAL_LEVEL_SAMPLES];
+        int[] dryKinds = new int[GpuAquiferFluidStatus.GLOBAL_LEVEL_SAMPLES];
+        int[] neighborLevels = dryLevels.clone();
+        int[] neighborKinds = dryKinds.clone();
+        neighborLevels[0] = 5;
+        neighborKinds[0] = GpuAquiferFluidStatus.WATER;
+        GpuAquiferFluidStatus.Input neighborStatus = new GpuAquiferFluidStatus.Input(
+                0, 63, GpuAquiferFluidStatus.WATER, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                drySurface.clone(), neighborLevels, neighborKinds);
+        float[] highSurface = new float[GpuAquiferFluidStatus.SURFACE_SAMPLES];
+        java.util.Arrays.fill(highSurface, 100.0f);
+        int[] centerLevels = dryLevels.clone();
+        int[] centerKinds = dryKinds.clone();
+        centerKinds[0] = GpuAquiferFluidStatus.WATER;
+        GpuAquiferFluidStatus.Input spreadLevel = new GpuAquiferFluidStatus.Input(
+                0, 63, GpuAquiferFluidStatus.WATER, 0.7f, 0.31f, 0.0f, 0.0f, 0.0f,
+                highSurface, centerLevels, centerKinds);
+        int[] lavaLevels = dryLevels.clone();
+        int[] lavaKinds = dryKinds.clone();
+        lavaLevels[0] = 10;
+        lavaKinds[0] = GpuAquiferFluidStatus.WATER;
+        GpuAquiferFluidStatus.Input lavaOverride = new GpuAquiferFluidStatus.Input(
+                -20, 63, GpuAquiferFluidStatus.WATER, -0.2f, 0.31f, 0.4f, 0.0f, 0.0f,
+                drySurface.clone(), lavaLevels, lavaKinds);
+        GpuAquiferFluidStatus.Input uncertainDeepDarkBoundary = new GpuAquiferFluidStatus.Input(
+                0, 63, GpuAquiferFluidStatus.WATER, 0.0f, 0.0f, 0.0f, -0.225f, 0.0f,
+                drySurface.clone(), dryLevels.clone(), dryKinds.clone());
+        return new GpuAquiferFluidStatus.Input[]{neighborStatus, spreadLevel, lavaOverride,
+                uncertainDeepDarkBoundary};
     }
 
     private static void assertAnisotropicInterpolationResults(float[] values) {

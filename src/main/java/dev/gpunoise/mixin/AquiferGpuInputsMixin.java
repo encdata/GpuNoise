@@ -9,6 +9,7 @@ import dev.gpunoise.GpuAquiferCoordinatePlanner;
 import dev.gpunoise.GpuAquiferNearestThree;
 import dev.gpunoise.GpuAquiferRuntimeMode;
 import dev.gpunoise.GpuAquiferSubstance;
+import dev.gpunoise.GpuAquiferFluidStatus;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQueries;
 import dev.gpunoise.GpuAquiferDecisionData.FluidStatusCache;
 import dev.gpunoise.GpuAquiferDecisionData.NeighborhoodCache;
@@ -32,6 +33,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.mixin.gen.Invoker;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Semaphore;
@@ -324,6 +327,14 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             }
         }
 
+        // C2ME OCL precomputes each random aquifer center's FluidStatus before
+        // resolving block decisions. Mirror that bulk prefill: evaluate the
+        // 13 surface probes, global fluid samples, and terrain roots together
+        // on Vulkan, then retain the original Java statuses for custom fluids.
+        if (c2meAquifer && queries.size() > 0) {
+            gpunoise$prefillC2meFluidStatuses(cache, queries, fluidStatuses);
+        }
+
         List<CompletableFuture<int[]>> nearestBatches = new ArrayList<>();
         for (int offset = 0; offset < queries.size(); offset += GpuAquiferNearestThree.MAX_QUERIES) {
             int count = Math.min(GpuAquiferNearestThree.MAX_QUERIES, queries.size() - offset);
@@ -503,6 +514,92 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     acceptedDecisions, substanceWriter.size() - acceptedDecisions,
                     directGlobalFluidDecisions,
                     vanillaParitySamples, vanillaParityMismatches);
+        }
+    }
+
+    @org.spongepowered.asm.mixin.Unique
+    private void gpunoise$prefillC2meFluidStatuses(GpuChunkDensityCache cache,
+                                                    AquiferQueries queries,
+                                                    FluidStatusCache statusCache) {
+        int[][] offsets = {
+                {0, 0}, {-2, -1}, {-1, -1}, {0, -1}, {1, -1}, {-3, 0},
+                {-2, 0}, {-1, 0}, {1, 0}, {-2, 1}, {-1, 1}, {0, 1}, {1, 1}
+        };
+        Map<Long, Integer> indexes = new HashMap<>();
+        List<int[]> centers = new ArrayList<>();
+        for (int query = 0; query < queries.size(); query++) {
+            for (int[] center : queries.centers(query)) {
+                long key = BlockPos.asLong(center[0], center[1], center[2]);
+                if (!indexes.containsKey(key)) {
+                    indexes.put(key, centers.size());
+                    centers.add(center);
+                }
+            }
+        }
+        GpuAquiferFluidStatus.Input[] inputs = new GpuAquiferFluidStatus.Input[centers.size()];
+        Aquifer.FluidStatus[][] sampledStatuses = new Aquifer.FluidStatus[centers.size()][];
+        for (int index = 0; index < centers.size(); index++) {
+            int[] center = centers.get(index);
+            int centerX = center[0], centerY = center[1], centerZ = center[2];
+            Aquifer.FluidStatus defaultStatus = globalFluidPicker.computeFluid(0, centerY, 0);
+            float[] surfaces = new float[offsets.length];
+            int[] globalLevels = new int[offsets.length];
+            int[] globalKinds = new int[offsets.length];
+            Aquifer.FluidStatus[] samples = new Aquifer.FluidStatus[offsets.length];
+            for (int sample = 0; sample < offsets.length; sample++) {
+                int surfaceX = Math.floorDiv(centerX + (offsets[sample][0] << 4), 4) * 4;
+                int surfaceZ = Math.floorDiv(centerZ + (offsets[sample][1] << 4), 4) * 4;
+                surfaces[sample] = (float) cache.aquiferPreliminarySurfaceLevel(surfaceX, surfaceZ);
+                int surfaceY = (int) Math.floor(surfaces[sample]) + 8;
+                Aquifer.FluidStatus sampled = globalFluidPicker.computeFluid(0, surfaceY, 0);
+                samples[sample] = sampled;
+                globalLevels[sample] = gpunoise$fluidLevel(sampled);
+                BlockState sampledState = sampled.at(surfaceY);
+                globalKinds[sample] = sampledState.isAir() ? GpuAquiferFluidStatus.AIR
+                        : sampledState.is(Blocks.WATER) ? GpuAquiferFluidStatus.WATER
+                        : sampledState.is(Blocks.LAVA) ? GpuAquiferFluidStatus.LAVA
+                        : GpuAquiferFluidStatus.OTHER_FLUID;
+            }
+            GpuWorldgenDependency.Coordinate spread = GpuWorldgenDependency.spreadCoordinate(
+                    centerX, centerY, centerZ);
+            GpuWorldgenDependency.Coordinate lava = GpuWorldgenDependency.lavaCoordinate(
+                    centerX, centerY, centerZ);
+            inputs[index] = new GpuAquiferFluidStatus.Input(centerY,
+                    gpunoise$fluidLevel(defaultStatus), gpunoise$fluidKind(
+                    ((AquiferFluidStatusAccessor) (Object) defaultStatus).gpunoise$fluidType()),
+                    (float) cache.aquiferFloodedness(centerX, centerY, centerZ),
+                    (float) cache.aquiferSpread(spread.x(), spread.y(), spread.z()),
+                    (float) cache.aquiferLava(lava.x(), lava.y(), lava.z()),
+                    (float) cache.aquiferErosion(centerX, centerY, centerZ),
+                    (float) cache.aquiferDepth(centerX, centerY, centerZ),
+                    surfaces, globalLevels, globalKinds);
+            sampledStatuses[index] = samples;
+        }
+        int[] outputs = GpuTerrainRuntime.submitAquiferFluidStatus(
+                GpuAquiferFluidStatus.pack(inputs), inputs.length).toCompletableFuture().join();
+        for (int index = 0; index < centers.size(); index++) {
+            int[] center = centers.get(index);
+            long key = BlockPos.asLong(center[0], center[1], center[2]);
+            int base = index * GpuAquiferFluidStatus.OUTPUT_INTS;
+            int level = outputs[base];
+            int source = outputs[base + 1];
+            int flags = outputs[base + 2];
+            Aquifer.FluidStatus status;
+            if ((flags & GpuAquiferFluidStatus.FLAG_CPU_FALLBACK) != 0
+                    || source < 0 || source > GpuAquiferFluidStatus.SURFACE_SAMPLES) {
+                status = gpunoise$getAquiferStatus(key);
+            } else if ((flags & GpuAquiferFluidStatus.FLAG_LAVA_OVERRIDE) != 0) {
+                status = new Aquifer.FluidStatus(level, Blocks.LAVA.defaultBlockState());
+            } else if (source == 0) {
+                Aquifer.FluidStatus defaultStatus = globalFluidPicker.computeFluid(0, center[1], 0);
+                status = new Aquifer.FluidStatus(level,
+                        ((AquiferFluidStatusAccessor) (Object) defaultStatus).gpunoise$fluidType());
+            } else {
+                Aquifer.FluidStatus sampled = sampledStatuses[index][source - 1];
+                status = new Aquifer.FluidStatus(level,
+                        ((AquiferFluidStatusAccessor) (Object) sampled).gpunoise$fluidType());
+            }
+            statusCache.put(key, status);
         }
     }
 
