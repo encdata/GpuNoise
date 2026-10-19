@@ -600,7 +600,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     .putInt(chunkCount).putInt(blocksPerChunk).putInt(cornerStride)
                     .putInt(markerCount | 0x8000_0000).flip();
             vkCmdPushConstants(commandBuffer, interpolationPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, interpolationPush);
-            writeGpuTimestamp(2, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+            writeGpuTimestamp(2, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
             vkCmdDispatch(commandBuffer, (blockCount + 63) / 64, 1, 1);
             writeGpuTimestamp(3, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             VkBufferMemoryBarrier.Buffer interpolationBarrier = VkBufferMemoryBarrier.calloc(2, stack).sType$Default();
@@ -619,7 +619,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     .putInt((packed.blockNodeOffset() << 5) | outputRoots)
                     .putInt(0x8000_0000 | markerCount).flip();
             vkCmdPushConstants(commandBuffer, graphPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, blockPush);
-            writeGpuTimestamp(4, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+            writeGpuTimestamp(4, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
             vkCmdDispatch(commandBuffer, (blockCount + 63) / 64, 1, 1);
             writeGpuTimestamp(5, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             VkBufferMemoryBarrier.Buffer resultBarrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
@@ -1137,7 +1137,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private void beginTerrainGpuTimestamps() {
         if (timestampQueryPool == 0L) return;
         vkCmdResetQueryPool(commandBuffer, timestampQueryPool, 0, 6);
-        writeGpuTimestamp(0, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+        writeGpuTimestamp(0, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
     }
 
     private void writeGpuTimestamp(int query, int stage) {
