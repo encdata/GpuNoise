@@ -290,7 +290,6 @@ final class GpuDensityGraphBuffer {
             int position = compactNodeAt[index];
             for (int producer : childProducers[index]) lastUse[producer] = position;
         }
-        int[] roots = graph.routerRoots();
         for (int root : roots) lastUse[lastProducer[root]] = blockNodeCount;
 
         List<List<Integer>> releases = new java.util.ArrayList<>(blockNodeCount);
