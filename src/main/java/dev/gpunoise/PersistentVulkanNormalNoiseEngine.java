@@ -251,10 +251,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 put(graphSplinePoints, packed.splinePoints(), stack);
                 put(graphBlendedMetadata, packed.blendedMetadata(), stack);
             }
-            ByteBuffer blendInputs = stack.malloc(xs.length * 8).order(ByteOrder.nativeOrder());
-            for (int i = 0; i < xs.length; i++) blendInputs.putFloat(0.0f).putFloat(1.0f);
-            blendInputs.flip();
-            put(graphBlendInputs, blendInputs, stack);
             uploadGraphRoots(new int[]{resultNode}, stack);
             if (graphResourcesGraph != graph) {
                 put(permutations, packed.permutations(), stack); put(octaves, packed.octaves(), stack); put(samplerMetadata, packed.samplerMetadata(), stack);
@@ -298,9 +294,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 put(graphNodes, packed.nodes(), stack);
                 put(graphSplinePoints, packed.splinePoints(), stack); put(graphBlendedMetadata, packed.blendedMetadata(), stack);
             }
-            ByteBuffer blendInputs = stack.malloc(sampleCount * 8).order(ByteOrder.nativeOrder());
-            for (int i = 0; i < sampleCount; i++) blendInputs.putFloat(0.0f).putFloat(1.0f);
-            blendInputs.flip(); put(graphBlendInputs, blendInputs, stack);
             uploadGraphRoots(graph.routerRoots(), stack);
             if (graphResourcesGraph != graph) {
                 put(permutations, packed.permutations(), stack); put(octaves, packed.octaves(), stack); put(samplerMetadata, packed.samplerMetadata(), stack);
@@ -347,9 +340,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 put(permutations, packed.permutations(), stack); put(octaves, packed.octaves(), stack);
                 put(samplerMetadata, packed.samplerMetadata(), stack); graphResourcesGraph = graph;
             }
-            ByteBuffer blendInputs = stack.malloc(sampleCount * 8).order(ByteOrder.nativeOrder());
-            for (int i = 0; i < sampleCount; i++) blendInputs.putFloat(0.0f).putFloat(1.0f);
-            blendInputs.flip(); put(graphBlendInputs, blendInputs, stack);
             uploadGraphRoots(graph.routerRoots(), stack);
             check(vkResetCommandBuffer(commandBuffer, 0), "reset async graph-roots command buffer");
             check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin async graph-roots command buffer");
@@ -648,9 +638,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 put(permutations, packed.permutations(), stack); put(octaves, packed.octaves(), stack);
                 put(samplerMetadata, packed.samplerMetadata(), stack); graphResourcesGraph = graph;
             }
-            ByteBuffer blendInputs = stack.malloc(sampleCount * 8).order(ByteOrder.nativeOrder());
-            for (int i = 0; i < sampleCount; i++) blendInputs.putFloat(0.0f).putFloat(1.0f);
-            blendInputs.flip(); put(graphBlendInputs, blendInputs, stack);
             uploadGraphRoots(graph.routerRoots(), stack); put(interpolationMetadata, metadata, stack);
             check(vkResetCommandBuffer(commandBuffer, 0), "reset fused command buffer");
             check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin fused command buffer");

@@ -415,20 +415,7 @@ void main(){
         else if(op==25u)v=javaFloatOperation(n.meta.x,values[n.ids.y],n.meta.x==6u?0.0:values[n.ids.z]);
         else if(op==26u)v=javaNumericCast(n.meta.x,values[n.ids.y]);
         else if(op==27u){vec3 q=vec3(float(values[n.ids.y]),float(values[n.ids.z]),float(values[n.ids.w]));v=double(normalNoise(q,uint(n.params.x)));}
-        else if(op==15u){
-#if defined(GRID_INPUT)
-            // Normal new-chunk terrain has the vanilla no-blending pair (0,1).
-            // Keep the general buffer-backed form for old/blended arbitrary
-            // coordinate requests, but do not read a giant identical buffer
-            // for the regular grid path.
-            v=values[n.ids.y];
-#else
-        if((reserved & BLOCK_EVALUATION)!=0u){v=values[n.ids.y];}
-            else {
-            vec2 blend=blendInputs[sampleIndex];v=mix(double(blend.x),values[n.ids.y],double(blend.y));
-            }
-#endif
-        }
+        else if(op==15u)v=values[n.ids.y]; // Blend inputs are vanilla no-blending (0,1).
         else if(op==16u){double x=values[n.ids.y];v=(x>=double(n.params.x)&&x<double(n.params.y))?values[n.ids.z]:values[n.ids.w];}
         else if(op==17u){double rarity=double(spaghettiRarity(float(values[n.ids.y]),n.meta.x==0u?0u:1u));v=rarity*double(abs(normalNoise(p/float(rarity),uint(n.params.x))));}
 #if !defined(GRID_INPUT)
