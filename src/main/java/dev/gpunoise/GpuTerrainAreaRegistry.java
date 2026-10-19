@@ -11,7 +11,7 @@ final class GpuTerrainAreaRegistry {
     static final int RADIUS = 2;
     /** Bound retained cell grids and full-block output while chunks wait for fill. */
     private static final int MAX_LIVE_CACHES = (int) Math.max(32L,
-            Math.min(512L, Long.getLong("gpunoise.terrainCacheBudget", 128L)));
+            Math.min(512L, Long.getLong("gpunoise.terrainCacheBudget", 32L)));
     private static final int MAX_PREFETCH_TILES = 4096;
     private static final ConcurrentHashMap<Long, GpuChunkDensityCache> CLAIMED = new ConcurrentHashMap<>();
     private static final Semaphore CACHE_SLOTS = new Semaphore(MAX_LIVE_CACHES);

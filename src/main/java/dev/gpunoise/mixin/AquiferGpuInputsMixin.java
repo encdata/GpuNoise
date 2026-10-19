@@ -35,6 +35,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.Objects;
 
@@ -79,6 +80,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private static final AtomicBoolean gpunoise$exactAquiferInputsLogged = new AtomicBoolean();
 
     @org.spongepowered.asm.mixin.Unique
+    private static final Semaphore gpunoise$aquiferDecisionSlot = new Semaphore(1, true);
+
+    @org.spongepowered.asm.mixin.Unique
     private static final boolean gpunoise$verifyAquifer = Boolean.getBoolean("gpunoise.verifyAquiferGpu");
 
     @Invoker("getAquiferStatus")
@@ -111,14 +115,22 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             gpunoise$logAquiferPreflightSkip("aquifer barrier root is unsupported");
             return;
         }
+        boolean acquired = false;
         try {
+            gpunoise$aquiferDecisionSlot.acquire();
+            acquired = true;
             gpunoise$buildGpuDecisionTable(cache, noiseAccess, positionalRandomFactory);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            gpunoise$logAquiferPreflightSkip("interrupted while waiting for the shared Vulkan aquifer decision slot");
         } catch (RuntimeException failure) {
             gpunoise$decisions = null;
             if (gpunoise$aquiferBatchWarning.compareAndSet(false, true)) {
                 dev.gpunoise.GpuNoise.LOGGER.warn(
                         "GPU aquifer decision batch unavailable; using vanilla aquifer decisions.", failure);
             }
+        } finally {
+            if (acquired) gpunoise$aquiferDecisionSlot.release();
         }
     }
 
