@@ -99,8 +99,10 @@ def _decompress(compression: int, payload: bytes) -> bytes:
 
 def _iter_region(path: Path) -> Iterator[tuple[tuple[int, int], dict[str, Any]]]:
     raw = path.read_bytes()
+    if not raw or (len(raw) == 4096 and not any(raw)):
+        return
     if len(raw) < 8192:
-        raise ValueError(f"truncated region header: {path}")
+        raise ValueError(f"truncated {len(raw)}-byte region header: {path}")
     region_parts = path.stem.split(".")
     if len(region_parts) != 3 or region_parts[0] != "r":
         raise ValueError(f"invalid region filename: {path.name}")
