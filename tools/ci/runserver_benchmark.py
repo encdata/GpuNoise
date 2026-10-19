@@ -68,6 +68,11 @@ if FULL_BLOCK_OUTPUT not in {"true", "false"}:
 FULL_BLOCK_OUTPUT = FULL_BLOCK_OUTPUT == "true"
 DENSITY_PARITY_CHUNK_X = int(os.environ.get("GPUNOISE_DENSITY_PARITY_CHUNK_X", "-17"))
 DENSITY_PARITY_CHUNK_Z = int(os.environ.get("GPUNOISE_DENSITY_PARITY_CHUNK_Z", "-18"))
+# Chunky's center command takes block coordinates. Keep the configured parity
+# chunk inside the small correctness radius instead of pregenerating a much
+# larger area just to reach the known failing coordinates.
+DENSITY_PARITY_CENTER_X = DENSITY_PARITY_CHUNK_X * 16 + 8
+DENSITY_PARITY_CENTER_Z = DENSITY_PARITY_CHUNK_Z * 16 + 8
 VERIFY_AQUIFER_GPU = os.environ.get("GPUNOISE_CI_VERIFY_AQUIFER", "false").lower()
 if VERIFY_AQUIFER_GPU not in {"true", "false"}:
     raise ValueError("GPUNOISE_CI_VERIFY_AQUIFER must be true or false")
@@ -128,7 +133,7 @@ def start_chunky_with_rcon() -> None:
     commands = (
         "chunky cancel",
         "chunky world minecraft:overworld",
-        "chunky center 0 0",
+        f"chunky center {DENSITY_PARITY_CENTER_X} {DENSITY_PARITY_CENTER_Z}",
         f"chunky radius {CHUNKY_RADIUS_BLOCKS}",
         "chunky start",
         "chunky confirm",
