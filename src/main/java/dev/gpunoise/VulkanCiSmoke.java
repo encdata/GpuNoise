@@ -16,6 +16,8 @@ public final class VulkanCiSmoke {
         // Called by the CI server after NeoForge has initialized the registry
         // and mod-loading lifecycle. A standalone JavaExec cannot safely boot
         // these fixtures because NeoForge's LoadingModList is unavailable.
+        GpuDensityExpressionSmoke.VulkanBranchFixture registeredTranslator =
+                registeredTranslatorFixture();
         GpuDensityExpressionSmoke.verify();
         verifyTranslatorRegistry();
         GpuDevice device = GpuProbe.findPreferredDevice(GpuNoiseConfig.GpuVendorPreference.AUTO);
@@ -32,6 +34,10 @@ public final class VulkanCiSmoke {
         System.out.println("Vulkan CI smoke: creating submission ring");
         VulkanSubmissionRing ring = VulkanBootstrapThread.call(() -> new VulkanSubmissionRing(device));
         try (ring) {
+            assertNumericFixture(ring, registeredTranslator, "registered custom density translator",
+                    new float[]{-193.0f, -1.0f, 37.0f, 256.0f},
+                    new float[]{-64.0f, 0.0f, 91.0f, 319.0f},
+                    new float[]{-117.0f, 1.0f, -248.0f, 128.0f});
             float[] x = {-64.0f, 0.0f, 16_777_216.0f, 30_000_000.0f};
             float[] y = {-64.0f, 0.0f, 128.0f, 320.0f};
             float[] z = {64.0f, 0.0f, -16_777_216.0f, -30_000_000.0f};
@@ -736,6 +742,52 @@ public final class VulkanCiSmoke {
             if (!expected.getMessage().startsWith("Ambiguous GPU density translators for ")) throw expected;
         }
         System.out.println("Vulkan CI smoke: custom density adapter inheritance and precedence passed");
+    }
+
+    private static GpuDensityExpressionSmoke.VulkanBranchFixture registeredTranslatorFixture() {
+        GpuDensityFunctionTranslators.register(RegisteredAdapterDensity.class,
+                GpuDensityFunctionTranslator.expressionOnly(function -> {
+                    GpuDensityExpression.Builder expression = new GpuDensityExpression.Builder();
+                    int x = expression.coordinate(GpuDensityExpression.Coordinate.X);
+                    int y = expression.coordinate(GpuDensityExpression.Coordinate.Y);
+                    int z = expression.coordinate(GpuDensityExpression.Coordinate.Z);
+                    int scaledX = expression.apply(GpuDensityExpression.Operation.MULTIPLY,
+                            x, expression.constant(0.25));
+                    int scaledZ = expression.apply(GpuDensityExpression.Operation.MULTIPLY,
+                            z, expression.constant(0.125));
+                    int horizontal = expression.apply(GpuDensityExpression.Operation.ADD, scaledX, y);
+                    int root = expression.apply(GpuDensityExpression.Operation.SUBTRACT, horizontal, scaledZ);
+                    return expression.build(root);
+                }));
+        RegisteredAdapterDensity function = new RegisteredAdapterDensity();
+        GpuDensityGraph graph = GpuDensityGraphCompiler.compileDensityFunction(function, true);
+        GpuDensityGraph lowered = GpuDensityGraphLowerer.lower(graph);
+        boolean directExpression = lowered.nodes().stream()
+                .anyMatch(node -> "GpuDensityExpression".equals(node.payload()));
+        if (!lowered.supportsRouterRoot(0) || !directExpression) {
+            throw new IllegalStateException("Registered custom translator did not reach the terrain GPU IR");
+        }
+        System.out.println("Vulkan CI smoke: registered custom density adapter reached terrain IR");
+        return new GpuDensityExpressionSmoke.VulkanBranchFixture(lowered, function);
+    }
+
+    private static final class RegisteredAdapterDensity implements net.minecraft.world.level.levelgen.DensityFunction.SimpleFunction {
+        @Override
+        public double compute(net.minecraft.world.level.levelgen.DensityFunction.FunctionContext context) {
+            return context.blockX() * 0.25 + context.blockY() - context.blockZ() * 0.125;
+        }
+
+        @Override
+        public net.minecraft.world.level.levelgen.DensityFunction mapAll(
+                net.minecraft.world.level.levelgen.DensityFunction.Visitor visitor) {
+            return visitor.apply(this);
+        }
+
+        @Override public double minValue() { return -10_000_000.0; }
+        @Override public double maxValue() { return 10_000_000.0; }
+        @Override public net.minecraft.util.KeyDispatchDataCodec<? extends net.minecraft.world.level.levelgen.DensityFunction> codec() {
+            return net.minecraft.world.level.levelgen.DensityFunctions.constant(0.0).codec();
+        }
     }
 
     public interface CustomDensityFamily {}
