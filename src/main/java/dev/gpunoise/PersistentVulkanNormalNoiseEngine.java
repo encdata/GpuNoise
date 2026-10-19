@@ -554,10 +554,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             ByteBuffer metadata = outputMetadata.duplicate().order(ByteOrder.nativeOrder());
             metadata.limit(metadata.position() + chunkCount * GpuInterpolationBatch.METADATA_BYTES);
             put(interpolationMetadata, metadata, stack);
-            ByteBuffer blendInputs = stack.malloc(blockCount * 8).order(ByteOrder.nativeOrder());
-            for (int i = 0; i < blockCount; i++) blendInputs.putFloat(0f).putFloat(1f);
-            blendInputs.flip(); put(graphBlendInputs, blendInputs, stack);
-
             check(vkResetCommandBuffer(commandBuffer, 0), "reset grid interpolation command buffer");
             check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin grid interpolation command buffer");
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, gridPipeline);

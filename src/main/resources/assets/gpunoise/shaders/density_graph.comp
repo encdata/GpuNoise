@@ -406,14 +406,17 @@ void main(){
         else if(op==26u)v=javaNumericCast(n.meta.x,values[n.ids.y]);
         else if(op==27u){vec3 q=vec3(float(values[n.ids.y]),float(values[n.ids.z]),float(values[n.ids.w]));v=double(normalNoise(q,uint(n.params.x)));}
         else if(op==15u){
-#ifdef GRID_INPUT
+#if defined(GRID_INPUT)
             // Normal new-chunk terrain has the vanilla no-blending pair (0,1).
             // Keep the general buffer-backed form for old/blended arbitrary
             // coordinate requests, but do not read a giant identical buffer
             // for the regular grid path.
             v=values[n.ids.y];
 #else
+            if(reserved!=0u){v=values[n.ids.y];}
+            else {
             vec2 blend=blendInputs[sampleIndex];v=mix(double(blend.x),values[n.ids.y],double(blend.y));
+            }
 #endif
         }
         else if(op==16u){double x=values[n.ids.y];v=(x>=double(n.params.x)&&x<double(n.params.y))?values[n.ids.z]:values[n.ids.w];}
