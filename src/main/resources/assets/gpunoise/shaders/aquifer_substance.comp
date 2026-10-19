@@ -22,7 +22,7 @@ struct InputRecord {
     uint flags;
     uint nearestStateId;
 };
-struct OutputRecord { uint action; uint stateId; uint schedule; uint reserved; };
+struct OutputRecord { uint action; uint stateId; uint schedule; };
 
 layout(std430, set = 0, binding = 0) readonly buffer Inputs { InputRecord items[]; };
 layout(std430, set = 0, binding = 1) writeonly buffer Outputs { OutputRecord values[]; };
@@ -64,7 +64,6 @@ void emit(uint i, uint action, uint stateId, uint schedule) {
     values[i].action = action;
     values[i].stateId = stateId;
     values[i].schedule = schedule;
-    values[i].reserved = 0u;
 }
 
 bool sameStatus(InputRecord r, uint bit) {

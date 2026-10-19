@@ -8,7 +8,7 @@ import java.util.List;
 /** Packed contract and double-precision reference for vanilla aquifer results. */
 public final class GpuAquiferSubstance {
     public static final int RECORD_BYTES = 76;
-    public static final int OUTPUT_INTS = 4;
+    public static final int OUTPUT_INTS = 3;
     /**
      * Substance evaluation is a compact one-dispatch pass over the full block
      * volume. Keep center selection's smaller limit independent: its records
@@ -153,7 +153,7 @@ public final class GpuAquiferSubstance {
         }
     }
 
-    /** Output words are action, state ID, schedule-fluid-update, reserved. */
+    /** Output words are action, state ID, and schedule-fluid-update. */
     public static int[] evaluate(Input input) {
         if (!Double.isFinite(input.density)) return output(CPU_FALLBACK, 0, false);
         if (nearDensityDecisionThreshold(input.density)) return output(CPU_FALLBACK, 0, false);
@@ -233,7 +233,7 @@ public final class GpuAquiferSubstance {
     }
 
     private static int[] output(int action, int stateId, boolean schedule) {
-        return new int[]{action, stateId, schedule ? 1 : 0, 0};
+        return new int[]{action, stateId, schedule ? 1 : 0};
     }
 
     private static boolean sameStatus(Input input, int first, int second) {
