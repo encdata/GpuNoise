@@ -192,6 +192,38 @@ def _chunk_sections(nbt: dict[str, Any]) -> dict[int, list[tuple[str, tuple[tupl
     return result
 
 
+def _state_at_world(sections: dict[int, list[tuple[str, tuple[tuple[str, str], ...]]]],
+                    chunk_pos: tuple[int, int], world_pos: tuple[int, int, int]) -> tuple[str, tuple[tuple[str, str], ...]] | None:
+    world_x, world_y, world_z = world_pos
+    section_y = world_y // 16
+    states = sections.get(section_y)
+    if states is None:
+        return None
+    local_x = world_x - chunk_pos[0] * 16
+    local_z = world_z - chunk_pos[1] * 16
+    if local_x < 0 or local_x >= 16 or local_z < 0 or local_z >= 16:
+        return None
+    index = ((world_y & 15) << 8) | (local_z << 4) | local_x
+    return states[index]
+
+
+def _mismatch_neighborhood(
+        cpu_sections: dict[int, list[tuple[str, tuple[tuple[str, str], ...]]]],
+        gpu_sections: dict[int, list[tuple[str, tuple[tuple[str, str], ...]]]],
+        chunk_pos: tuple[int, int], center: tuple[int, int, int]) -> tuple[tuple[Any, ...], ...]:
+    """Return the differing positions in the 3x3x3 block neighborhood."""
+    differences = []
+    for dy in range(-1, 2):
+        for dz in range(-1, 2):
+            for dx in range(-1, 2):
+                position = (center[0] + dx, center[1] + dy, center[2] + dz)
+                cpu_state = _state_at_world(cpu_sections, chunk_pos, position)
+                gpu_state = _state_at_world(gpu_sections, chunk_pos, position)
+                if cpu_state != gpu_state:
+                    differences.append((position, cpu_state, gpu_state))
+    return tuple(differences)
+
+
 def _canonical_tag(value: Any) -> Any:
     if isinstance(value, dict):
         return tuple(sorted((str(key), _canonical_tag(child)) for key, child in value.items()))
@@ -259,8 +291,10 @@ def compare_worlds(cpu_world: Path, gpu_world: Path) -> tuple[int, int, int]:
                         continue
                     x, z, y = index & 15, (index >> 4) & 15, (index >> 8) & 15
                     world_pos = (cpu_pos[0] * 16 + x, section_y * 16 + y, cpu_pos[1] * 16 + z)
+                    neighborhood = _mismatch_neighborhood(cpu_sections, gpu_sections, cpu_pos, world_pos)
                     raise RuntimeError(
-                        f"CPU/GPU block state mismatch at world {world_pos}: CPU={cpu_state}, GPU={gpu_state}"
+                        f"CPU/GPU block state mismatch at world {world_pos}: CPU={cpu_state}, GPU={gpu_state}; "
+                        f"neighboring mismatches={neighborhood}"
                     )
     if compared_chunks == 0:
         raise RuntimeError(f"no saved chunks found under {cpu_region_dir}")
