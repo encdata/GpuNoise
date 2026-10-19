@@ -198,6 +198,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private void gpunoise$usePreparedGpuAquiferDecision(
             DensityFunction.FunctionContext context, double density,
             CallbackInfoReturnable<BlockState> cir) {
+        // The verifier invokes the original method through an @Invoker. Keep
+        // this prepared-table hook out of that Java reference call.
+        if (Boolean.TRUE.equals(gpunoise$javaAquiferReference.get())) return;
         GpuAquiferDecisionTable decisions = gpunoise$decisions;
         if (decisions == null) {
             if (gpunoise$isTraceAquiferBlock(context.blockX(), context.blockY(), context.blockZ())) {
