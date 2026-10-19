@@ -24,6 +24,7 @@ public final class GpuChunkDensityCache {
     private final GpuTerrainGrid grid;
     private final CompletionStage<GpuTerrainBatchResult> result;
     private final GpuWorldgenDependency exact;
+    private final Object terrainGraphIdentity;
     /** Graph support is immutable for the lifetime of the graph-bound cache. */
     private final int supportedRootMask;
     // The completion stage publishes these fields before doFill is started.
@@ -66,6 +67,7 @@ public final class GpuChunkDensityCache {
         this.gridZ = depth;
         this.grid = new GpuTerrainGrid(minX, minY, minZ, width, cellsY + 1, depth, cellWidth, cellHeight);
         this.exact = exact;
+        this.terrainGraphIdentity = GpuTerrainRuntime.aquiferCacheGraphIdentity();
         this.supportedRootMask = GpuTerrainRuntime.supportedTerrainRootMask();
         int samples = width * (cellsY + 1) * depth;
         // The GPU evaluates the cell lattice and materializes final-density
@@ -138,6 +140,7 @@ public final class GpuChunkDensityCache {
     public int minZ() { return minZ; }
     public int minY() { return minY; }
     public int height() { return maxRelativeY; }
+    public Object terrainGraphIdentity() { return terrainGraphIdentity; }
 
     public static GpuChunkDensityCache takePrefetched(int minX, int minZ) {
         return PREFETCHED.remove(chunkKey(minX >> 4, minZ >> 4));

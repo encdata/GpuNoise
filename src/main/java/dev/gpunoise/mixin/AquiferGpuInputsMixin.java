@@ -429,10 +429,10 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         || first == second || first == third || first == fourth
                         || second == third || second == fourth || third == fourth
                         || distance0 < 0 || distance1 < 0 || distance2 < 0 || distance3 < 0) continue;
-                Aquifer.FluidStatus status0 = gpunoise$getCachedAquiferStatus(fluidStatuses, queryCenters[first]);
-                Aquifer.FluidStatus status1 = gpunoise$getCachedAquiferStatus(fluidStatuses, queryCenters[second]);
-                Aquifer.FluidStatus status2 = gpunoise$getCachedAquiferStatus(fluidStatuses, queryCenters[third]);
-                Aquifer.FluidStatus status3 = gpunoise$getCachedAquiferStatus(fluidStatuses, queryCenters[fourth]);
+                Aquifer.FluidStatus status0 = gpunoise$getCachedAquiferStatus(cache, fluidStatuses, queryCenters[first]);
+                Aquifer.FluidStatus status1 = gpunoise$getCachedAquiferStatus(cache, fluidStatuses, queryCenters[second]);
+                Aquifer.FluidStatus status2 = gpunoise$getCachedAquiferStatus(cache, fluidStatuses, queryCenters[third]);
+                Aquifer.FluidStatus status3 = gpunoise$getCachedAquiferStatus(cache, fluidStatuses, queryCenters[fourth]);
                 BlockState nearestState = status0.at(queryY);
                 int level0 = gpunoise$fluidLevel(status0);
                 int level1 = gpunoise$fluidLevel(status1);
@@ -561,12 +561,11 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 && gpunoise$terrainDecisionBatchLogged.compareAndSet(false, true)) {
             dev.gpunoise.GpuNoise.LOGGER.info(
                     "GPU terrain material decisions: queries={}, positiveDensityQueries={}, "
-                            + "aquiferQueries={}, centerStatusLookups={}, centerStatusEvaluations={}, "
-                            + "centerStatusCacheHits={}, acceptedDecisions={}, cpuFallback={}, "
+                            + "aquiferQueries={}, centerStatusReferences={}, uniqueCenterStatuses={}, "
+                            + "acceptedDecisions={}, cpuFallback={}, "
                             + "directGlobalFluidQueries={}, vanillaParitySamples={}, vanillaParityMismatches={}",
                     cumulativeQueries, cumulativePositive, cumulativeQueries - cumulativePositive,
                     queries.size() * 4L, fluidStatuses.size(),
-                    Math.max(0L, queries.size() * 4L - fluidStatuses.size()),
                     acceptedDecisions, substanceWriter.size() - acceptedDecisions,
                     directGlobalFluidDecisions,
                     vanillaParitySamples, vanillaParityMismatches);
@@ -588,7 +587,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         };
         Map<Long, Integer> indexes = new HashMap<>();
         List<int[]> centers = new ArrayList<>();
-        Object graphIdentity = GpuTerrainRuntime.aquiferCacheGraphIdentity();
+        Object graphIdentity = cache.terrainGraphIdentity();
         for (int query = 0; query < queries.size(); query++) {
             for (int[] center : queries.centers(query)) {
                 long key = BlockPos.asLong(center[0], center[1], center[2]);
@@ -704,11 +703,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     }
 
     @org.spongepowered.asm.mixin.Unique
-    private Aquifer.FluidStatus gpunoise$getCachedAquiferStatus(FluidStatusCache cache, int[] center) {
+    private Aquifer.FluidStatus gpunoise$getCachedAquiferStatus(GpuChunkDensityCache terrainCache,
+                                                                 FluidStatusCache cache, int[] center) {
         long position = BlockPos.asLong(center[0], center[1], center[2]);
         Aquifer.FluidStatus status = cache.get(position);
         if (status == null) {
-            Object graphIdentity = GpuTerrainRuntime.aquiferCacheGraphIdentity();
+            Object graphIdentity = terrainCache.terrainGraphIdentity();
             status = gpunoise$getSharedAquiferStatus(graphIdentity, position);
             GpuTerrainProfiler.recordAquiferRegionStatusCache(status != null);
             if (status == null) {
