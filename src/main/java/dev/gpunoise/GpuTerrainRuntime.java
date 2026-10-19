@@ -344,26 +344,6 @@ public final class GpuTerrainRuntime {
                 new IllegalStateException("GPU terrain roots scheduler is not installed"));
     }
 
-    /** Prime the exact terrain-grid dispatch path before the first worldgen chunk. */
-    static void warmTerrainGpu(NoiseSettings settings) {
-        GpuTerrainRootsBatchScheduler scheduler = terrainRootsScheduler;
-        if (scheduler == null) return;
-        int cellWidth = settings.getCellWidth();
-        int cellHeight = settings.getCellHeight();
-        GpuTerrainGrid grid = new GpuTerrainGrid(
-                0, settings.minY(), 0,
-                16 / cellWidth + 1,
-                settings.height() / cellHeight + 1,
-                16 / cellWidth + 1,
-                cellWidth, cellHeight);
-        try {
-            scheduler.submit(grid).toCompletableFuture().join();
-            GpuNoise.LOGGER.info("GPU terrain grid path warmed before worldgen.");
-        } catch (RuntimeException failure) {
-            GpuNoise.LOGGER.warn("GPU terrain grid warmup failed; continuing with normal runtime dispatches.", failure);
-        }
-    }
-
     static java.util.concurrent.CompletionStage<GpuTerrainRootsResult> submitTerrainGridDirect(
             java.nio.ByteBuffer metadata, int chunkCount, int samplesPerChunk) {
         VulkanSubmissionRing ring = terrainRing;

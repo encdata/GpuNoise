@@ -204,7 +204,6 @@ public final class GpuNoise {
                     }
                 }
                 if (verifiedRootMask != 0) {
-                    if (terrainSettings != null) GpuTerrainRuntime.warmTerrainGpu(terrainSettings);
                     installedGraph = activeTerrainGraph;
                     LOGGER.info("GPU terrain roots enabled: {}/{} passed runtime parity checks; mask=0x{}.",
                             Integer.bitCount(verifiedRootMask), GpuTerrainRoots.COUNT,
