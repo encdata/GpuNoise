@@ -618,7 +618,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             }
             check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait grid interpolation");
             check(vkResetFences(device, fence), "reset grid interpolation fence");
-            float[] corners = readResults(sampleCount, cornerStride, stack);
+            float[] corners = readRootResults(sampleCount, rootCount, cornerStride, stack);
             interpolationOutput.invalidate(device, stack);
             FloatBuffer blockValues = persistentMappings.get(interpolationOutput).duplicate()
                     .order(ByteOrder.nativeOrder()).asFloatBuffer();
@@ -627,7 +627,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             float[] blocks = new float[blockCount * outputRoots];
             blockValues.get(blocks);
             return new GpuTerrainBatchResult(new GpuTerrainRootsResult(corners, 0, corners.length,
-                    rootCount, cornerStride, markerCount),
+                    rootCount),
                     new GpuTerrainBlockResult(blocks, 0, blockCount, outputRoots,
                             16, blocksPerChunk / 256, 16));
         }
@@ -715,6 +715,20 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         view.clear();
         view.limit(output.length * Float.BYTES);
         view.asFloatBuffer().get(output);
+        return output;
+    }
+
+    /** Copies router roots to Java while leaving GPU-only marker corners out of the batch result. */
+    private float[] readRootResults(int samples, int roots, int sourceStride, MemoryStack stack) {
+        results.invalidate(device, stack);
+        float[] output = new float[Math.multiplyExact(samples, roots)];
+        FloatBuffer source = persistentResults.duplicate().order(ByteOrder.nativeOrder()).asFloatBuffer();
+        source.clear();
+        source.limit(Math.multiplyExact(samples, sourceStride));
+        for (int sample = 0; sample < samples; sample++) {
+            source.get(output, sample * roots, roots);
+            source.position(source.position() + sourceStride - roots);
+        }
         return output;
     }
 
