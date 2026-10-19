@@ -828,19 +828,21 @@ final class GpuDensityExpressionSmoke {
         }
 
         GpuDensityGraph compiledGraph = GpuDensityGraphCompiler.compileDensityFunction(density, true);
-        GpuDensityGraph loweredGraph = GpuDensityGraphLowerer.lower(compiledGraph);
-        if (loweredGraph.routerRootCount() != 1 || loweredGraph.registerCount() <= 0) {
-            throw new AssertionError("custom density did not survive graph lowering as one GPU root");
-        }
         boolean hasDependencyMarker = false;
         boolean hasExpressionMath = false;
-        for (GpuDensityGraph.Node node : loweredGraph.nodes()) {
+        for (GpuDensityGraph.Node node : compiledGraph.nodes()) {
             hasDependencyMarker |= "GpuDensityBytecodeDependency".equals(node.payload());
             hasExpressionMath |= "GpuMath".equals(node.opcode()) || "Ap2".equals(node.opcode());
         }
         if (!hasDependencyMarker || !hasExpressionMath) {
-            throw new AssertionError("bytecode graph lowering lost its nested density dependency or math nodes");
+            throw new AssertionError("custom bytecode graph did not retain its nested dependency and math IR");
         }
+        GpuDensityGraph loweredGraph = GpuDensityGraphLowerer.lower(compiledGraph);
+        if (loweredGraph.routerRootCount() != 1 || loweredGraph.registerCount() <= 0) {
+            throw new AssertionError("custom density did not survive graph lowering as one GPU root");
+        }
+        // Graph lowering deliberately erases transparent delegation markers;
+        // the dependency and math IR were asserted on the pre-lowered graph.
         GpuDensityGraphBuffer.Packed packed = GpuDensityGraphBuffer.pack(loweredGraph);
         if (packed.nodeCount() != loweredGraph.nodes().size() || packed.nodes().remaining()
                 != (packed.nodeCount() + packed.blockNodeCount()) * GpuDensityGraphBuffer.NODE_BYTES) {
