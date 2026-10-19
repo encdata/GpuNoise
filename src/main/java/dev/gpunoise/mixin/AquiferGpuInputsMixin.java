@@ -10,6 +10,7 @@ import dev.gpunoise.GpuAquiferNearestThree;
 import dev.gpunoise.GpuAquiferRuntimeMode;
 import dev.gpunoise.GpuAquiferSubstance;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQueries;
+import dev.gpunoise.GpuAquiferDecisionData.FluidStatusCache;
 import dev.gpunoise.GpuAquiferDecisionData.NeighborhoodCache;
 import dev.gpunoise.GpuAquiferDecisionData.PendingDecisions;
 import dev.gpunoise.GpuAquiferDecisionTable;
@@ -172,6 +173,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 new GpuAquiferSubstance.BatchWriter(decisionCapacity);
         PendingDecisions pending = new PendingDecisions(decisionCapacity, gpunoise$verifyAquifer);
         NeighborhoodCache neighborhoods = new NeighborhoodCache(Math.max(16, (height + 11) / 12 * 4));
+        FluidStatusCache fluidStatuses = new FluidStatusCache(Math.max(16, (height + 11) / 12 * 4));
         boolean exactAquiferInputs = GpuAquiferRuntimeMode.exactAquiferInputsEnabled();
         int directLavaDecisions = 0;
         int positiveDensityDecisions = 0;
@@ -295,14 +297,10 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         || first == second || first == third || first == fourth
                         || second == third || second == fourth || third == fourth
                         || distance0 < 0 || distance1 < 0 || distance2 < 0 || distance3 < 0) continue;
-                Aquifer.FluidStatus status0 = gpunoise$getAquiferStatus(BlockPos.asLong(
-                        queryCenters[first][0], queryCenters[first][1], queryCenters[first][2]));
-                Aquifer.FluidStatus status1 = gpunoise$getAquiferStatus(BlockPos.asLong(
-                        queryCenters[second][0], queryCenters[second][1], queryCenters[second][2]));
-                Aquifer.FluidStatus status2 = gpunoise$getAquiferStatus(BlockPos.asLong(
-                        queryCenters[third][0], queryCenters[third][1], queryCenters[third][2]));
-                Aquifer.FluidStatus status3 = gpunoise$getAquiferStatus(BlockPos.asLong(
-                        queryCenters[fourth][0], queryCenters[fourth][1], queryCenters[fourth][2]));
+                Aquifer.FluidStatus status0 = gpunoise$getCachedAquiferStatus(fluidStatuses, queryCenters[first]);
+                Aquifer.FluidStatus status1 = gpunoise$getCachedAquiferStatus(fluidStatuses, queryCenters[second]);
+                Aquifer.FluidStatus status2 = gpunoise$getCachedAquiferStatus(fluidStatuses, queryCenters[third]);
+                Aquifer.FluidStatus status3 = gpunoise$getCachedAquiferStatus(fluidStatuses, queryCenters[fourth]);
                 BlockState nearestState = status0.at(queryY);
                 int level0 = gpunoise$fluidLevel(status0);
                 int level1 = gpunoise$fluidLevel(status1);
@@ -413,6 +411,17 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     acceptedDecisions, substanceWriter.size() - acceptedDecisions, directLavaDecisions,
                     vanillaParitySamples, vanillaParityMismatches);
         }
+    }
+
+    @org.spongepowered.asm.mixin.Unique
+    private Aquifer.FluidStatus gpunoise$getCachedAquiferStatus(FluidStatusCache cache, int[] center) {
+        long position = BlockPos.asLong(center[0], center[1], center[2]);
+        Aquifer.FluidStatus status = cache.get(position);
+        if (status == null) {
+            status = gpunoise$getAquiferStatus(position);
+            cache.put(position, status);
+        }
+        return status;
     }
 
     @org.spongepowered.asm.mixin.Unique

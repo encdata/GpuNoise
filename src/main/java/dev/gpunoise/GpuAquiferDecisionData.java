@@ -2,6 +2,7 @@ package dev.gpunoise;
 
 import net.minecraft.world.level.levelgen.DensityFunction;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.Aquifer;
 
 /** Data holders shared by the aquifer Mixin without loading nested Mixin-package classes. */
 public final class GpuAquiferDecisionData {
@@ -82,6 +83,73 @@ public final class GpuAquiferDecisionData {
             h *= 0x7FEB352D;
             h ^= h >>> 15;
             return h;
+        }
+    }
+
+    /** Per-chunk memoization of deterministic aquifer center fluid statuses. */
+    public static final class FluidStatusCache {
+        private long[] keys;
+        private Aquifer.FluidStatus[] values;
+        private int size;
+
+        public FluidStatusCache(int expectedEntries) {
+            if (expectedEntries < 0) throw new IllegalArgumentException("negative fluid status capacity");
+            int capacity = 16;
+            long required = Math.max(16L, (long) expectedEntries * 2L);
+            while (capacity < required && capacity < (1 << 29)) capacity <<= 1;
+            allocate(capacity);
+        }
+
+        public Aquifer.FluidStatus get(long key) {
+            int mask = values.length - 1;
+            int slot = hash(key) & mask;
+            while (values[slot] != null) {
+                if (keys[slot] == key) return values[slot];
+                slot = (slot + 1) & mask;
+            }
+            return null;
+        }
+
+        public void put(long key, Aquifer.FluidStatus value) {
+            if (value == null) throw new NullPointerException("fluid status");
+            if ((long) (size + 1) * 10L >= (long) values.length * 7L) grow();
+            int mask = values.length - 1;
+            int slot = hash(key) & mask;
+            while (values[slot] != null) {
+                if (keys[slot] == key) {
+                    values[slot] = value;
+                    return;
+                }
+                slot = (slot + 1) & mask;
+            }
+            keys[slot] = key;
+            values[slot] = value;
+            size++;
+        }
+
+        private void grow() {
+            if (values.length >= (1 << 29)) throw new IllegalStateException("aquifer fluid status cache is full");
+            long[] oldKeys = keys;
+            Aquifer.FluidStatus[] oldValues = values;
+            allocate(values.length << 1);
+            size = 0;
+            for (int i = 0; i < oldValues.length; i++) {
+                if (oldValues[i] != null) put(oldKeys[i], oldValues[i]);
+            }
+        }
+
+        private void allocate(int capacity) {
+            keys = new long[capacity];
+            values = new Aquifer.FluidStatus[capacity];
+        }
+
+        private static int hash(long value) {
+            value ^= value >>> 33;
+            value *= 0xff51afd7ed558ccdL;
+            value ^= value >>> 33;
+            value *= 0xc4ceb9fe1a85ec53L;
+            value ^= value >>> 33;
+            return (int) value;
         }
     }
 
