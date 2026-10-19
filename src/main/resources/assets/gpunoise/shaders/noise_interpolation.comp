@@ -62,6 +62,7 @@ void main(){
         if(markerMode) interpolatedInputs[blockOffset+index*valueCount+valueIndex]=value;
         else blocks[blockOffset+index*valueCount+valueIndex]=value;
     }
-    if(markerMode) coordinates[blockOffset+index]=vec4(float(metadata[base+0u]+int(x)),
-        float(metadata[base+1u]+int(y)),float(metadata[base+2u]+int(z)),0.0);
+    if(markerMode) coordinates[blockOffset+index]=vec4(
+        float(int(metadata[base+0u])+int(x)),float(int(metadata[base+1u])+int(y)),
+        float(int(metadata[base+2u])+int(z)),0.0);
 }
