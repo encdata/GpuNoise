@@ -19,7 +19,7 @@ MOD_PAYLOAD = "META-INF/gpunoise/gpunoise-mod.jar"
 METADATA = "META-INF/jarjar/metadata.json"
 LOCATOR_SERVICE = "META-INF/services/net.neoforged.neoforgespi.locating.IModFileCandidateLocator"
 LOCATOR_CLASS = "dev/gpunoise/loader/GpuNoiseDedicatedLwjglLocator.class"
-MAX_ARTIFACT_BYTES = 30 * 1024 * 1024
+MAX_ARTIFACT_BYTES = 20 * 1024 * 1024
 
 
 def library_entry(artifact: str) -> dict[str, object]:
@@ -39,11 +39,21 @@ def verify(path: Path) -> None:
         raise FileNotFoundError(f"Vulkan artifact does not exist: {path}")
     if path.stat().st_size > MAX_ARTIFACT_BYTES:
         raise ValueError(
-            f"Universal loader artifact is {path.stat().st_size} bytes; duplicated cross-platform native payloads "
-            f"must stay below {MAX_ARTIFACT_BYTES} bytes"
+            f"Universal loader artifact is {path.stat().st_size} bytes; the deduplicated artifact must stay below "
+            f"{MAX_ARTIFACT_BYTES} bytes"
         )
     with zipfile.ZipFile(path) as artifact:
         entries = set(artifact.namelist())
+        duplicate_outer_payload = sorted(
+            name for name in entries
+            if name in {VULKAN_LIBRARY, SHADERC_LIBRARY}
+            or name.startswith(("windows/", "linux/", "macos/"))
+        )
+        if duplicate_outer_payload:
+            raise ValueError(
+                "Loader shell repeats libraries or platform natives already bundled in the embedded mod payload: "
+                f"{duplicate_outer_payload[:12]}"
+            )
         required = {
             SERVER_CORE_LIBRARY, LOCATOR_SERVICE, LOCATOR_CLASS, MOD_PAYLOAD,
         }

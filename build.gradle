@@ -147,9 +147,17 @@ configurations {
     artifactServerRunImplementation.extendsFrom implementation
     artifactServerRunRuntimeOnly.extendsFrom runtimeOnly
     artifactServerRunCompileOnly.extendsFrom compileOnly
+    gpuPayloadLibraries {
+        canBeConsumed = false
+        canBeResolved = true
+    }
     lwjglNatives
     serverLwjglCore
 }
+
+// Keep runtime libraries on the mod payload only. Putting them in NeoForge's
+// jarJar configuration also adds a second copy to the outer loader artifact.
+configurations.implementation.extendsFrom(configurations.gpuPayloadLibraries)
 
 dependencies {
     // Specify the version of Minecraft to use.
@@ -163,27 +171,17 @@ dependencies {
     // frontend. Directly declaring it avoids relying on NeoForge/Mixin's
     // transitive implementation details.
     implementation 'org.ow2.asm:asm-tree:9.7.1'
-    // The client already supplies LWJGL core. Bundle only the Vulkan bindings
-    // through Jar-in-Jar; the early locator below adds LWJGL core as a game
+    // The client already supplies LWJGL core. Bundle Vulkan bindings in the
+    // embedded mod payload; the early locator adds LWJGL core as a game
     // library only on dedicated servers.
-    jarJar(implementation("org.lwjgl:lwjgl-vulkan:${lwjgl_version}") {
+    gpuPayloadLibraries("org.lwjgl:lwjgl-vulkan:${lwjgl_version}") {
         transitive = false
-    }) {
-        version {
-            strictly "[${lwjgl_version},3.3.4)"
-            prefer lwjgl_version
-        }
     }
     // Registry-time GLSL compilation lets each installed NoiseRouter become
     // a world-specialized SPIR-V program, following C2ME OCL's generated
     // kernel model without requiring a compiler executable on player systems.
-    jarJar(implementation("org.lwjgl:lwjgl-shaderc:${lwjgl_version}") {
+    gpuPayloadLibraries("org.lwjgl:lwjgl-shaderc:${lwjgl_version}") {
         transitive = false
-    }) {
-        version {
-            strictly "[${lwjgl_version},3.3.4)"
-            prefer lwjgl_version
-        }
     }
     // Compile against core and embed a plain copy for conditional server-side
     // discovery. It intentionally is not registered as a Jar-in-Jar library.
@@ -289,10 +287,9 @@ tasks.register('embeddedModJar', Jar) {
         exclude 'META-INF/services/net.neoforged.neoforgespi.locating.IModFileCandidateLocator'
         exclude 'META-INF/gpunoise/server-libraries/**'
     }
-    // Keep JarJar's declared binding and metadata in the payload module. The
-    // JarJar task itself consumes the ordinary jar task, so using it as an
-    // input here would create a task cycle with the loader-shell jar.
-    from(configurations.jarJar) {
+    // Embed the GPU libraries here so the outer bootstrap shell does not
+    // duplicate them in its own Jar-in-Jar payload.
+    from(configurations.gpuPayloadLibraries) {
         into 'META-INF/jarjar'
     }
     from(embeddedJarJarMetadata) {
@@ -322,16 +319,6 @@ tasks.named('jar', Jar).configure {
     include 'gpunoise-mod.jar'
     from(embeddedModJar) {
         into 'META-INF/gpunoise'
-    }
-}
-
-// Include platform native resources without adding duplicate module entries
-// to META-INF/jarjar/metadata.json.
-tasks.named('jarJar') {
-    from(lwjglNativeTrees) {
-        include 'windows/**'
-        include 'linux/**'
-        include 'macos/**'
     }
 }
 
