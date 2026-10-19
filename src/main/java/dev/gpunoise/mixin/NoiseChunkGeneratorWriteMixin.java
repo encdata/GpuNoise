@@ -55,7 +55,13 @@ abstract class NoiseChunkGeneratorWriteMixin {
             Blender blender, RandomState randomState, StructureManager structures, ChunkAccess chunk,
             Operation<CompletableFuture<ChunkAccess>> original) {
         if (!GpuTerrainRuntime.gpuOnlyWorldgenAvailable()
-                || !GpuTerrainRuntime.matchesTerrainRouter(randomState)) {
+                || !GpuTerrainRuntime.matchesTerrainRouter(randomState)
+                // Match C2ME OCL's batching eligibility: its GPU region path
+                // only runs where the Blender reports no old-chunk data.
+                // BlendDensity's GPU lowering encodes the empty-blender
+                // identity values, so blended chunks must keep vanilla's
+                // exact per-context blending behavior.
+                || blender != Blender.empty()) {
             return original.call(blender, randomState, structures, chunk);
         }
         NoiseSettings settings = generatorSettings().value().noiseSettings()

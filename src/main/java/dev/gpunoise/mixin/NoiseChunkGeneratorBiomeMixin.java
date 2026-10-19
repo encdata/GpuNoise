@@ -30,7 +30,11 @@ abstract class NoiseChunkGeneratorBiomeMixin {
             Operation<CompletableFuture<ChunkAccess>> original) {
         if (!GpuTerrainRuntime.c2meDfcAvailable()
                 || !GpuTerrainRuntime.gpuOnlyWorldgenAvailable()
-                || !GpuTerrainRuntime.matchesTerrainRouter(randomState)) {
+                || !GpuTerrainRuntime.matchesTerrainRouter(randomState)
+                // OCL's aligned batch requires every chunk region to use the
+                // no-blending singleton. Do not precompute GPU terrain caches
+                // that the later blended fill must reject.
+                || blender != Blender.empty()) {
             return original.call(randomState, blender, structures, chunk);
         }
         NoiseSettings settings = generatorSettings().value().noiseSettings()
