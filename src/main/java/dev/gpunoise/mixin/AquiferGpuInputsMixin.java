@@ -10,9 +10,9 @@ import dev.gpunoise.GpuAquiferNearestThree;
 import dev.gpunoise.GpuAquiferRuntimeMode;
 import dev.gpunoise.GpuAquiferSubstance;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQuery;
-import dev.gpunoise.GpuAquiferDecisionData.Decision;
 import dev.gpunoise.GpuAquiferDecisionData.NeighborhoodCache;
 import dev.gpunoise.GpuAquiferDecisionData.PendingDecisions;
+import dev.gpunoise.GpuAquiferDecisionTable;
 import dev.gpunoise.GpuWorldgenDependency;
 import dev.gpunoise.GpuTerrainProfiler;
 import net.minecraft.core.BlockPos;
@@ -60,10 +60,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     @Shadow private boolean shouldScheduleFluidUpdate;
 
     @org.spongepowered.asm.mixin.Unique
-    private volatile Decision[] gpunoise$decisions;
-
-    @org.spongepowered.asm.mixin.Unique
-    private int gpunoise$decisionMinX, gpunoise$decisionMinY, gpunoise$decisionMinZ;
+    private volatile GpuAquiferDecisionTable gpunoise$decisions;
 
     @org.spongepowered.asm.mixin.Unique
     private static final AtomicBoolean gpunoise$aquiferBatchWarning = new AtomicBoolean();
@@ -148,17 +145,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private void gpunoise$usePreparedGpuAquiferDecision(
             DensityFunction.FunctionContext context, double density,
             CallbackInfoReturnable<BlockState> cir) {
-        Decision[] decisions = gpunoise$decisions;
+        GpuAquiferDecisionTable decisions = gpunoise$decisions;
         if (decisions == null) return;
-        int x = context.blockX() - gpunoise$decisionMinX;
-        int y = context.blockY() - gpunoise$decisionMinY;
-        int z = context.blockZ() - gpunoise$decisionMinZ;
-        int height = decisions.length / 256;
-        if (x < 0 || x >= 16 || z < 0 || z >= 16 || y < 0 || y >= height) return;
-        Decision decision = decisions[y * 256 + z * 16 + x];
-        if (decision == null || Double.doubleToLongBits(decision.density) != Double.doubleToLongBits(density)) return;
-        shouldScheduleFluidUpdate = decision.scheduleFluidUpdate;
-        cir.setReturnValue(decision.state);
+        int index = decisions.indexOfMatch(context.blockX(), context.blockY(), context.blockZ(), density);
+        if (index < 0) return;
+        shouldScheduleFluidUpdate = decisions.schedulesFluidUpdate(index);
+        cir.setReturnValue(decisions.state(index));
     }
 
     @org.spongepowered.asm.mixin.Unique
@@ -174,7 +166,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         final int minX = cache.minX(), minY = cache.minY(), minZ = cache.minZ();
         final int height = cache.height();
         int decisionCapacity = Math.multiplyExact(height, 256);
-        Decision[] decisions = new Decision[decisionCapacity];
+        GpuAquiferDecisionTable decisions = new GpuAquiferDecisionTable(minX, minY, minZ, height);
         List<AquiferQuery> queries = new ArrayList<>(decisionCapacity);
         GpuAquiferSubstance.BatchWriter substanceWriter =
                 new GpuAquiferSubstance.BatchWriter(decisionCapacity);
@@ -391,13 +383,10 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         continue;
                     }
                 }
-                decisions[sourceIndex] = new Decision(state, outputs[base + 2] != 0, pending.density(query));
+                decisions.set(sourceIndex, state, pending.density(query), outputs[base + 2] != 0);
                 acceptedDecisions++;
             }
         }
-        gpunoise$decisionMinX = minX;
-        gpunoise$decisionMinY = minY;
-        gpunoise$decisionMinZ = minZ;
         gpunoise$decisions = decisions;
         if (gpunoise$verifyAquifer) {
             dev.gpunoise.GpuNoise.LOGGER.info(

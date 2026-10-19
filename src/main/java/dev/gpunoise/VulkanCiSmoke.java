@@ -526,6 +526,25 @@ public final class VulkanCiSmoke {
             }
             System.out.println("Vulkan CI smoke: parity-selected compact block output completed");
 
+            GpuAquiferDecisionTable decisionTable = new GpuAquiferDecisionTable(-16, -64, 32, 16);
+            net.minecraft.world.level.block.state.BlockState solidState =
+                    net.minecraft.world.level.block.Blocks.STONE.defaultBlockState();
+            int decisionIndex = 3 * 256 + 2 * 16 + 15;
+            decisionTable.set(decisionIndex, solidState, -0.0, true);
+            int defaultIndex = 3 * 256 + 3 * 16 + 15;
+            decisionTable.set(defaultIndex, null, 1.25, false);
+            if (decisionTable.indexOfMatch(-1, -61, 34, -0.0) != decisionIndex
+                    || decisionTable.indexOfMatch(-1, -61, 34, 0.0) != -1
+                    || decisionTable.state(decisionIndex) != solidState
+                    || !decisionTable.schedulesFluidUpdate(decisionIndex)
+                    || decisionTable.indexOfMatch(0, -61, 34, -0.0) != -1
+                    || decisionTable.indexOfMatch(-1, -61, 35, 1.25) != defaultIndex
+                    || decisionTable.state(defaultIndex) != null
+                    || decisionTable.schedulesFluidUpdate(defaultIndex)) {
+                throw new IllegalStateException("Primitive aquifer decision table lost exact density/state flags");
+            }
+            System.out.println("Vulkan CI smoke: compact aquifer decision table lookup completed");
+
             // Differentially exercise the first exact numeric component of
             // vanilla's aquifer block decision. Record fields and boundary
             // cases are shared with the production pressure input contract.
