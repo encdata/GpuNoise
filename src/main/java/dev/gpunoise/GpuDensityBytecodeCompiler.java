@@ -706,6 +706,11 @@ final class GpuDensityBytecodeCompiler {
                 pushIntegerConstant(characterValue);
             } else if (fieldValue instanceof NormalNoise noise) {
                 stack.add(Value.noise(noise));
+            } else if (fieldValue instanceof DensityFunction.NoiseHolder holder) {
+                if (holder.noise() == null) {
+                    reject("noise holder has no resolved NormalNoise: " + instruction.name);
+                }
+                stack.add(Value.noise(holder.noise()));
             } else if (fieldValue instanceof DensityFunction density) {
                 stack.add(Value.density(density));
             } else if (fieldValue != null && fieldValue.getClass().isArray()) {
@@ -807,7 +812,8 @@ final class GpuDensityBytecodeCompiler {
             }
 
             if (receiver != null && receiver.kind() == Kind.NOISE
-                    && owner.equals("net/minecraft/world/level/levelgen/synth/NormalNoise")
+                    && (owner.equals("net/minecraft/world/level/levelgen/synth/NormalNoise")
+                    || owner.equals("net/minecraft/world/level/levelgen/DensityFunction$NoiseHolder"))
                     && name.equals("getValue") && arguments.length == 3) {
                 Value x = arguments[0], y = arguments[1], z = arguments[2];
                 if (x.kind() != Kind.VALUE || y.kind() != Kind.VALUE || z.kind() != Kind.VALUE)

@@ -449,6 +449,24 @@ final class GpuDensityExpressionSmoke {
                 .noneMatch(node -> "GpuNoise3".equals(node.opcode()))) {
             throw new AssertionError("transformed noise coordinates must remain explicit IR inputs");
         }
+
+        DensityFunction noiseHolderDensity = new NoiseHolderTransformedNoiseDensity(
+                new DensityFunction.NoiseHolder(null, noise),
+                new ConstantReferenceDensity(0.03125), new ConstantReferenceDensity(-0.0625));
+        GpuDensityBytecodeCompiler.Result noiseHolderResult =
+                GpuDensityBytecodeCompiler.compile(noiseHolderDensity);
+        if (noiseHolderResult.expression() == null) {
+            throw new AssertionError("DensityFunction.NoiseHolder.getValue should lower through generic IR: "
+                    + noiseHolderResult.rejection());
+        }
+        for (int[] point : new int[][]{{0, 0, 0}, {17, -9, 31}, {-128, 72, 256}}) {
+            DensityFunction.SinglePointContext context =
+                    new DensityFunction.SinglePointContext(point[0], point[1], point[2]);
+            requireFloatAbiClose(noiseHolderResult.expression().evaluate(point[0], point[1], point[2]),
+                    noiseHolderDensity.compute(context), "NoiseHolder transformed noise");
+        }
+        GpuDensityGraphBuffer.pack(GpuDensityGraphLowerer.lower(
+                GpuDensityGraphCompiler.compileDensityFunction(noiseHolderDensity, true)));
         for (int[] point : new int[][]{{-193, -64, -117}, {-1, 0, 1}, {37, 91, -248}}) {
             requireClose(transformedNoiseResult.expression().evaluate(point[0], point[1], point[2]),
                     transformedNoise.compute(new DensityFunction.SinglePointContext(point[0], point[1], point[2])),
@@ -987,6 +1005,34 @@ final class GpuDensityExpressionSmoke {
         private final DensityFunction shiftZ;
 
         private TransformedNoiseDensity(NormalNoise noise, DensityFunction shiftX, DensityFunction shiftZ) {
+            this.noise = noise;
+            this.shiftX = shiftX;
+            this.shiftZ = shiftZ;
+        }
+
+        @Override
+        public double compute(FunctionContext context) {
+            double x = (context.blockX() + shiftX.compute(context)) * 0.03125;
+            double z = (context.blockZ() + shiftZ.compute(context)) * 0.03125;
+            return noise.getValue(x, 0.0, z) * 1.7 + 0.4;
+        }
+
+        @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
+        @Override public double minValue() { return -2.0; }
+        @Override public double maxValue() { return 2.0; }
+        @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
+            return DensityFunctions.constant(0.0).codec();
+        }
+    }
+
+    /** Mirrors the wrapper call shape used by Tectonic's configurable noise density. */
+    private static final class NoiseHolderTransformedNoiseDensity implements DensityFunction.SimpleFunction {
+        private final DensityFunction.NoiseHolder noise;
+        private final DensityFunction shiftX;
+        private final DensityFunction shiftZ;
+
+        private NoiseHolderTransformedNoiseDensity(DensityFunction.NoiseHolder noise,
+                                                   DensityFunction shiftX, DensityFunction shiftZ) {
             this.noise = noise;
             this.shiftX = shiftX;
             this.shiftZ = shiftZ;
