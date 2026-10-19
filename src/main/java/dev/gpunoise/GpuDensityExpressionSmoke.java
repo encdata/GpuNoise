@@ -504,7 +504,7 @@ final class GpuDensityExpressionSmoke {
         GpuDensityGraph roundedAddition = new GpuDensityGraph(
                 java.util.List.of(
                         new GpuDensityGraph.Node("Constant", new int[0], new double[]{0.1}, null),
-                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{0.2}, null),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{100_000_000.0}, null),
                         new GpuDensityGraph.Node("Ap2", new int[]{0, 1}, new double[0], "ADD")),
                 new int[]{2}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
                 java.util.List.of(source, source, source));
