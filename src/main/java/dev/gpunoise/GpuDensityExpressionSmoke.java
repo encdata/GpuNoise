@@ -504,6 +504,18 @@ final class GpuDensityExpressionSmoke {
         if (!retained.nodes().get(retained.routerRoots()[0]).opcode().equals("Ap2")) {
             throw new AssertionError("constant addition must stay executable when folding changes float-ABI precision");
         }
+
+        GpuDensityGraph constantClamp = new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{2.0}, null),
+                        new GpuDensityGraph.Node("Clamp", new int[]{0}, new double[]{-1.0, 1.0}, null)),
+                new int[]{1}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(source, source));
+        GpuDensityGraph clamped = GpuDensityGraphLowerer.lower(constantClamp);
+        if (clamped.nodes().size() != 1 || !clamped.nodes().get(0).opcode().equals("Constant")
+                || clamped.nodes().get(0).constants()[0] != 1.0) {
+            throw new AssertionError("strict constant clamp bounds should fold without changing shader precision");
+        }
     }
 
     private static void verifyConstantBranchPruning() {
