@@ -98,8 +98,9 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     }
 
     @Override
-    public boolean gpunoise$hasZeroBeardifier() {
-        return gpunoise$zeroBeardifier;
+    public double gpunoise$withBeardifier(double cachedDensity, int x, int y, int z) {
+        if (gpunoise$zeroBeardifier) return cachedDensity;
+        return cachedDensity + beardifier.compute(new DensityFunction.SinglePointContext(x, y, z));
     }
 
     @Unique

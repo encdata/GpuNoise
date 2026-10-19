@@ -328,8 +328,14 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
         if not force_cpu:
             if not gpu_counts or max(counts[2] for counts in gpu_counts) <= 0:
                 raise RuntimeError("GPU benchmark completed without any GPU terrain cache being consumed")
-            if "GPU aquifer substance batch:" not in log_path.read_text(encoding="utf-8"):
-                raise RuntimeError("GPU benchmark did not execute the chunk-batched aquifer substance shader")
+            run_log = log_path.read_text(encoding="utf-8")
+            if "GPU aquifer substance batch:" not in run_log:
+                skip_reasons = re.findall(r"GPU aquifer decision preflight skipped: ([^\r\n]+)", run_log)
+                reason_detail = "; ".join(dict.fromkeys(skip_reasons)) or "no preflight skip reason was logged"
+                raise RuntimeError(
+                    "GPU benchmark did not execute the chunk-batched aquifer substance shader: "
+                    + reason_detail
+                )
             if VERIFY_AQUIFER_GPU:
                 nearest_results = re.findall(
                     r"GPU aquifer nearest parity: samples=(\d+), mismatches=(\d+)",
@@ -350,7 +356,6 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                 raise RuntimeError(
                     f"GPU benchmark used CPU terrain fallback for {fallback_chunks} chunks"
                 )
-            run_log = log_path.read_text(encoding="utf-8")
             if "Byepregen palette compatibility detected; using normal block writes" not in run_log:
                 raise RuntimeError(
                     "GPU worldgen did not activate the Byepregen palette compatibility path"

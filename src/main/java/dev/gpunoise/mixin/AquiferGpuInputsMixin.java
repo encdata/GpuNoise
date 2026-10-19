@@ -72,6 +72,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private static final AtomicBoolean gpunoise$aquiferBatchLogged = new AtomicBoolean();
 
     @org.spongepowered.asm.mixin.Unique
+    private static final AtomicBoolean gpunoise$aquiferPreflightLogged = new AtomicBoolean();
+
+    @org.spongepowered.asm.mixin.Unique
     private static final boolean gpunoise$verifyAquifer = Boolean.getBoolean("gpunoise.verifyAquiferGpu");
 
     @Invoker("getAquiferStatus")
@@ -83,21 +86,42 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
 
     @Override
     public void gpunoise$prepareGpuDecisions(GpuChunkDensityCache cache, NoiseChunk noiseChunk) {
-        if (gpunoise$decisions != null
-                || !(noiseChunk instanceof dev.gpunoise.GpuNoiseChunkAccess noiseAccess)
-                || !noiseAccess.gpunoise$hasZeroBeardifier()
-                || !noiseAccess.gpunoise$matchesGpuCache(cache)
-                || !cache.hasFullBlockOutput()
-                || !cache.supportsRoot(GpuTerrainRoots.FINAL_DENSITY)
-                || !cache.supportsRoot(GpuTerrainRoots.BARRIER)) return;
+        if (gpunoise$decisions != null) return;
+        if (!(noiseChunk instanceof dev.gpunoise.GpuNoiseChunkAccess noiseAccess)) {
+            gpunoise$logAquiferPreflightSkip("NoiseChunk GPU access bridge is missing");
+            return;
+        }
+        if (!noiseAccess.gpunoise$matchesGpuCache(cache)) {
+            gpunoise$logAquiferPreflightSkip("GPU density cache does not match NoiseChunk coordinates");
+            return;
+        }
+        if (!cache.hasFullBlockOutput()) {
+            gpunoise$logAquiferPreflightSkip("full block density output is unavailable");
+            return;
+        }
+        if (!cache.supportsRoot(GpuTerrainRoots.FINAL_DENSITY)) {
+            gpunoise$logAquiferPreflightSkip("finalDensity root is unsupported");
+            return;
+        }
+        if (!cache.supportsRoot(GpuTerrainRoots.BARRIER)) {
+            gpunoise$logAquiferPreflightSkip("aquifer barrier root is unsupported");
+            return;
+        }
         try {
-            gpunoise$buildGpuDecisionTable(cache, positionalRandomFactory);
+            gpunoise$buildGpuDecisionTable(cache, noiseAccess, positionalRandomFactory);
         } catch (RuntimeException failure) {
             gpunoise$decisions = null;
             if (gpunoise$aquiferBatchWarning.compareAndSet(false, true)) {
                 dev.gpunoise.GpuNoise.LOGGER.warn(
                         "GPU aquifer decision batch unavailable; using vanilla aquifer decisions.", failure);
             }
+        }
+    }
+
+    @org.spongepowered.asm.mixin.Unique
+    private static void gpunoise$logAquiferPreflightSkip(String reason) {
+        if (gpunoise$aquiferPreflightLogged.compareAndSet(false, true)) {
+            dev.gpunoise.GpuNoise.LOGGER.info("GPU aquifer decision preflight skipped: {}", reason);
         }
     }
 
@@ -113,13 +137,14 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         int height = decisions.length / 256;
         if (x < 0 || x >= 16 || z < 0 || z >= 16 || y < 0 || y >= height) return;
         Decision decision = decisions[y * 256 + z * 16 + x];
-        if (decision == null) return;
+        if (decision == null || Double.doubleToLongBits(decision.density) != Double.doubleToLongBits(density)) return;
         shouldScheduleFluidUpdate = decision.scheduleFluidUpdate;
         cir.setReturnValue(decision.state);
     }
 
     @org.spongepowered.asm.mixin.Unique
     private void gpunoise$buildGpuDecisionTable(GpuChunkDensityCache cache,
+                                                 dev.gpunoise.GpuNoiseChunkAccess noiseAccess,
                                                  PositionalRandomFactory randomFactory) {
         final int minX = cache.minX(), minY = cache.minY(), minZ = cache.minZ();
         final int height = cache.height();
@@ -131,13 +156,14 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         for (int y = minY; y < minY + height; y++) {
             for (int z = minZ; z < minZ + 16; z++) {
                 for (int x = minX; x < minX + 16; x++) {
-                    double density = cache.finalDensity(x, y, z);
+                    double cachedDensity = cache.finalDensity(x, y, z);
+                    double density = noiseAccess.gpunoise$withBeardifier(cachedDensity, x, y, z);
                     if (!Double.isFinite(density) || density > 0.0) continue;
                     int index = (y - minY) * 256 + (z - minZ) * 16 + (x - minX);
                     Aquifer.FluidStatus global = globalFluidPicker.computeFluid(x, y, z);
                     BlockState globalState = global.at(y);
                     if (globalState.is(Blocks.LAVA)) {
-                        decisions[index] = new Decision(globalState, false);
+                        decisions[index] = new Decision(globalState, false, density);
                         directLavaDecisions++;
                         continue;
                     }
@@ -180,6 +206,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         List<PendingDecision> pending = new ArrayList<>();
         int nearestParitySamples = 0;
         int nearestParityMismatches = 0;
+        String nearestFirstMismatch = null;
         int queryOffset = 0;
         for (CompletableFuture<int[]> batch : nearestBatches) {
             int[] selectedRows = batch.join();
@@ -199,6 +226,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                             || distance0 != expectedNearest[3] || distance1 != expectedNearest[4]
                             || distance2 != expectedNearest[5]) {
                         nearestParityMismatches++;
+                        if (nearestFirstMismatch == null) {
+                            nearestFirstMismatch = "query=(" + query.x + "," + query.y + "," + query.z
+                                    + "), expected=" + java.util.Arrays.toString(expectedNearest)
+                                    + ", gpu=[" + first + "," + second + "," + third + ","
+                                    + distance0 + "," + distance1 + "," + distance2 + "]";
+                        }
                         continue;
                     }
                 }
@@ -225,6 +258,10 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         }
         if (gpunoise$verifyAquifer) {
             nearestParityMismatches += queries.size() - nearestParitySamples;
+            if (queries.size() != nearestParitySamples && nearestFirstMismatch == null) {
+                nearestFirstMismatch = "GPU returned fewer query rows: expected=" + queries.size()
+                        + ", sampled=" + nearestParitySamples;
+            }
         }
 
         List<CompletableFuture<int[]>> substanceBatches = new ArrayList<>();
@@ -241,6 +278,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         int acceptedDecisions = directLavaDecisions;
         int vanillaParitySamples = 0;
         int vanillaParityMismatches = 0;
+        String substanceFirstMismatch = null;
         for (CompletableFuture<int[]> batch : substanceBatches) {
             int[] outputs = batch.join();
             for (int row = 0; row < outputs.length / GpuAquiferSubstance.OUTPUT_INTS; row++) {
@@ -260,10 +298,18 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     vanillaParitySamples++;
                     if (!Objects.equals(vanilla, state) || vanillaSchedule != (outputs[base + 2] != 0)) {
                         vanillaParityMismatches++;
+                        if (substanceFirstMismatch == null) {
+                            substanceFirstMismatch = "query=(" + source.context.blockX() + ","
+                                    + source.context.blockY() + "," + source.context.blockZ()
+                                    + "), density=" + source.density + ", vanillaState=" + vanilla
+                                    + ", gpuState=" + state + ", vanillaSchedule=" + vanillaSchedule
+                                    + ", gpuSchedule=" + (outputs[base + 2] != 0)
+                                    + ", gpuAction=" + action;
+                        }
                         continue;
                     }
                 }
-                decisions[source.index] = new Decision(state, outputs[base + 2] != 0);
+                decisions[source.index] = new Decision(state, outputs[base + 2] != 0, source.density);
                 acceptedDecisions++;
             }
         }
@@ -273,13 +319,15 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         gpunoise$decisions = decisions;
         if (gpunoise$verifyAquifer) {
             dev.gpunoise.GpuNoise.LOGGER.info(
-                    "GPU aquifer nearest parity: samples={}, mismatches={}",
-                    nearestParitySamples, nearestParityMismatches);
+                    "GPU aquifer nearest parity: samples={}, mismatches={}, firstMismatch={}",
+                    nearestParitySamples, nearestParityMismatches,
+                    nearestFirstMismatch == null ? "none" : nearestFirstMismatch);
         }
         if (gpunoise$verifyAquifer) {
             dev.gpunoise.GpuNoise.LOGGER.info(
-                    "GPU aquifer substance parity: samples={}, mismatches={}",
-                    vanillaParitySamples, vanillaParityMismatches);
+                    "GPU aquifer substance parity: samples={}, mismatches={}, firstMismatch={}",
+                    vanillaParitySamples, vanillaParityMismatches,
+                    substanceFirstMismatch == null ? "none" : substanceFirstMismatch);
         }
         if (!inputs.isEmpty() && gpunoise$aquiferBatchLogged.compareAndSet(false, true)) {
             dev.gpunoise.GpuNoise.LOGGER.info(

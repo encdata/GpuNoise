@@ -58,10 +58,11 @@ remains enabled.
 
 The current path evaluates terrain density and aquifer input roots on the GPU
 at Minecraft's cell grid, then interpolates final density to block resolution
-on the GPU. Minecraft still handles chunk scheduling, aquifer decisions,
-surface rules, carvers, structures, features, and chunk writes. Moving those
-stages to the GPU requires separate semantics-preserving passes; GPU Noise does
-not claim full chunk generation is GPU-only yet.
+on the GPU. The full-block path also batches aquifer fluid decisions on
+Vulkan when the required density and barrier data are available. Minecraft
+retains fluid-status lookup, the chunk writer, surface rules, carvers,
+structures, and features. Unsupported or mismatched aquifer decisions return
+to vanilla Java. This does not make full chunk generation GPU-only.
 
 ## Mod jar
 

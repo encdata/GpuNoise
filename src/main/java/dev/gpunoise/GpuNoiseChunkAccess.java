@@ -7,5 +7,5 @@ public interface GpuNoiseChunkAccess {
 
     boolean gpunoise$matchesGpuCache(GpuChunkDensityCache cache);
 
-    boolean gpunoise$hasZeroBeardifier();
+    double gpunoise$withBeardifier(double cachedDensity, int x, int y, int z);
 }

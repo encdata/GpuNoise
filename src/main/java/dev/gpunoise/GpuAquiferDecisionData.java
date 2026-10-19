@@ -44,8 +44,10 @@ public final class GpuAquiferDecisionData {
     public static final class Decision {
         public final BlockState state;
         public final boolean scheduleFluidUpdate;
-        public Decision(BlockState state, boolean scheduleFluidUpdate) {
+        public final double density;
+        public Decision(BlockState state, boolean scheduleFluidUpdate, double density) {
             this.state = state; this.scheduleFluidUpdate = scheduleFluidUpdate;
+            this.density = density;
         }
     }
 }

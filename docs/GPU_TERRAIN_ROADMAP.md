@@ -272,23 +272,22 @@ parity checks.
 
 The mod currently has a graph evaluator for density and aquifer roots, a cell
 grid path, GPU final-density interpolation for every block, and an adapter that
-translates supported custom density functions into GPU graphs. The GPU still
-does not choose final solid, air, fluid, or surface block states. Those remain
-the next major terrain-generation passes.
-Aquifer pressure, nearest-three selection, and substance decisions now have
-packed input records, persistent Vulkan pipelines, and differential Mesa smoke
-cases. The nearest-center operation is available through the strict chunk
-dependency and is queued safely around graph-root submissions. The substance
-kernel is not yet called by `NoiseBasedAquifer.computeSubstance`; CPU fluid
-status preparation, integration of its output, and chunk state writes remain
-ahead.
+translates supported custom density functions into GPU graphs. The aquifer
+substance kernel is now connected to `NoiseBasedAquifer.computeSubstance` for
+eligible full-block caches: Java prepares fluid statuses and exact state
+objects, Vulkan chooses the substance outcome, and Java retains the chunk
+writer. Structure beardifier values are included in precomputation, and a
+prepared result is used only when its density exactly matches the live Java
+call. Unsupported cases continue through vanilla.
 
 The aquifer substance pipeline follows all three ordered pressure checks from
 the pinned `NoiseBasedAquifer.computeSubstance` implementation: nearest /
 second, nearest / third, then second / third. Mesa smoke exercises each pair,
 pressure ties, global lava, water over lava, and CPU fallback thresholds. This
-remains a standalone kernel; the result does not validate aquifer decision
-integration or final block selection.
+validates the kernel reference cases, while dedicated-server profiles must
+still prove that the integrated batches execute with nonzero samples and zero
+vanilla parity mismatches. Failure logs now include the first mismatching query
+and expected/GPU decisions to make any discrepancy actionable.
 
 The terrain roots batcher now reuses a bounded pool of direct metadata buffers
 until each asynchronous Vulkan submission completes. This removes per-dispatch
