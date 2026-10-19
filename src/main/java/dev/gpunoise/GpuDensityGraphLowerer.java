@@ -118,6 +118,15 @@ final class GpuDensityGraphLowerer {
         // Router roots are copied after the final instruction, so their slots
         // must survive the rest of the program.
         for (int root : roots) lastUse[root] = count;
+        // NoiseChunk's interpolated markers are exported at cell corners and
+        // consumed by a second GPU evaluation at every block. Preserve their
+        // registers through the complete corner program.
+        for (int index = 0; index < count; index++) {
+            GpuDensityGraph.Node node = nodes.get(index);
+            if (node.opcode().equals("Marker") && "Interpolated".equals(node.payload())) {
+                lastUse[index] = count;
+            }
+        }
         List<List<Integer>> releases = new ArrayList<>(count + 1);
         for (int index = 0; index <= count; index++) releases.add(new ArrayList<>());
         for (int index = 0; index < count; index++) releases.get(lastUse[index]).add(index);

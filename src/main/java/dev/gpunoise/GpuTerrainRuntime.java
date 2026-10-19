@@ -331,7 +331,11 @@ public final class GpuTerrainRuntime {
         if (ring == null || graph == null) return java.util.concurrent.CompletableFuture.failedStage(
                 new IllegalStateException("GPU terrain graph provider is not installed"));
         return ring.submitGraphRootsGrid(metadata, chunkCount, samplesPerChunk)
-                .thenApply(values -> new GpuTerrainRootsResult(values, 0, values.length, graph.routerRoots().length));
+                .thenApply(values -> {
+                    int roots = graph.routerRoots().length;
+                    int markers = graph.interpolatedMarkerRegisters().length;
+                    return new GpuTerrainRootsResult(values, 0, values.length, roots, roots + markers, markers);
+                });
     }
 
     public static java.util.concurrent.CompletionStage<int[]> submitAquiferNearestThree(
@@ -360,7 +364,10 @@ public final class GpuTerrainRuntime {
             return ring.submitGraphRootsGrid(gridMetadata, chunkCount, samplesPerChunk)
                     .thenApply(values -> new GpuTerrainBatchResult(
                             new GpuTerrainRootsResult(values, 0, values.length,
-                                    terrainGraph.routerRoots().length),
+                                    terrainGraph.routerRoots().length,
+                                    terrainGraph.routerRoots().length
+                                            + terrainGraph.interpolatedMarkerRegisters().length,
+                                    terrainGraph.interpolatedMarkerRegisters().length),
                             new GpuTerrainBlockResult(new float[0], 0, 0, 1, 16, 0, 16)));
         }
         return ring.submitGraphGridInterpolated(gridMetadata, chunkCount, samplesPerChunk,

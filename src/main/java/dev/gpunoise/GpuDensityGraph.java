@@ -81,6 +81,14 @@ record GpuDensityGraph(List<Node> nodes, int[] routerRoots, List<NormalNoise> no
         return root >= 0 && root < routerRoots.length && (supportedRouterRootMask & (1 << root)) != 0;
     }
 
+    /** Registers whose NoiseChunk marker requires per-function cell interpolation. */
+    int[] interpolatedMarkerRegisters() {
+        return nodes.stream()
+                .filter(node -> node.opcode().equals("Marker") && "Interpolated".equals(node.payload()))
+                .mapToInt(Node::register)
+                .toArray();
+    }
+
     private static int completeRootMask(int roots) {
         if (roots < 0 || roots > Integer.SIZE - 1) {
             throw new IllegalArgumentException("router graph has unsupported root count " + roots);

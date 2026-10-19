@@ -38,6 +38,10 @@ layout(std430,set=0,binding=7) readonly buffer BlendedMetadata { BlendedInfo ble
 layout(std430,set=0,binding=8) readonly buffer BlendInputs { vec2 blendInputs[]; };
 layout(std430,set=0,binding=9) readonly buffer Roots { uint rootNodes[]; };
 layout(std430,set=0,binding=10) readonly buffer MthSinTable { float mthSinValues[]; };
+layout(std430,set=0,binding=11) readonly buffer InterpolatedInputs { float interpolatedInputs[]; };
+// uint layout: count, interpolated marker registers, then register-to-slot map.
+layout(std430,set=0,binding=12) readonly buffer InterpolatorMap { uint interpolatorMap[]; };
+layout(std430,set=0,binding=13) writeonly buffer BlockResults { float blockResults[]; };
 layout(push_constant) uniform Parameters { uint count; uint nodeCount; uint rootCount; uint reserved; };
 
 const vec3 G[16]=vec3[16](vec3(1,1,0),vec3(-1,1,0),vec3(1,-1,0),vec3(-1,-1,0),vec3(1,0,1),vec3(-1,0,1),vec3(1,0,-1),vec3(-1,0,-1),vec3(0,1,1),vec3(0,-1,1),vec3(0,1,-1),vec3(0,-1,-1),vec3(1,1,0),vec3(0,-1,1),vec3(-1,1,0),vec3(0,-1,-1));
@@ -414,9 +418,28 @@ void main(){
         }
         else if(op==16u){double x=values[n.ids.y];v=(x>=double(n.params.x)&&x<double(n.params.y))?values[n.ids.z]:values[n.ids.w];}
         else if(op==17u){double rarity=double(spaghettiRarity(float(values[n.ids.y]),n.meta.x==0u?0u:1u));v=rarity*double(abs(normalNoise(p/float(rarity),uint(n.params.x))));}
+#if !defined(GRID_INPUT)
+        uint interpolationCount=interpolatorMap[0];
+        if(reserved!=0u){
+            uint interpolationSlot=interpolatorMap[1u+16u+n.meta.w];
+            if(interpolationSlot<interpolationCount)
+                v=double(interpolatedInputs[sampleIndex*interpolationCount+interpolationSlot]);
+        }
+#endif
         values[n.meta.w]=v;
     }
+    uint interpolationCount=interpolatorMap[0];
+#ifdef GRID_INPUT
+    uint outputStride=rootCount+interpolationCount;
     for (uint root = 0u; root < rootCount; root++) {
-        results[sampleIndex * rootCount + root] = float(values[rootNodes[root]]);
+        results[sampleIndex * outputStride + root] = float(values[rootNodes[root]]);
     }
+    for(uint marker=0u;marker<interpolationCount;marker++)
+        results[sampleIndex*outputStride+rootCount+marker]
+            =float(values[interpolatorMap[1u+marker]]);
+#else
+    for (uint root = 0u; root < rootCount; root++)
+        if(reserved!=0u) blockResults[sampleIndex * rootCount + root] = float(values[rootNodes[root]]);
+        else results[sampleIndex * rootCount + root] = float(values[rootNodes[root]]);
+#endif
 }

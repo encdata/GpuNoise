@@ -4,15 +4,17 @@ layout(local_size_x = 64) in;
 // Corners are read from the shared terrain lattice. Grid samples are ordered
 // Z-fastest, then X, then Y; root values are interleaved within each sample.
 layout(std430,set=0,binding=0) readonly buffer Corners { float corners[]; };
-layout(std430,set=0,binding=1) writeonly buffer Blocks { float blocks[]; };
+layout(std430,set=0,binding=1) writeonly buffer InterpolatedInputs { float interpolatedInputs[]; };
 // Per chunk: corner offset, block offset, cellsX, cellsY, cellsZ,
 // blocksPerCellX, blocksPerCellY, reserved. Horizontal X/Z spacing is shared.
 layout(std430,set=0,binding=2) readonly buffer Chunks { uint metadata[]; };
+layout(std430,set=0,binding=3) writeonly buffer BlockCoordinates { vec4 coordinates[]; };
+layout(std430,set=0,binding=4) writeonly buffer LegacyBlocks { float blocks[]; };
 layout(push_constant) uniform Parameters {
     uint chunkCount;
     uint blocksPerChunk;
-    uint rootStride;
-    uint outputStride;
+    uint cornerStride;
+    uint interpolatorCount;
 };
 
 float lerp3(float c000,float c100,float c010,float c110,float c001,float c101,float c011,float c111,vec3 t){
@@ -44,15 +46,22 @@ void main(){
         /vec3(float(blocksPerCellX),float(blocksPerCellY),float(blocksPerCellX));
     uint gridX=cellsX+1u, gridZ=cellsZ+1u;
     uint cellSample=cornerOffset+((cellY*gridX+cellX)*gridZ+cellZ);
-    uint strideX=gridZ*rootStride;
-    uint strideY=gridX*gridZ*rootStride;
-    uint strideZ=rootStride;
-    for(uint root=0u;root<outputStride;root++) {
-        uint valueBase=cellSample*rootStride+root;
+    bool markerMode=(interpolatorCount&0x80000000u)!=0u;
+    uint valueCount=interpolatorCount&0x7fffffffu;
+    uint valueStride=cornerStride;
+    uint strideX=gridZ*valueStride;
+    uint strideY=gridX*gridZ*valueStride;
+    uint strideZ=valueStride;
+    uint valueBegin=markerMode?cornerStride-valueCount:0u;
+    for(uint valueIndex=0u;valueIndex<valueCount;valueIndex++) {
+        uint valueBase=cellSample*valueStride+valueBegin+valueIndex;
         float value=lerp3(corners[valueBase],corners[valueBase+strideX],
             corners[valueBase+strideY],corners[valueBase+strideY+strideX],
             corners[valueBase+strideZ],corners[valueBase+strideZ+strideX],
             corners[valueBase+strideY+strideZ],corners[valueBase+strideY+strideZ+strideX],t);
-        blocks[blockOffset+index*outputStride+root]=value;
+        if(markerMode) interpolatedInputs[blockOffset+index*valueCount+valueIndex]=value;
+        else blocks[blockOffset+index*valueCount+valueIndex]=value;
     }
+    if(markerMode) coordinates[blockOffset+index]=vec4(float(metadata[base+0u]+int(x)),
+        float(metadata[base+1u]+int(y)),float(metadata[base+2u]+int(z)),0.0);
 }
