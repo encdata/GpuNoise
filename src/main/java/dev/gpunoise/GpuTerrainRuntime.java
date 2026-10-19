@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.StringJoiner;
 
 import net.minecraft.world.level.levelgen.DensityFunction;
 import net.minecraft.world.level.levelgen.NoiseSettings;
@@ -36,12 +37,17 @@ public final class GpuTerrainRuntime {
     /** GPU-interpolated block densities; disable with gpunoise.fullBlockOutput=false. */
     private static final boolean FULL_BLOCK_OUTPUT = Boolean.parseBoolean(
             System.getProperty("gpunoise.fullBlockOutput", "true"));
+    /** CI probe for block roots whose Java reference requires NoiseChunk interpolation state. */
+    private static final boolean EXPERIMENTAL_INTERPOLATED_BLOCK_OUTPUT = Boolean.getBoolean(
+            "gpunoise.experimentalInterpolatedBlockOutput");
     private static final GpuChunkPipelineGate chunkPipelineGate = new GpuChunkPipelineGate(
             Math.max(16, Runtime.getRuntime().availableProcessors() * 2));
     /** Roots verified against both the compact graph and real cell-grid layout. */
     private static volatile int verifiedTerrainRootMask;
     /** Roots additionally checked as exact per-block values without NoiseChunk markers. */
     private static volatile int verifiedTerrainBlockRootMask;
+    /** Marker-dependent roots included only by the explicit runtime-parity probe. */
+    private static volatile int interpolatedTerrainBlockRootMask;
     private static volatile boolean terrainBlockOutputVerificationComplete;
     private static final ThreadLocal<Boolean> GPU_DENSITY_REQUIRED =
             ThreadLocal.withInitial(() -> Boolean.FALSE);
@@ -294,6 +300,7 @@ public final class GpuTerrainRuntime {
         terrainGraph = graph;
         terrainRouter = router;
         verifiedTerrainBlockRootMask = 0;
+        interpolatedTerrainBlockRootMask = 0;
         terrainBlockOutputVerificationComplete = false;
         GpuNoise.LOGGER.info("GPU terrain graph: nodes={}, registers={}, block pass skips {} marker-only nodes",
                 graph.nodes().size(), graph.registerCount(), skippedBlockNodes);
@@ -478,7 +485,9 @@ public final class GpuTerrainRuntime {
         if (graph == null) return (1 << GpuTerrainRoots.COUNT) - 1;
         int rootLimit = Math.min(GpuTerrainRoots.COUNT, graph.routerRootCount());
         int verified = terrainBlockOutputVerificationComplete
-                ? verifiedTerrainBlockRootMask : supportedTerrainRootMask();
+                ? verifiedTerrainBlockRootMask
+                    | (EXPERIMENTAL_INTERPOLATED_BLOCK_OUTPUT ? interpolatedTerrainBlockRootMask : 0)
+                : supportedTerrainRootMask();
         return verified & ((1 << rootLimit) - 1);
     }
 
@@ -632,6 +641,7 @@ public final class GpuTerrainRuntime {
         if (scheduler == null) {
             verifiedTerrainRootMask = 0;
             verifiedTerrainBlockRootMask = 0;
+            interpolatedTerrainBlockRootMask = 0;
             terrainBlockOutputVerificationComplete = true;
             return;
         }
@@ -691,6 +701,8 @@ public final class GpuTerrainRuntime {
             verifiedTerrainRootMask &= gridVerifiedRoots;
             int verifiedBlockRoots = verifyTerrainBlockOutputs(graph, cpu, batch.blocks(), settings);
             verifiedTerrainBlockRootMask = verifiedBlockRoots & verifiedTerrainRootMask;
+            interpolatedTerrainBlockRootMask = findInterpolatedBlockOutputRoots(graph, batch.blocks())
+                    & verifiedTerrainRootMask;
             terrainBlockOutputVerificationComplete = true;
             GpuNoise.LOGGER.info("GPU terrain grid parity: {} samples, {}/{} roots verified, verifiedMask=0x{}",
                     grid.sampleCount(), Integer.bitCount(verifiedTerrainRootMask), supportedRoots,
@@ -698,9 +710,13 @@ public final class GpuTerrainRuntime {
             GpuNoise.LOGGER.info("GPU terrain block parity: {}/{} roots verified without interpolation-marker dependencies, verifiedMask=0x{}",
                     Integer.bitCount(verifiedTerrainBlockRootMask), graph.routerRootCount(),
                     Integer.toHexString(verifiedTerrainBlockRootMask));
+            GpuNoise.LOGGER.info("GPU terrain per-block roots: exact={}, interpolation-dependent={}, enabled={}, runtimeProbe={}",
+                    rootNames(verifiedTerrainBlockRootMask), rootNames(interpolatedTerrainBlockRootMask),
+                    rootNames(terrainBlockOutputRootMask()), EXPERIMENTAL_INTERPOLATED_BLOCK_OUTPUT);
         } catch (Throwable failure) {
             verifiedTerrainRootMask = 0;
             verifiedTerrainBlockRootMask = 0;
+            interpolatedTerrainBlockRootMask = 0;
             terrainBlockOutputVerificationComplete = true;
             GpuNoise.LOGGER.warn("GPU terrain grid parity dispatch failed; terrain remains CPU-owned.", failure);
         }
@@ -748,6 +764,25 @@ public final class GpuTerrainRuntime {
                     GpuTerrainRoots.name(root), worst, worstX, worstY, worstZ, passes);
         }
         return verified;
+    }
+
+    private static int findInterpolatedBlockOutputRoots(GpuDensityGraph graph, GpuTerrainBlockResult blocks) {
+        if (blocks == null || blocks.isEmpty()) return 0;
+        boolean[] markerDependent = graph.routerRootsWithInterpolatedMarkers();
+        int candidates = 0;
+        for (int root = 0; root < markerDependent.length; root++) {
+            if (graph.supportsRouterRoot(root) && markerDependent[root]
+                    && blocks.outputIndexForRoot(root) >= 0) candidates |= 1 << root;
+        }
+        return candidates;
+    }
+
+    private static String rootNames(int mask) {
+        StringJoiner names = new StringJoiner(",", "[", "]");
+        for (int root = 0; root < GpuTerrainRoots.COUNT; root++) {
+            if ((mask & (1 << root)) != 0) names.add(GpuTerrainRoots.name(root));
+        }
+        return names.toString();
     }
 
     static void verifyGraph(GpuDensityGraph graph, NoiseRouter router) {
@@ -915,6 +950,9 @@ public final class GpuTerrainRuntime {
         terrainRootsScheduler = null;
         terrainProvider = null;
         verifiedTerrainRootMask = 0;
+        verifiedTerrainBlockRootMask = 0;
+        interpolatedTerrainBlockRootMask = 0;
+        terrainBlockOutputVerificationComplete = false;
         if (globalQueue != null) globalQueue.close();
         globalQueue = null;
         // The ring owns its primary engine. Close it through exactly one

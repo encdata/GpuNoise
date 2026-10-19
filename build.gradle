@@ -99,6 +99,8 @@ runs {
         systemProperty 'gpunoise.releaseArtifactPath', releaseArtifactPath.get().asFile.absolutePath
         systemProperty 'gpunoise.forceCpuTerrain', System.getProperty('gpunoise.forceCpuTerrain', 'false')
         systemProperty 'gpunoise.fullBlockOutput', System.getProperty('gpunoise.fullBlockOutput', 'false')
+        systemProperty 'gpunoise.experimentalInterpolatedBlockOutput',
+                System.getProperty('gpunoise.experimentalInterpolatedBlockOutput', 'false')
         systemProperty 'gpunoise.profileTerrain', System.getProperty('gpunoise.profileTerrain', 'false')
         systemProperty 'gpunoise.disableChunkWriter', System.getProperty('gpunoise.disableChunkWriter', 'false')
         systemProperty 'gpunoise.terrainBatchWindowMs', System.getProperty('gpunoise.terrainBatchWindowMs', '20')

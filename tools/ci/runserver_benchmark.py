@@ -262,6 +262,9 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
         # transfer work that the normal runtime configuration does not use.
         if FULL_BLOCK_OUTPUT:
             command.append("-Dgpunoise.fullBlockOutput=true")
+            # Exercise marker-dependent GPU block densities against the live
+            # NoiseChunk reference and the saved CPU/GPU chunk comparison.
+            command.append("-Dgpunoise.experimentalInterpolatedBlockOutput=true")
         if VERIFY_AQUIFER_GPU:
             command.append("-Dgpunoise.verifyAquiferGpu=true")
         command.append(f"-Dgpunoise.terrainBatchWindowMs={BATCH_WINDOW_MS}")
@@ -500,6 +503,15 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                 raise RuntimeError("Tectonic finalDensity did not compile through the generic GPU density frontend")
             if FULL_BLOCK_OUTPUT and "GPU per-block terrain output materialized:" not in run_log:
                 raise RuntimeError("GPU per-block terrain output validation did not run")
+            if FULL_BLOCK_OUTPUT:
+                block_roots = re.findall(
+                    r"GPU terrain per-block roots: exact=(\[[^\]]*\]), "
+                    r"interpolation-dependent=(\[[^\]]*\]), enabled=(\[[^\]]*\]), runtimeProbe=(true|false)",
+                    run_log)
+                if (not block_roots or block_roots[-1][3] != "true"
+                        or "finalDensity" not in block_roots[-1][1] + block_roots[-1][2]):
+                    raise RuntimeError(
+                        "GPU worldgen did not exercise interpolation-dependent finalDensity block output")
             batch_window = GPU_BATCH_WINDOW.search(run_log)
             if (batch_window is None or int(batch_window.group(1)) != BATCH_WINDOW_MS
                     or int(batch_window.group(2)) != BATCH_TARGET_CHUNKS
