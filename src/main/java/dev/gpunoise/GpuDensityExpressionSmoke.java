@@ -558,6 +558,21 @@ final class GpuDensityExpressionSmoke {
                 || equivalentLowered.nodes().get(0).constants()[0] != 12.0) {
             throw new AssertionError("structurally identical range branches should eliminate selector and condition nodes");
         }
+
+        GpuDensityGraph markerBranches = new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{3.0}, null),
+                        new GpuDensityGraph.Node("Marker", new int[]{0}, new double[0], "Interpolated"),
+                        new GpuDensityGraph.Node("Marker", new int[]{0}, new double[0], "Interpolated"),
+                        new GpuDensityGraph.Node("GpuCoordinate", new int[0], new double[0], "X"),
+                        new GpuDensityGraph.Node("GpuSelect", new int[]{3, 1, 2}, new double[0], null)),
+                new int[]{4}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(source, source, source, source, source));
+        GpuDensityGraph markerLowered = GpuDensityGraphLowerer.lower(markerBranches);
+        if (markerLowered.interpolatedMarkerCount() != 2
+                || markerLowered.nodes().stream().noneMatch(node -> node.opcode().equals("GpuSelect"))) {
+            throw new AssertionError("distinct interpolated marker inputs must not be merged by structural branch folding");
+        }
     }
 
     private static void verifyTerrainDecisionFallback() {
