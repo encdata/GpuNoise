@@ -2,6 +2,7 @@ package dev.gpunoise;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
 import java.util.List;
 
 /** Packed contract and double-precision reference for vanilla aquifer results. */
@@ -65,6 +66,91 @@ public final class GpuAquiferSubstance {
                 .putInt(input.kind0).putInt(input.kind1).putInt(input.kind2).putInt(input.kind3)
                 .putInt(input.statusEqualityMask).putInt(input.globalStateId).putInt(flags)
                 .putInt(input.nearestStateId).putInt(0);
+    }
+
+    /** Incremental direct-buffer staging for chunk-sized aquifer decisions. */
+    static final class BatchWriter {
+        private final int expectedRows;
+        private final List<ByteBuffer> completed = new ArrayList<>();
+        private ByteBuffer current;
+        private int size;
+        private boolean finished;
+
+        BatchWriter(int expectedRows) {
+            if (expectedRows < 0) throw new IllegalArgumentException("negative aquifer batch capacity");
+            this.expectedRows = expectedRows;
+        }
+
+        int size() { return size; }
+
+        void add(Input input) {
+            if (input == null) throw new NullPointerException("input");
+            write(input.density, input.barrier, input.y, input.level0, input.level1,
+                    input.level2, input.level3, input.distance0, input.distance1,
+                    input.distance2, input.distance3, input.kind0, input.kind1,
+                    input.kind2, input.kind3, input.statusEqualityMask,
+                    input.globalStateId, input.globalIsLava, input.belowIsLava,
+                    input.c2meAquifer, input.nearestStateId);
+        }
+
+        void addPositiveDensity(double density, int y, boolean c2meAquifer) {
+            write(density, 0.0, y, 0, 0, 0, 0, 0, 0, 0, 0,
+                    OTHER, OTHER, OTHER, OTHER, 0, 0, false, false, c2meAquifer, 0);
+        }
+
+        void addGlobalLava(double density, int y, int stateId, boolean c2meAquifer) {
+            write(density, 0.0, y, 0, 0, 0, 0, 0, 0, 0, 0,
+                    OTHER, OTHER, OTHER, OTHER, 0, stateId, true, false, c2meAquifer, 0);
+        }
+
+        void addAquifer(double density, double barrier, int y,
+                        int level0, int level1, int level2, int level3,
+                        int distance0, int distance1, int distance2, int distance3,
+                        int kind0, int kind1, int kind2, int kind3,
+                        int statusEqualityMask, boolean belowIsLava, boolean c2meAquifer) {
+            write(density, barrier, y, level0, level1, level2, level3,
+                    distance0, distance1, distance2, distance3, kind0, kind1,
+                    kind2, kind3, statusEqualityMask, 0, false, belowIsLava,
+                    c2meAquifer, 0);
+        }
+
+        List<ByteBuffer> finish() {
+            if (finished) throw new IllegalStateException("aquifer batch writer is already finished");
+            finished = true;
+            if (current != null && current.position() > 0) {
+                current.flip();
+                completed.add(current);
+                current = null;
+            }
+            return List.copyOf(completed);
+        }
+
+        private void write(double density, double barrier, int y,
+                           int level0, int level1, int level2, int level3,
+                           int distance0, int distance1, int distance2, int distance3,
+                           int kind0, int kind1, int kind2, int kind3,
+                           int statusEqualityMask, int globalStateId,
+                           boolean globalIsLava, boolean belowIsLava,
+                           boolean c2meAquifer, int nearestStateId) {
+            if (finished) throw new IllegalStateException("aquifer batch writer is already finished");
+            if (size >= expectedRows) throw new IllegalStateException("aquifer batch exceeded its chunk capacity");
+            if (current == null || !current.hasRemaining()) {
+                if (current != null) {
+                    current.flip();
+                    completed.add(current);
+                }
+                current = allocateBatch(Math.min(expectedRows - size, MAX_QUERIES));
+            }
+            int flags = (globalIsLava ? 1 : 0) | (belowIsLava ? 2 : 0)
+                    | (c2meAquifer ? 4 : 0);
+            current.putFloat((float) density).putFloat((float) barrier).putInt(y)
+                    .putInt(level0).putInt(level1).putInt(level2).putInt(level3)
+                    .putInt(distance0).putInt(distance1).putInt(distance2).putInt(distance3)
+                    .putInt(kind0).putInt(kind1).putInt(kind2).putInt(kind3)
+                    .putInt(statusEqualityMask).putInt(globalStateId).putInt(flags)
+                    .putInt(nearestStateId).putInt(0);
+            size++;
+        }
     }
 
     /** Output words are action, state ID, schedule-fluid-update, reserved. */

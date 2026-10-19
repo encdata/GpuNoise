@@ -177,7 +177,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         final int height = cache.height();
         Decision[] decisions = new Decision[Math.multiplyExact(height, 256)];
         List<AquiferQuery> queries = new ArrayList<>();
-        List<GpuAquiferSubstance.Input> inputs = new ArrayList<>();
+        GpuAquiferSubstance.BatchWriter substanceWriter =
+                new GpuAquiferSubstance.BatchWriter(Math.multiplyExact(height, 256));
         List<PendingDecision> pending = new ArrayList<>();
         Map<GridNeighborhood, int[][]> neighborhoods = new HashMap<>();
         boolean exactAquiferInputs = GpuAquiferRuntimeMode.exactAquiferInputsEnabled();
@@ -202,26 +203,28 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         // Vulkan decision kernel as aquifer results so the
                         // complete per-block material classification has one
                         // parity gate and one result table.
-                        GpuAquiferSubstance.Input gpuInput = new GpuAquiferSubstance.Input(
+                        GpuAquiferSubstance.Input diagnosticInput = gpunoise$verifyAquifer
+                                ? new GpuAquiferSubstance.Input(
                                 density, 0.0, y, 0, 0, 0, 0, 0, 0, 0, 0,
                                 GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
                                 GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
-                                0, 0, false, false, c2meAquifer, 0);
-                        inputs.add(gpuInput);
-                        pending.add(new PendingDecision(index, null, context, density, gpuInput));
+                                0, 0, false, false, c2meAquifer, 0) : null;
+                        substanceWriter.addPositiveDensity(density, y, c2meAquifer);
+                        pending.add(new PendingDecision(index, null, context, density, diagnosticInput));
                         positiveDensityDecisions++;
                         continue;
                     }
                     Aquifer.FluidStatus global = globalFluidPicker.computeFluid(x, y, z);
                     BlockState globalState = global.at(y);
                     if (globalState.is(Blocks.LAVA)) {
-                        GpuAquiferSubstance.Input gpuInput = new GpuAquiferSubstance.Input(density, 0.0, y,
+                        GpuAquiferSubstance.Input diagnosticInput = gpunoise$verifyAquifer
+                                ? new GpuAquiferSubstance.Input(density, 0.0, y,
                                 0, 0, 0, 0, 0, 0,
                                 GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
-                                GpuAquiferSubstance.OTHER, 0, true, false, 0);
-                        inputs.add(gpuInput);
+                                GpuAquiferSubstance.OTHER, 0, true, false, 0) : null;
+                        substanceWriter.addGlobalLava(density, y, 0, c2meAquifer);
                         pending.add(new PendingDecision(index, globalState,
-                                context, density, gpuInput));
+                                context, density, diagnosticInput));
                         directLavaDecisions++;
                         continue;
                     }
@@ -316,20 +319,31 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 Aquifer.FluidStatus status3 = gpunoise$getAquiferStatus(BlockPos.asLong(
                         query.centers[fourth][0], query.centers[fourth][1], query.centers[fourth][2]));
                 BlockState nearestState = status0.at(query.y);
-                GpuAquiferSubstance.Input gpuInput = new GpuAquiferSubstance.Input(
+                int level0 = gpunoise$fluidLevel(status0);
+                int level1 = gpunoise$fluidLevel(status1);
+                int level2 = gpunoise$fluidLevel(status2);
+                int level3 = gpunoise$fluidLevel(status3);
+                int kind0 = gpunoise$fluidKind(status0.at(query.y));
+                int kind1 = gpunoise$fluidKind(status1.at(query.y));
+                int kind2 = gpunoise$fluidKind(status2.at(query.y));
+                int kind3 = gpunoise$fluidKind(status3.at(query.y));
+                int statusMask = gpunoise$statusEqualityMask(status0, status1, status2, status3);
+                GpuAquiferSubstance.Input diagnosticInput = gpunoise$verifyAquifer
+                        ? new GpuAquiferSubstance.Input(
                         query.density, query.barrier, query.y,
-                        gpunoise$fluidLevel(status0), gpunoise$fluidLevel(status1),
-                        gpunoise$fluidLevel(status2), gpunoise$fluidLevel(status3),
+                        level0, level1, level2, level3,
                         distance0, distance1, distance2, distance3,
-                        gpunoise$fluidKind(status0.at(query.y)), gpunoise$fluidKind(status1.at(query.y)),
-                        gpunoise$fluidKind(status2.at(query.y)), gpunoise$fluidKind(status3.at(query.y)),
-                        gpunoise$statusEqualityMask(status0, status1, status2, status3),
-                        0, false, query.belowIsLava, c2meAquifer, 0);
-                inputs.add(gpuInput);
+                        kind0, kind1, kind2, kind3, statusMask,
+                        0, false, query.belowIsLava, c2meAquifer, 0) : null;
+                substanceWriter.addAquifer(query.density, query.barrier, query.y,
+                        level0, level1, level2, level3,
+                        distance0, distance1, distance2, distance3,
+                        kind0, kind1, kind2, kind3, statusMask,
+                        query.belowIsLava, c2meAquifer);
                 pending.add(new PendingDecision(query.index, nearestState,
                         gpunoise$verifyAquifer
                                 ? new DensityFunction.SinglePointContext(query.x, query.y, query.z) : null,
-                        query.density, gpuInput));
+                        query.density, diagnosticInput));
             }
         }
         if (gpunoise$verifyAquifer) {
@@ -341,10 +355,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         }
 
         List<CompletableFuture<int[]>> substanceBatches = new ArrayList<>();
-        for (int offset = 0; offset < inputs.size(); offset += GpuAquiferSubstance.MAX_QUERIES) {
-            int count = Math.min(GpuAquiferSubstance.MAX_QUERIES, inputs.size() - offset);
-            substanceBatches.add(GpuTerrainRuntime.submitAquiferSubstance(
-                    GpuAquiferSubstance.pack(inputs, offset, count), count).toCompletableFuture());
+        for (java.nio.ByteBuffer records : substanceWriter.finish()) {
+            int count = records.remaining() / GpuAquiferSubstance.RECORD_BYTES;
+            substanceBatches.add(GpuTerrainRuntime.submitAquiferSubstance(records, count).toCompletableFuture());
         }
         CompletableFuture.allOf(substanceBatches.toArray(CompletableFuture[]::new)).join();
 
@@ -403,13 +416,13 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     vanillaParitySamples, vanillaParityMismatches,
                     substanceFirstMismatch == null ? "none" : substanceFirstMismatch);
         }
-        if (!inputs.isEmpty() && gpunoise$terrainDecisionBatchLogged.compareAndSet(false, true)) {
+        if (substanceWriter.size() > 0 && gpunoise$terrainDecisionBatchLogged.compareAndSet(false, true)) {
             dev.gpunoise.GpuNoise.LOGGER.info(
                     "GPU terrain material decisions: queries={}, positiveDensityQueries={}, "
                             + "aquiferQueries={}, acceptedDecisions={}, cpuFallback={}, "
                             + "globalLavaQueries={}, vanillaParitySamples={}, vanillaParityMismatches={}",
-                    inputs.size(), positiveDensityDecisions, inputs.size() - positiveDensityDecisions,
-                    acceptedDecisions, inputs.size() - acceptedDecisions, directLavaDecisions,
+                    substanceWriter.size(), positiveDensityDecisions, substanceWriter.size() - positiveDensityDecisions,
+                    acceptedDecisions, substanceWriter.size() - acceptedDecisions, directLavaDecisions,
                     vanillaParitySamples, vanillaParityMismatches);
         }
     }

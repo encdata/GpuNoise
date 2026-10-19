@@ -698,6 +698,41 @@ public final class VulkanCiSmoke {
             if (!substanceSlice.equals(GpuAquiferSubstance.pack(expectedSubstanceSlice))) {
                 throw new IllegalStateException("aquifer substance range packing changed record order or values");
             }
+            GpuAquiferSubstance.Input[] stagedSubstances = {
+                    new GpuAquiferSubstance.Input(0.25, 0.0, 7,
+                            0, 0, 0, 0, 0, 0, 0, 0,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            0, 0, false, false, false, 0),
+                    new GpuAquiferSubstance.Input(-1.0, 0.0, -4,
+                            0, 0, 0, 0, 0, 0, 0, 0,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            0, 0, true, false, true, 0),
+                    new GpuAquiferSubstance.Input(-0.4, 0.125, 19,
+                            30, 21, 12, 8, 2, 7, 13, 24,
+                            GpuAquiferSubstance.WATER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.LAVA, GpuAquiferSubstance.WATER,
+                            0b101101, 0, false, true, false, 0)
+            };
+            GpuAquiferSubstance.BatchWriter substanceWriter = new GpuAquiferSubstance.BatchWriter(3);
+            substanceWriter.addPositiveDensity(0.25, 7, false);
+            substanceWriter.addGlobalLava(-1.0, -4, 0, true);
+            GpuAquiferSubstance.Input aquiferSubstance = stagedSubstances[2];
+            substanceWriter.addAquifer(aquiferSubstance.density(), aquiferSubstance.barrier(),
+                    aquiferSubstance.y(), aquiferSubstance.level0(), aquiferSubstance.level1(),
+                    aquiferSubstance.level2(), aquiferSubstance.level3(), aquiferSubstance.distance0(),
+                    aquiferSubstance.distance1(), aquiferSubstance.distance2(), aquiferSubstance.distance3(),
+                    aquiferSubstance.kind0(), aquiferSubstance.kind1(), aquiferSubstance.kind2(),
+                    aquiferSubstance.kind3(), aquiferSubstance.statusEqualityMask(),
+                    aquiferSubstance.belowIsLava(), aquiferSubstance.c2meAquifer());
+            ByteBuffer stagedRecords = ByteBuffer.allocateDirect(3 * GpuAquiferSubstance.RECORD_BYTES)
+                    .order(java.nio.ByteOrder.nativeOrder());
+            for (ByteBuffer batch : substanceWriter.finish()) stagedRecords.put(batch);
+            stagedRecords.flip();
+            if (!stagedRecords.equals(GpuAquiferSubstance.pack(stagedSubstances))) {
+                throw new IllegalStateException("streamed aquifer substance records changed layout or values");
+            }
             var substanceFuture = ring.submitAquiferSubstance(
                     GpuAquiferSubstance.pack(substanceCases), substanceCases.length);
             // The Tectonic integration profile can produce 576-block-high
