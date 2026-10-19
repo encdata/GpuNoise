@@ -9,15 +9,28 @@ import net.minecraft.util.RandomSource;
 /** Headless Vulkan smoke test for CI's Mesa Lavapipe device. */
 public final class VulkanCiSmoke {
     private static final float EXPECTED = 0.375f;
+    private static volatile GpuDensityExpressionSmoke.VulkanBranchFixture registeredTranslatorFixture;
 
     private VulkanCiSmoke() {}
+
+    /** Register and compile the adapter before terrain graph compilation freezes registrations. */
+    static void prepareTranslatorIntegration() {
+        if (registeredTranslatorFixture != null) return;
+        synchronized (VulkanCiSmoke.class) {
+            if (registeredTranslatorFixture == null) {
+                registeredTranslatorFixture = createRegisteredTranslatorFixture();
+            }
+        }
+    }
 
     public static void main(String[] args) throws Exception {
         // Called by the CI server after NeoForge has initialized the registry
         // and mod-loading lifecycle. A standalone JavaExec cannot safely boot
         // these fixtures because NeoForge's LoadingModList is unavailable.
-        GpuDensityExpressionSmoke.VulkanBranchFixture registeredTranslator =
-                registeredTranslatorFixture();
+        GpuDensityExpressionSmoke.VulkanBranchFixture registeredTranslator = registeredTranslatorFixture;
+        if (registeredTranslator == null) {
+            throw new IllegalStateException("Registered density adapter smoke was not prepared before graph compilation");
+        }
         GpuDensityExpressionSmoke.verify();
         verifyTranslatorRegistry();
         GpuDevice device = GpuProbe.findPreferredDevice(GpuNoiseConfig.GpuVendorPreference.AUTO);
@@ -744,7 +757,7 @@ public final class VulkanCiSmoke {
         System.out.println("Vulkan CI smoke: custom density adapter inheritance and precedence passed");
     }
 
-    private static GpuDensityExpressionSmoke.VulkanBranchFixture registeredTranslatorFixture() {
+    private static GpuDensityExpressionSmoke.VulkanBranchFixture createRegisteredTranslatorFixture() {
         GpuDensityFunctionTranslators.register(RegisteredAdapterDensity.class,
                 GpuDensityFunctionTranslator.expressionOnly(function -> {
                     GpuDensityExpression.Builder expression = new GpuDensityExpression.Builder();

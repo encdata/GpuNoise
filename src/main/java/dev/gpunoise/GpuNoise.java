@@ -59,6 +59,9 @@ public final class GpuNoise {
     }
 
     private void onServerAboutToStart(ServerAboutToStartEvent event) {
+        if (Boolean.getBoolean("gpunoise.vulkanSmoke")) {
+            VulkanCiSmoke.prepareTranslatorIntegration();
+        }
         if (warmedDevice == null) {
             warmGpuBeforeWorldgen(GpuNoiseConfig.GPU_VENDOR.get());
         }
