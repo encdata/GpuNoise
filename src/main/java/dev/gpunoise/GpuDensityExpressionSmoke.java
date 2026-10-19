@@ -27,6 +27,15 @@ final class GpuDensityExpressionSmoke {
         return new VulkanBranchFixture(graph, function);
     }
 
+    static VulkanBranchFixture transformedNoiseFixture() {
+        NormalNoise noise = NormalNoise.create(RandomSource.create(811L), -2, 1.0, 0.5);
+        DensityFunction function = new TransformedNoiseDensity(noise,
+                new ConstantReferenceDensity(0.03125), new ConstantReferenceDensity(-0.0625));
+        GpuDensityGraph graph = GpuDensityGraphLowerer.lower(
+                GpuDensityGraphCompiler.compileDensityFunction(function, true));
+        return new VulkanBranchFixture(graph, function);
+    }
+
     static GpuDensityGraph switchGraphForVulkanSmoke() {
         return GpuDensityGraphLowerer.lower(GpuDensityGraphCompiler.compileDensityFunction(
                 new SwitchDensity(), true));
@@ -414,6 +423,20 @@ final class GpuDensityExpressionSmoke {
 
     private static void verifyBytecodeFrontend() {
         NormalNoise noise = NormalNoise.create(RandomSource.create(811L), -2, 1.0, 0.5);
+        DensityFunction accessorDensity = new DensityAccessorFunction(
+                new ConstantReferenceDensity(0.125));
+        GpuDensityBytecodeCompiler.Result accessorResult =
+                GpuDensityBytecodeCompiler.compile(accessorDensity);
+        if (accessorResult.expression() == null) {
+            throw new AssertionError("density-returning helper accessors should inline generically: "
+                    + accessorResult.rejection());
+        }
+        requireClose(accessorResult.expression().evaluate(4, 8, 12),
+                accessorDensity.compute(new DensityFunction.SinglePointContext(4, 8, 12)),
+                1.0e-7, "density-returning helper accessor");
+        GpuDensityGraphBuffer.pack(GpuDensityGraphLowerer.lower(
+                GpuDensityGraphCompiler.compileDensityFunction(accessorDensity, true)));
+
         DensityFunction transformedNoise = new TransformedNoiseDensity(noise,
                 new ConstantReferenceDensity(0.03125), new ConstantReferenceDensity(-0.0625));
         GpuDensityBytecodeCompiler.Result transformedNoiseResult =
@@ -979,6 +1002,22 @@ final class GpuDensityExpressionSmoke {
         @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
         @Override public double minValue() { return -2.0; }
         @Override public double maxValue() { return 2.0; }
+        @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
+            return DensityFunctions.constant(0.0).codec();
+        }
+    }
+
+    private static final class DensityAccessorFunction implements DensityFunction.SimpleFunction {
+        private final DensityFunction input;
+
+        private DensityAccessorFunction(DensityFunction input) { this.input = input; }
+
+        private DensityFunction input() { return input; }
+
+        @Override public double compute(FunctionContext context) { return input().compute(context) * 2.5; }
+        @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
+        @Override public double minValue() { return -10.0; }
+        @Override public double maxValue() { return 10.0; }
         @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
             return DensityFunctions.constant(0.0).codec();
         }

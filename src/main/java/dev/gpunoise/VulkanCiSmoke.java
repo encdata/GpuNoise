@@ -172,6 +172,11 @@ public final class VulkanCiSmoke {
                     "immutable terrain record configuration", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.finalFieldConfigurationFixture(),
                     "final-field terrain helper object", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.transformedNoiseFixture(),
+                    "generic transformed NormalNoise coordinates",
+                    new float[]{-193.0f, -1.0f, 37.0f, 256.0f},
+                    new float[]{-64.0f, 0.0f, 91.0f, 319.0f},
+                    new float[]{-117.0f, 1.0f, -248.0f, 128.0f});
             assertNumericFixture(ring, GpuDensityExpressionSmoke.mixedTerrainRootFixture(),
                     "supported terrain root beside CPU fallback root", mathX, mathY, mathZ);
             GpuDensityExpressionSmoke.VulkanBranchFixture minecraftMathFixture =

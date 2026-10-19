@@ -858,8 +858,11 @@ final class GpuDensityBytecodeCompiler {
                         reject("void helper calls have side effects and cannot be inlined");
                     Value result = new Interpreter(function, helperOwner, target, builder, inlineDepth + 1,
                             remainingInstructionBudget, targetStatic ? null : receiver, arguments).runInline();
-                    if (result.kind() != Kind.VALUE)
-                        reject("helper returned a nonnumeric value");
+                    if (result.kind() != Kind.VALUE && result.kind() != Kind.DENSITY
+                            && result.kind() != Kind.NOISE && result.kind() != Kind.OBJECT
+                            && result.kind() != Kind.ARRAY) {
+                        reject("helper returned a value the density IR cannot represent");
+                    }
                     stack.add(result);
                     return;
                 }
