@@ -400,6 +400,7 @@ void main(){
         else if(op==24u)v=javaIntOperation(n.meta.x,values[n.ids.y],n.meta.x==6u?0.0:values[n.ids.z]);
         else if(op==25u)v=javaFloatOperation(n.meta.x,values[n.ids.y],n.meta.x==6u?0.0:values[n.ids.z]);
         else if(op==26u)v=javaNumericCast(n.meta.x,values[n.ids.y]);
+        else if(op==27u){vec3 q=vec3(float(values[n.ids.y]),float(values[n.ids.z]),float(values[n.ids.w]));v=double(normalNoise(q,uint(n.params.x)));}
         else if(op==15u){
 #ifdef GRID_INPUT
             // Normal new-chunk terrain has the vanilla no-blending pair (0,1).
@@ -413,19 +414,6 @@ void main(){
         }
         else if(op==16u){double x=values[n.ids.y];v=(x>=double(n.params.x)&&x<double(n.params.y))?values[n.ids.z]:values[n.ids.w];}
         else if(op==17u){double rarity=double(spaghettiRarity(float(values[n.ids.y]),n.meta.x==0u?0u:1u));v=rarity*double(abs(normalNoise(p/float(rarity),uint(n.params.x))));}
-        else if(op==18u){
-            double x;
-            double z;
-            if(n.meta.x!=0u){
-                x=(double(p.x)+values[n.ids.y])*double(n.params.y);
-                z=(double(p.z)+values[n.ids.z])*double(n.params.y);
-            } else {
-                x=double(p.x)*double(n.params.y)+values[n.ids.y];
-                z=double(p.z)*double(n.params.y)+values[n.ids.z];
-            }
-            v=double(normalNoise(vec3(float(x),0.0,float(z)),uint(n.params.x)))*double(n.params.z)+double(n.params.w);
-        }
-        else if(op==19u){v=1.0/values[n.ids.y];}
         values[n.meta.w]=v;
     }
     for (uint root = 0u; root < rootCount; root++) {

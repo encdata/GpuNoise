@@ -10,7 +10,7 @@ import java.util.List;
 final class GpuDensityGraphLowerer {
     private static final Set<String> SUPPORTED = Set.of(
             "Constant", "Noise", "Ap2", "MulOrAdd", "Clamp", "Mapped", "Marker", "GpuCoordinate", "GpuMath", "GpuCompare", "GpuSelect", "GpuInt", "GpuFloat", "GpuCast",
-            "Shift", "ShiftA", "ShiftB", "ShiftedNoise", "TectonicConfigNoise", "TectonicInvert", "Spline", "BlendedNoise", "YClampedGradient", "BlendDensity", "RangeChoice", "WeirdScaledSampler"
+            "Shift", "ShiftA", "ShiftB", "ShiftedNoise", "Spline", "BlendedNoise", "YClampedGradient", "BlendDensity", "RangeChoice", "WeirdScaledSampler", "GpuNoise3"
     );
 
     private GpuDensityGraphLowerer() {}
@@ -219,6 +219,9 @@ final class GpuDensityGraphLowerer {
                     && Double.isFinite(parameters[0]) && parameters[0] == Math.rint(parameters[0])
                     && parameters[0] >= 0 && parameters[0] < noiseCount
                     && Double.isFinite(parameters[1]) && Double.isFinite(parameters[2]);
+            case "GpuNoise3" -> children == 3 && constants == 1
+                    && Double.isFinite(parameters[0]) && parameters[0] == Math.rint(parameters[0])
+                    && parameters[0] >= 0 && parameters[0] < noiseCount;
             default -> true;
         };
         if (!valid) {

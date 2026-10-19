@@ -71,7 +71,7 @@ public final class GpuDensityExpression {
         for (int index = 0; index <= root; index++) {
             if (!reachable[index]) continue;
             double[] parameters = nodes.get(index).constants();
-            if (nodes.get(index).opcode().equals("Noise")) {
+            if (nodes.get(index).opcode().equals("Noise") || nodes.get(index).opcode().equals("GpuNoise3")) {
                 int sampler = (int) parameters[0];
                 if (sampler < 0 || sampler >= noises.size() || sampler != parameters[0]) {
                     throw new IllegalArgumentException("GPU expression references an invalid noise sampler");
@@ -113,7 +113,7 @@ public final class GpuDensityExpression {
             int[] children = node.children();
             for (int child = 0; child < children.length; child++) children[child] = nodeRemap[children[child]];
             double[] parameters = node.constants();
-            if (node.opcode().equals("Noise")) {
+            if (node.opcode().equals("Noise") || node.opcode().equals("GpuNoise3")) {
                 parameters[0] = samplerRemap[(int) parameters[0]];
             } else if (node.opcode().equals("DensityRef")) {
                 parameters[0] = densityRemap[(int) parameters[0]];
@@ -150,7 +150,7 @@ public final class GpuDensityExpression {
         for (Node node : nodes) {
             if (backend == Backend.POINT_SAMPLE) continue;
             switch (node.opcode()) {
-                case "Constant", "Noise", "DensityRef", "Clamp", "Mapped", "GpuCoordinate",
+                case "Constant", "Noise", "GpuNoise3", "DensityRef", "Clamp", "Mapped", "GpuCoordinate",
                         "GpuCompare", "GpuSelect",
                         "GpuInt", "GpuFloat", "GpuCast" -> { }
                 case "GpuMath" -> {
@@ -198,6 +198,12 @@ public final class GpuDensityExpression {
                     float ny = (float) gpuY * (float) parameters[2];
                     float nz = (float) gpuZ * (float) parameters[1];
                     yield (double) (float) sampler.getValue(nx, ny, nz);
+                }
+                case "GpuNoise3" -> {
+                    double[] parameters = node.constants();
+                    NormalNoise sampler = noises.get((int) parameters[0]);
+                    yield (double) (float) sampler.getValue((float) values[children[0]],
+                            (float) values[children[1]], (float) values[children[2]]);
                 }
                 case "DensityRef" -> {
                     DensityFunction dependency = densityReferences.get((int) node.constants()[0]);
@@ -370,6 +376,17 @@ public final class GpuDensityExpression {
             });
             return append("Noise", new int[0],
                     new double[]{samplerIndex, horizontalScale, verticalScale}, null);
+        }
+
+        /** Adds a sampler at three already translated Java coordinate expressions. */
+        public int noise(NormalNoise sampler, int x, int y, int z) {
+            if (sampler == null) throw new IllegalArgumentException("GPU noise sampler cannot be null");
+            requireValue(x); requireValue(y); requireValue(z);
+            int samplerIndex = noiseIndices.computeIfAbsent(sampler, key -> {
+                noises.add(key);
+                return noises.size() - 1;
+            });
+            return append("GpuNoise3", new int[]{x, y, z}, new double[]{samplerIndex}, null);
         }
 
         /** Adds a nested DensityFunction dependency for graph-level recursive lowering. */

@@ -39,6 +39,20 @@ MODS = {
         "63439774148dbc99a7ab6083417431137ebf9dead0d9b873236b6a31411970d4"
         "834822da0df2f6494f0473c479e5dcedf68e35e3eae5c20020c3986e1cd53275",
     ),
+    # Tectonic registers custom DensityFunction implementations and is the
+    # integration fixture for the generic Java bytecode-to-GPU frontend.
+    "tectonic-3.0.28-neoforge-21.1.jar": (
+        "https://cdn.modrinth.com/data/lWDHr9jE/versions/n4iyW7aB/"
+        "tectonic-3.0.28-neoforge-21.1.jar",
+        "e07b9cb54f078b7bf74c925c5cebd6643f0b4c210b8f94474e68659b69468ece"
+        "7d61432f70eafe7abaa1dfa798e4638aad297987c121dc127588c2623b7f7a81",
+    ),
+    "lithostitched-1.6.5-neoforge-21.1.jar": (
+        "https://cdn.modrinth.com/data/XaDC71GB/versions/keVceya0/"
+        "lithostitched-1.6.5-neoforge-21.1.jar",
+        "9af9db5f585abe098168e820edfa69c852c2c028fee2e3a577830d07f5dbf003"
+        "29ce24e12a3d7480009266f8bfb9e850b1dde20787103525717a9df17b3403b9",
+    ),
 }
 RCON_PASSWORD = "gpunoise-ci-only"
 SERVER_START_TIMEOUT = 300

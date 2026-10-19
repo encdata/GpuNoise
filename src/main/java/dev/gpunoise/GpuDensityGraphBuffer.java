@@ -22,7 +22,7 @@ final class GpuDensityGraphBuffer {
             Map.entry("MulOrAdd", 4), Map.entry("Clamp", 5), Map.entry("Mapped", 6),
             Map.entry("Marker", 7), Map.entry("Shift", 8), Map.entry("ShiftA", 9),
             Map.entry("ShiftB", 10), Map.entry("ShiftedNoise", 11), Map.entry("Spline", 12),
-            Map.entry("BlendedNoise", 13), Map.entry("YClampedGradient", 14), Map.entry("BlendDensity", 15), Map.entry("RangeChoice", 16), Map.entry("WeirdScaledSampler", 17), Map.entry("TectonicConfigNoise", 18), Map.entry("TectonicInvert", 19), Map.entry("GpuCoordinate", 20), Map.entry("GpuMath", 21), Map.entry("GpuCompare", 22), Map.entry("GpuSelect", 23), Map.entry("GpuInt", 24), Map.entry("GpuFloat", 25), Map.entry("GpuCast", 26)
+            Map.entry("BlendedNoise", 13), Map.entry("YClampedGradient", 14), Map.entry("BlendDensity", 15), Map.entry("RangeChoice", 16), Map.entry("WeirdScaledSampler", 17), Map.entry("GpuCoordinate", 20), Map.entry("GpuMath", 21), Map.entry("GpuCompare", 22), Map.entry("GpuSelect", 23), Map.entry("GpuInt", 24), Map.entry("GpuFloat", 25), Map.entry("GpuCast", 26), Map.entry("GpuNoise3", 27)
     );
 
     private GpuDensityGraphBuffer() {}

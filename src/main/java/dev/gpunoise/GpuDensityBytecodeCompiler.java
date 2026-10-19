@@ -805,12 +805,15 @@ final class GpuDensityBytecodeCompiler {
                     && owner.equals("net/minecraft/world/level/levelgen/synth/NormalNoise")
                     && name.equals("getValue") && arguments.length == 3) {
                 Value x = arguments[0], y = arguments[1], z = arguments[2];
-                if (x.kind() != Kind.VALUE || y.kind() != Kind.VALUE || z.kind() != Kind.VALUE
-                        || x.axis() != Axis.X || y.axis() != Axis.Y || z.axis() != Axis.Z
-                        || Float.floatToIntBits((float) x.axisScale()) != Float.floatToIntBits((float) z.axisScale())) {
-                    reject("NormalNoise.getValue coordinates must be direct X/Y/Z axes with matching horizontal scales");
+                if (x.kind() != Kind.VALUE || y.kind() != Kind.VALUE || z.kind() != Kind.VALUE)
+                    reject("NormalNoise.getValue coordinates must be numeric GPU expressions");
+                int expression;
+                if (x.axis() == Axis.X && y.axis() == Axis.Y && z.axis() == Axis.Z
+                        && Float.floatToIntBits((float) x.axisScale()) == Float.floatToIntBits((float) z.axisScale())) {
+                    expression = builder.noise(receiver.noise(), x.axisScale(), y.axisScale());
+                } else {
+                    expression = builder.noise(receiver.noise(), x.expression(), y.expression(), z.expression());
                 }
-                int expression = builder.noise(receiver.noise(), x.axisScale(), y.axisScale());
                 stack.add(Value.value(expression, null));
                 return;
             }

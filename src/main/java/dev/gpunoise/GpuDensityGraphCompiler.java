@@ -189,8 +189,6 @@ final class GpuDensityGraphCompiler {
         // than producing a plausible-looking but incorrect GPU graph.
         String functionClassName = function.getClass().getName();
         boolean customFunction = !functionClassName.startsWith("net.minecraft.");
-        boolean tectonicFunction = functionClassName.startsWith(
-                "dev.worldgen.tectonic.worldgen.densityfunction.");
         if (customFunction) {
             GpuDensityExpression expression = GpuDensityFunctionTranslators.translateToGpu(function);
             String bytecodeRejection = null;
@@ -218,7 +216,7 @@ final class GpuDensityGraphCompiler {
                         children[child] = expressionNodeRemap[children[child]];
                     }
                     double[] constants = expressionNode.constants();
-                    if (expressionNode.opcode().equals("Noise")) {
+                    if (expressionNode.opcode().equals("Noise") || expressionNode.opcode().equals("GpuNoise3")) {
                         int localSampler = (int) constants[0];
                         if (localSampler < 0 || localSampler >= samplerRemap.length) {
                             throw unsupported(function, "GPU expression references an invalid noise sampler");
@@ -269,64 +267,14 @@ final class GpuDensityGraphCompiler {
                         + " is not supported by the terrain-grid shader; provide a vanilla-equivalent "
                         + "translate() graph for the grid path");
             }
-            if (!tectonicFunction) {
-                throw unsupported(function, "automatic Java bytecode compilation rejected this implementation: "
-                        + (bytecodeRejection == null ? "no registered GPU translator" : bytecodeRejection));
-            }
+            throw unsupported(function, "automatic Java bytecode compilation rejected this implementation: "
+                    + (bytecodeRejection == null ? "no registered GPU translator" : bytecodeRejection));
         }
 
         // Some NeoForge/Minecraft transformations expose Constant as a normal
         // class even though the source declares it as a record. Its value is
         // exactly its min/max value, so it can be lowered without reflection.
         String simpleName = function.getClass().getSimpleName();
-        if (tectonicFunction && simpleName.equals("ConfigNoise")) {
-            if (!function.getClass().isRecord()) throw unsupported(function, "ConfigNoise is not a record");
-            try {
-                RecordComponent[] components = function.getClass().getRecordComponents();
-                Object noiseValue = recordValue(components, function, "noise");
-                Object shiftXValue = recordValue(components, function, "shiftX");
-                Object shiftZValue = recordValue(components, function, "shiftZ");
-                Object scaleValue = recordValue(components, function, "scale");
-                Object multiplierValue = recordValue(components, function, "multiplier");
-                Object offsetValue = recordValue(components, function, "offset");
-                Object smootherValue = recordValue(components, function, "smootherScaling");
-                if (!(noiseValue instanceof NoiseHolder noiseHolder)
-                        || noiseHolder.noise() == null
-                        || !(shiftXValue instanceof DensityFunction shiftX)
-                        || !(shiftZValue instanceof DensityFunction shiftZ)
-                        || !(scaleValue instanceof Number scale)
-                        || !(multiplierValue instanceof Number multiplier)
-                        || !(offsetValue instanceof Number offset)
-                        || !(smootherValue instanceof Boolean smootherScaling)) {
-                    throw unsupported(function, "ConfigNoise has invalid record fields");
-                }
-                int noiseId = noiseIndices.computeIfAbsent(noiseHolder.noise(), key -> {
-                    noises.add(key);
-                    return noises.size() - 1;
-                });
-                nodes.set(index, new GpuDensityGraph.Node("TectonicConfigNoise",
-                        new int[]{node(shiftX), node(shiftZ)},
-                        new double[]{noiseId, scale.doubleValue(), multiplier.doubleValue(), offset.doubleValue()},
-                        smootherScaling.toString()));
-                return index;
-            } catch (ReflectiveOperationException failure) {
-                throw new IllegalStateException("Cannot inspect Tectonic ConfigNoise", failure);
-            }
-        }
-        if (tectonicFunction && simpleName.equals("Invert")) {
-            if (!function.getClass().isRecord()) throw unsupported(function, "Invert is not a record");
-            try {
-                Object inputValue = recordValue(function.getClass().getRecordComponents(), function, "input");
-                if (!(inputValue instanceof DensityFunction input)) {
-                    throw unsupported(function, "Invert input is not a density function");
-                }
-                nodes.set(index, new GpuDensityGraph.Node("TectonicInvert",
-                        new int[]{node(input)}, new double[0], null));
-                return index;
-            } catch (ReflectiveOperationException failure) {
-                throw new IllegalStateException("Cannot inspect Tectonic Invert", failure);
-            }
-        }
         if (function instanceof BlendedNoise blendedNoise) {
             BlendedNoiseAccess accessor = (BlendedNoiseAccess) (Object) blendedNoise;
             int blendedId = blended.size();

@@ -414,6 +414,26 @@ final class GpuDensityExpressionSmoke {
 
     private static void verifyBytecodeFrontend() {
         NormalNoise noise = NormalNoise.create(RandomSource.create(811L), -2, 1.0, 0.5);
+        DensityFunction transformedNoise = new TransformedNoiseDensity(noise,
+                new ConstantReferenceDensity(0.03125), new ConstantReferenceDensity(-0.0625));
+        GpuDensityBytecodeCompiler.Result transformedNoiseResult =
+                GpuDensityBytecodeCompiler.compile(transformedNoise);
+        if (transformedNoiseResult.expression() == null) {
+            throw new AssertionError("transformed NormalNoise coordinates should compile generically: "
+                    + transformedNoiseResult.rejection());
+        }
+        if (transformedNoiseResult.expression().nodes().stream()
+                .noneMatch(node -> "GpuNoise3".equals(node.opcode()))) {
+            throw new AssertionError("transformed noise coordinates must remain explicit IR inputs");
+        }
+        for (int[] point : new int[][]{{-193, -64, -117}, {-1, 0, 1}, {37, 91, -248}}) {
+            requireClose(transformedNoiseResult.expression().evaluate(point[0], point[1], point[2]),
+                    transformedNoise.compute(new DensityFunction.SinglePointContext(point[0], point[1], point[2])),
+                    1.0e-7, "generic transformed noise at x=" + point[0]);
+        }
+        GpuDensityGraphBuffer.pack(GpuDensityGraphLowerer.lower(
+                GpuDensityGraphCompiler.compileDensityFunction(transformedNoise, true)));
+
         BytecodeDensity density = new BytecodeDensity(noise, new ConstantReferenceDensity(0.125),
                 0.017, 0.03125, 0.4, 1.7);
         GpuDensityBytecodeCompiler.Result compiled = GpuDensityBytecodeCompiler.compile(density);
@@ -928,6 +948,32 @@ final class GpuDensityExpressionSmoke {
             double sampled = noise.getValue(context.blockX() * horizontalScale,
                     context.blockY() * verticalScale, context.blockZ() * horizontalScale);
             return sampled > threshold ? sampled + 0.25 : sampled - 0.25;
+        }
+
+        @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
+        @Override public double minValue() { return -2.0; }
+        @Override public double maxValue() { return 2.0; }
+        @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
+            return DensityFunctions.constant(0.0).codec();
+        }
+    }
+
+    private static final class TransformedNoiseDensity implements DensityFunction.SimpleFunction {
+        private final NormalNoise noise;
+        private final DensityFunction shiftX;
+        private final DensityFunction shiftZ;
+
+        private TransformedNoiseDensity(NormalNoise noise, DensityFunction shiftX, DensityFunction shiftZ) {
+            this.noise = noise;
+            this.shiftX = shiftX;
+            this.shiftZ = shiftZ;
+        }
+
+        @Override
+        public double compute(FunctionContext context) {
+            double x = (context.blockX() + shiftX.compute(context)) * 0.03125;
+            double z = (context.blockZ() + shiftZ.compute(context)) * 0.03125;
+            return noise.getValue(x, 0.0, z) * 1.7 + 0.4;
         }
 
         @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
