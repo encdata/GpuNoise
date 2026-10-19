@@ -878,27 +878,33 @@ public final class VulkanCiSmoke {
                 throw new IllegalStateException("Chunk-sized aquifer batch returned a truncated output");
             }
             for (int i = 0; i < chunkBatchSize; i++) {
-                int base = i * GpuAquiferSubstance.OUTPUT_INTS;
-                if (chunkSubstanceResults[base] != GpuAquiferSubstance.RETURN_DEFAULT
-                        || chunkSubstanceResults[base + 1] != 0 || chunkSubstanceResults[base + 2] != 0) {
+                if (chunkSubstanceResults[i] != GpuAquiferSubstance.packOutput(
+                        GpuAquiferSubstance.RETURN_DEFAULT, false)) {
                     throw new IllegalStateException("Chunk-sized aquifer decision mismatch at row " + i);
                 }
             }
             System.out.println("Vulkan CI smoke: full-chunk aquifer batch completed (147,456 blocks, one dispatch)");
             for (int i = 0; i < substanceCases.length; i++) {
                 int[] expected = GpuAquiferSubstance.evaluate(substanceCases[i]);
-                for (int field = 0; field < GpuAquiferSubstance.OUTPUT_INTS; field++) {
-                    int actual = substanceResults[i * GpuAquiferSubstance.OUTPUT_INTS + field];
-                    if (actual != expected[field]) {
-                        throw new IllegalStateException("Aquifer substance mismatch at case " + i
-                                + ", field " + field + ": expected " + expected[field] + ", got " + actual);
-                    }
+                int expectedPacked = GpuAquiferSubstance.packOutput(expected[0], expected[2] != 0);
+                int actualPacked = substanceResults[i];
+                if (!GpuAquiferSubstance.isValidPackedOutput(actualPacked)
+                        || actualPacked != expectedPacked) {
+                    throw new IllegalStateException("Aquifer substance mismatch at case " + i
+                            + ": expected packed " + expectedPacked + ", got " + actualPacked);
                 }
             }
             int[] weightedThirdPressure = GpuAquiferSubstance.evaluate(weightedThirdPressureCase);
+            int weightedThirdPressureIndex = java.util.Arrays.asList(substanceCases)
+                    .indexOf(weightedThirdPressureCase);
             if (weightedThirdPressure[0] != GpuAquiferSubstance.RETURN_STATE
                     || weightedThirdPressure[1] != 417 || weightedThirdPressure[2] != 1) {
                 throw new IllegalStateException("Vanilla second/third pressure contribution lost its nearest-similarity weight");
+            }
+            if (weightedThirdPressureIndex < 0
+                    || substanceResults[weightedThirdPressureIndex] != GpuAquiferSubstance.packOutput(
+                    GpuAquiferSubstance.RETURN_STATE, true)) {
+                throw new IllegalStateException("Packed aquifer output lost the weighted second/third pressure decision");
             }
             if (GpuAquiferSubstance.evaluate(positiveDensityThresholdCase)[0]
                     != GpuAquiferSubstance.CPU_FALLBACK) {

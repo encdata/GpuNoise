@@ -355,12 +355,13 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             int[] outputs = batch.join();
             for (int row = 0; row < outputs.length / GpuAquiferSubstance.OUTPUT_INTS; row++) {
                 int query = outputOffset++;
-                int base = row * GpuAquiferSubstance.OUTPUT_INTS;
-                int action = outputs[base];
+                int packedOutput = outputs[row];
+                if (!GpuAquiferSubstance.isValidPackedOutput(packedOutput)) continue;
+                int action = GpuAquiferSubstance.outputAction(packedOutput);
                 if (action == GpuAquiferSubstance.CPU_FALLBACK) continue;
-                if ((action != GpuAquiferSubstance.RETURN_DEFAULT
-                        && action != GpuAquiferSubstance.RETURN_STATE)
-                        || outputs[base + 1] != 0 || (outputs[base + 2] & ~1) != 0) continue;
+                if (action != GpuAquiferSubstance.RETURN_DEFAULT
+                        && action != GpuAquiferSubstance.RETURN_STATE) continue;
+                boolean scheduleFluidUpdate = GpuAquiferSubstance.outputSchedulesFluidUpdate(packedOutput);
                 int sourceIndex = pending.index(query);
                 BlockState state = action == GpuAquiferSubstance.RETURN_STATE
                         ? pending.selectedState(query) : null;
@@ -370,20 +371,20 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     BlockState vanilla = gpunoise$invokeVanillaComputeSubstance(context, density);
                     boolean vanillaSchedule = shouldScheduleFluidUpdate;
                     vanillaParitySamples++;
-                    if (!Objects.equals(vanilla, state) || vanillaSchedule != (outputs[base + 2] != 0)) {
+                    if (!Objects.equals(vanilla, state) || vanillaSchedule != scheduleFluidUpdate) {
                         vanillaParityMismatches++;
                         if (substanceFirstMismatch == null) {
                             substanceFirstMismatch = "query=(" + context.blockX() + ","
                                     + context.blockY() + "," + context.blockZ()
                                     + "), density=" + density + ", vanillaState=" + vanilla
                                     + ", gpuState=" + state + ", vanillaSchedule=" + vanillaSchedule
-                                    + ", gpuSchedule=" + (outputs[base + 2] != 0)
+                                    + ", gpuSchedule=" + scheduleFluidUpdate
                                     + ", gpuAction=" + action + ", gpuInput=" + pending.gpuInput(query);
                         }
                         continue;
                     }
                 }
-                decisions.set(sourceIndex, state, pending.density(query), outputs[base + 2] != 0);
+                decisions.set(sourceIndex, state, pending.density(query), scheduleFluidUpdate);
                 acceptedDecisions++;
             }
         }

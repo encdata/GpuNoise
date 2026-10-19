@@ -8,7 +8,8 @@ import java.util.List;
 /** Packed contract and double-precision reference for vanilla aquifer results. */
 public final class GpuAquiferSubstance {
     public static final int RECORD_BYTES = 76;
-    public static final int OUTPUT_INTS = 3;
+    /** One packed uint per block: low two bits are action, bit two schedules fluid work. */
+    public static final int OUTPUT_INTS = 1;
     /**
      * Substance evaluation is a compact one-dispatch pass over the full block
      * volume. Keep center selection's smaller limit independent: its records
@@ -21,6 +22,8 @@ public final class GpuAquiferSubstance {
     public static final int RETURN_DEFAULT = 0;
     public static final int RETURN_STATE = 1;
     public static final int CPU_FALLBACK = 2;
+    private static final int OUTPUT_ACTION_MASK = 0x3;
+    private static final int OUTPUT_SCHEDULE_FLUID_UPDATE = 1 << 2;
     // Matches the router parity gate while float64 classification is not yet
     // selected as a device capability variant.
     static final float PRECISION_EPSILON = 5.0e-3f;
@@ -28,6 +31,24 @@ public final class GpuAquiferSubstance {
     static final double FLOWING_UPDATE_SIMILARITY = 1.0 - (12 * 12 - 10 * 10) / 25.0;
 
     private GpuAquiferSubstance() {}
+
+    static int packOutput(int action, boolean scheduleFluidUpdate) {
+        if (action < RETURN_DEFAULT || action > CPU_FALLBACK)
+            throw new IllegalArgumentException("invalid aquifer action " + action);
+        return action | (scheduleFluidUpdate ? OUTPUT_SCHEDULE_FLUID_UPDATE : 0);
+    }
+
+    static int outputAction(int packed) { return packed & OUTPUT_ACTION_MASK; }
+
+    static boolean outputSchedulesFluidUpdate(int packed) {
+        return (packed & OUTPUT_SCHEDULE_FLUID_UPDATE) != 0;
+    }
+
+    static boolean isValidPackedOutput(int packed) {
+        int action = outputAction(packed);
+        return (packed & ~(OUTPUT_ACTION_MASK | OUTPUT_SCHEDULE_FLUID_UPDATE)) == 0
+                && action <= CPU_FALLBACK;
+    }
 
     /** Returns true when GPU rounding can change the density sign decision. */
     public static boolean nearDensityDecisionThreshold(double density) {

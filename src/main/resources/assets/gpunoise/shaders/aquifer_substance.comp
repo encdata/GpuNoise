@@ -22,10 +22,8 @@ struct InputRecord {
     uint flags;
     uint nearestStateId;
 };
-struct OutputRecord { uint action; uint stateId; uint schedule; };
-
 layout(std430, set = 0, binding = 0) readonly buffer Inputs { InputRecord items[]; };
-layout(std430, set = 0, binding = 1) writeonly buffer Outputs { OutputRecord values[]; };
+layout(std430, set = 0, binding = 1) writeonly buffer Outputs { uint values[]; };
 layout(push_constant) uniform Parameters { uint count; };
 
 const uint OTHER = 0u;
@@ -60,10 +58,8 @@ float pressure(int y, int levelA, int levelB, uint kindA, uint kindB, float barr
     return 2.0 * (barrierValue + adjustment);
 }
 
-void emit(uint i, uint action, uint stateId, uint schedule) {
-    values[i].action = action;
-    values[i].stateId = stateId;
-    values[i].schedule = schedule;
+void emit(uint i, uint action, uint schedule) {
+    values[i] = action | (schedule << 2u);
 }
 
 bool sameStatus(InputRecord r, uint bit) {
@@ -75,23 +71,23 @@ void main() {
     if (i >= count) return;
     InputRecord r = items[i];
     if (isnan(r.density) || isinf(r.density)) {
-        emit(i, CPU_FALLBACK, 0u, 0u);
+        emit(i, CPU_FALLBACK, 0u);
         return;
     }
     if (abs(r.density) <= PRECISION_EPSILON) {
-        emit(i, CPU_FALLBACK, 0u, 0u);
+        emit(i, CPU_FALLBACK, 0u);
         return;
     }
     if (r.density > 0.0) {
-        emit(i, RETURN_DEFAULT, 0u, 0u);
+        emit(i, RETURN_DEFAULT, 0u);
         return;
     }
     if ((r.flags & FLAG_GLOBAL_LAVA) != 0u) {
-        emit(i, RETURN_STATE, r.globalStateId, 0u);
+        emit(i, RETURN_STATE, 0u);
         return;
     }
     if (isnan(r.barrier) || isinf(r.barrier)) {
-        emit(i, CPU_FALLBACK, 0u, 0u);
+        emit(i, CPU_FALLBACK, 0u);
         return;
     }
 
@@ -100,13 +96,12 @@ void main() {
     float similarity02 = similarity(r.distance0, r.distance2);
     float similarity12 = similarity(r.distance1, r.distance2);
     if (similarity01 <= 0.0) {
-        emit(i, RETURN_STATE, r.nearestStateId,
-                similarity01 >= FLOWING_UPDATE_SIMILARITY
+        emit(i, RETURN_STATE, similarity01 >= FLOWING_UPDATE_SIMILARITY
                         && (!c2meAquifer || !sameStatus(r, 0u)) ? 1u : 0u);
         return;
     }
     if (r.kind0 == WATER && (r.flags & FLAG_BELOW_LAVA) != 0u) {
-        emit(i, RETURN_STATE, r.nearestStateId, 1u);
+        emit(i, RETURN_STATE, 1u);
         return;
     }
 
@@ -114,11 +109,11 @@ void main() {
             r.kind0, r.kind1, r.barrier);
     float firstResult = r.density + contribution01;
     if (abs(firstResult) <= PRECISION_EPSILON) {
-        emit(i, CPU_FALLBACK, 0u, 0u);
+        emit(i, CPU_FALLBACK, 0u);
         return;
     }
     if (firstResult > 0.0) {
-        emit(i, RETURN_DEFAULT, 0u, 0u);
+        emit(i, RETURN_DEFAULT, 0u);
         return;
     }
 
@@ -127,11 +122,11 @@ void main() {
                 r.level0, r.level2, r.kind0, r.kind2, r.barrier);
         float secondResult = r.density + contribution02;
         if (abs(secondResult) <= PRECISION_EPSILON) {
-            emit(i, CPU_FALLBACK, 0u, 0u);
+            emit(i, CPU_FALLBACK, 0u);
             return;
         }
         if (secondResult > 0.0) {
-            emit(i, RETURN_DEFAULT, 0u, 0u);
+            emit(i, RETURN_DEFAULT, 0u);
             return;
         }
     }
@@ -141,16 +136,16 @@ void main() {
                 r.level1, r.level2, r.kind1, r.kind2, r.barrier);
         float thirdResult = r.density + contribution12;
         if (abs(thirdResult) <= PRECISION_EPSILON) {
-            emit(i, CPU_FALLBACK, 0u, 0u);
+            emit(i, CPU_FALLBACK, 0u);
             return;
         }
         if (thirdResult > 0.0) {
-            emit(i, RETURN_DEFAULT, 0u, 0u);
+            emit(i, RETURN_DEFAULT, 0u);
             return;
         }
     }
     if (!c2meAquifer) {
-        emit(i, RETURN_STATE, r.nearestStateId, 1u);
+        emit(i, RETURN_STATE, 1u);
         return;
     }
     bool mayFlow01 = !sameStatus(r, 0u);
@@ -160,5 +155,5 @@ void main() {
             || (similarity02 >= FLOWING_UPDATE_SIMILARITY
             && similarity(r.distance0, r.distance3) >= FLOWING_UPDATE_SIMILARITY
             && !sameStatus(r, 2u));
-    emit(i, RETURN_STATE, r.nearestStateId, schedule ? 1u : 0u);
+    emit(i, RETURN_STATE, schedule ? 1u : 0u);
 }
