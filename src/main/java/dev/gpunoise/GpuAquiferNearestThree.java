@@ -19,10 +19,9 @@ public final class GpuAquiferNearestThree {
     public static final int CENTER_RECORD_BYTES = 4 * Integer.BYTES * CANDIDATES;
     /** Maximum-size query plus one unique center neighborhood per query. */
     public static final int RECORD_BYTES = QUERY_RECORD_BYTES + CENTER_RECORD_BYTES;
-    // Four ranked center indices, four squared distances, and four ABI words.
-    // Vanilla consumes the first three; optimized aquifer implementations can
-    // use the fourth for fluid-tick decisions.
-    public static final int OUTPUT_INTS = 12;
+    // Four ranked center indices and their squared distances. The fourth rank
+    // is used by optimized aquifer implementations for fluid-tick decisions.
+    public static final int OUTPUT_INTS = 8;
     /** One dispatch can rank centers for a modded 576-block chunk. */
     public static final int MAX_QUERIES = PersistentVulkanNormalNoiseEngine.CAPACITY;
     public static final long MAX_PACKED_BYTES = HEADER_BYTES
@@ -261,8 +260,7 @@ public final class GpuAquiferNearestThree {
                 indices[3] = i; distances[3] = distance;
             }
         }
-        return new int[]{indices[0], indices[1], indices[2],
-                indices[3], distances[0], distances[1], distances[2], distances[3],
-                0, 0, 0, 0};
+        return new int[]{indices[0], indices[1], indices[2], indices[3],
+                distances[0], distances[1], distances[2], distances[3]};
     }
 }

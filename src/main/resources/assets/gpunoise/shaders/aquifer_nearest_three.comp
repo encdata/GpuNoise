@@ -10,10 +10,6 @@ struct Selection {
     int secondDistance;
     int thirdDistance;
     int fourthDistance;
-    uint reserved0;
-    uint reserved1;
-    uint reserved2;
-    uint reserved3;
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer Queries { uint words[]; };
@@ -29,10 +25,6 @@ void emitInvalid(uint queryIndex) {
     values[queryIndex].secondDistance = -1;
     values[queryIndex].thirdDistance = -1;
     values[queryIndex].fourthDistance = -1;
-    values[queryIndex].reserved0 = 0u;
-    values[queryIndex].reserved1 = 0u;
-    values[queryIndex].reserved2 = 0u;
-    values[queryIndex].reserved3 = 0u;
 }
 
 void main() {
@@ -85,8 +77,4 @@ void main() {
     values[queryIndex].secondDistance = distances[1];
     values[queryIndex].thirdDistance = distances[2];
     values[queryIndex].fourthDistance = distances[3];
-    values[queryIndex].reserved0 = 0u;
-    values[queryIndex].reserved1 = 0u;
-    values[queryIndex].reserved2 = 0u;
-    values[queryIndex].reserved3 = 0u;
 }

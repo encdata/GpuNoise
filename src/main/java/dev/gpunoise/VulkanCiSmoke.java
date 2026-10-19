@@ -657,7 +657,7 @@ public final class VulkanCiSmoke {
             for (int i = 4; i < GpuAquiferNearestThree.CANDIDATES; i++)
                 centers[0][i] = new int[]{queries[0][0] + 100 + i,
                         queries[0][1] + 100 + i, queries[0][2] + 100 + i};
-            int[] expectedTieOrder = {3, 2, 1, 0, 1, 1, 1, 1, 0, 0, 0, 0};
+            int[] expectedTieOrder = {3, 2, 1, 0, 1, 1, 1, 1};
             if (!java.util.Arrays.equals(expectedTieOrder,
                     GpuAquiferNearestThree.select(queries[0], centers[0])))
                 throw new IllegalStateException("Aquifer equal-distance center order differs from vanilla");
