@@ -155,7 +155,7 @@ public final class VulkanCiSmoke {
             assertNumericFixture(ring, GpuDensityExpressionSmoke.copySignMathFixture(),
                     "Math.copySign signed zero and NaN",
                     new float[]{0.0f, 0.0f, 2.0f, 2.0f, -2.0f},
-                    new float[]{-1.0f, 1.0f, -1.0f, 1.0f, 1.0f}, new float[5]);
+                    new float[]{-1.0f, 1.0f, -1.0f, 1.0f, 1.0f}, new float[5], true);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.mapMathFixture(),
                     "Mth mapping functions", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.interpolationMathFixture(),
@@ -957,6 +957,12 @@ public final class VulkanCiSmoke {
     private static void assertNumericFixture(VulkanSubmissionRing ring,
             GpuDensityExpressionSmoke.VulkanBranchFixture fixture, String label,
             float[] x, float[] y, float[] z) throws Exception {
+        assertNumericFixture(ring, fixture, label, x, y, z, false);
+    }
+
+    private static void assertNumericFixture(VulkanSubmissionRing ring,
+            GpuDensityExpressionSmoke.VulkanBranchFixture fixture, String label,
+            float[] x, float[] y, float[] z, boolean compareNaNSign) throws Exception {
         float[] actual = ring.submitGraphRoots(fixture.graph(), x, y, z).get(60, TimeUnit.SECONDS);
         int rootCount = fixture.graph().routerRootCount();
         if (rootCount == 0 || !fixture.graph().supportsRouterRoot(0)) {
@@ -973,6 +979,8 @@ public final class VulkanCiSmoke {
             float expectedGpuValue = (float) expected;
             float actualValue = actual[sample * rootCount];
             boolean mismatch = Double.isNaN(expected) ? !Float.isNaN(actualValue)
+                    || compareNaNSign && (Double.doubleToRawLongBits(expected) < 0)
+                            != (Float.floatToRawIntBits(actualValue) < 0)
                     : Double.isInfinite(expected) ? actualValue != expectedGpuValue
                     : expectedGpuValue == 0.0f ? actualValue != 0.0f
                             || (Double.doubleToRawLongBits(expected) < 0)
