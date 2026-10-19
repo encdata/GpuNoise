@@ -499,6 +499,12 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                 )
             if "GPU terrain grid parity:" not in run_log:
                 raise RuntimeError("GPU terrain grid parity check did not run")
+            for shader_program in ("density graph", "terrain grid"):
+                if f"Runtime Vulkan shader compiled: program={shader_program}," not in run_log:
+                    raise RuntimeError(
+                        f"registry-time Vulkan shader compilation did not run for {shader_program}")
+            if FULL_BLOCK_OUTPUT and "Runtime Vulkan shader compiled: program=block density graph," not in run_log:
+                raise RuntimeError("registry-time block density shader compilation did not run")
             if terrain_profile == "tectonic-overworld-stack" and "GPU terrain root 'finalDensity' remains on vanilla Java" in run_log:
                 raise RuntimeError("Tectonic finalDensity did not compile through the generic GPU density frontend")
             if FULL_BLOCK_OUTPUT and "GPU per-block terrain output materialized:" not in run_log:
