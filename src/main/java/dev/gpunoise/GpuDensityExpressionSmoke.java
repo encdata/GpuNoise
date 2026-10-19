@@ -36,6 +36,18 @@ final class GpuDensityExpressionSmoke {
         return new VulkanBranchFixture(graph, function);
     }
 
+    /** Exercises the vanilla Noise opcode independently of the custom GpuNoise3 expression path. */
+    static VulkanBranchFixture vanillaNoiseOpcodeFixture() {
+        NormalNoise noise = NormalNoise.create(RandomSource.create(913L), -2, 1.0, 0.5);
+        DensityFunction function = new DirectNormalNoiseDensity(noise);
+        GpuDensityGraph graph = new GpuDensityGraph(
+                java.util.List.of(new GpuDensityGraph.Node("Noise", new int[0],
+                        new double[]{0.0, 1.0, 1.0}, null)),
+                new int[]{0}, java.util.List.of(noise), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(function));
+        return new VulkanBranchFixture(GpuDensityGraphLowerer.lower(graph), function);
+    }
+
     static GpuDensityGraph switchGraphForVulkanSmoke() {
         return GpuDensityGraphLowerer.lower(GpuDensityGraphCompiler.compileDensityFunction(
                 new SwitchDensity(), true));
@@ -1190,6 +1202,24 @@ final class GpuDensityExpressionSmoke {
             double x = (context.blockX() + shiftX.compute(context)) * 0.03125;
             double z = (context.blockZ() + shiftZ.compute(context)) * 0.03125;
             return noise.getValue(x, 0.0, z) * 1.7 + 0.4;
+        }
+
+        @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
+        @Override public double minValue() { return -2.0; }
+        @Override public double maxValue() { return 2.0; }
+        @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
+            return DensityFunctions.constant(0.0).codec();
+        }
+    }
+
+    private static final class DirectNormalNoiseDensity implements DensityFunction.SimpleFunction {
+        private final NormalNoise noise;
+
+        private DirectNormalNoiseDensity(NormalNoise noise) { this.noise = noise; }
+
+        @Override
+        public double compute(FunctionContext context) {
+            return noise.getValue(context.blockX(), context.blockY(), context.blockZ());
         }
 
         @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }

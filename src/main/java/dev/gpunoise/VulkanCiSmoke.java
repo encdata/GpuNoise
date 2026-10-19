@@ -1020,7 +1020,8 @@ public final class VulkanCiSmoke {
         GpuDensityGraph graph = GpuDensityGraphCompiler.compileDensityFunction(function, true);
         GpuDensityGraph lowered = GpuDensityGraphLowerer.lower(graph);
         boolean directExpression = lowered.nodes().stream()
-                .anyMatch(node -> "GpuDensityExpression".equals(node.payload()));
+                .anyMatch(node -> "GpuMath".equals(node.opcode())
+                        && "EXPR_SUBTRACT".equals(node.payload()));
         if (!lowered.supportsRouterRoot(0) || !directExpression) {
             throw new IllegalStateException("Registered custom translator did not reach the terrain GPU IR");
         }
@@ -1108,30 +1109,35 @@ public final class VulkanCiSmoke {
 
     /** Grid metadata preserves integer world coordinates above float's exact-integer limit. */
     private static void verifyLargeCoordinateNoiseParity(VulkanSubmissionRing ring) throws Exception {
-        GpuDensityExpressionSmoke.VulkanBranchFixture fixture =
-                GpuDensityExpressionSmoke.transformedNoiseFixture();
+        GpuDensityExpressionSmoke.VulkanBranchFixture[] fixtures = {
+                GpuDensityExpressionSmoke.vanillaNoiseOpcodeFixture(),
+                GpuDensityExpressionSmoke.transformedNoiseFixture()
+        };
         int[][] origins = {{4_096, 79, -4_096}, {-4_097, -64, 4_097},
                 {16_777_216, 79, -16_777_217}, {-30_000_000, -64, 30_000_000}};
-        for (int[] origin : origins) {
-            ByteBuffer metadata = ByteBuffer.allocateDirect(8 * Integer.BYTES).order(ByteOrder.nativeOrder());
-            metadata.putInt(origin[0]).putInt(origin[1]).putInt(origin[2])
-                    .putInt(2).putInt(1).putInt(1).putInt(1).putInt(1).flip();
-            float[] actual = ring.submitGraphRootsGrid(fixture.graph(), metadata, 1, 2)
-                    .get(60, TimeUnit.SECONDS);
-            if (actual.length != 2) {
-                throw new IllegalStateException("large-coordinate noise grid returned "
-                        + actual.length + " values; expected two");
-            }
-            for (int localX = 0; localX < 2; localX++) {
-                int x = origin[0] + localX;
-                double expected = fixture.javaFunction().compute(
-                        new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(
-                                x, origin[1], origin[2]));
-                float expectedFloat = (float) expected;
-                if (GpuTerrainParity.decisionError(actual[localX], expectedFloat) > 0.005f) {
-                    throw new IllegalStateException("double-coordinate NormalNoise parity mismatch at ("
-                            + x + ", " + origin[1] + ", " + origin[2] + "): expected "
-                            + expected + ", got " + actual[localX]);
+        for (GpuDensityExpressionSmoke.VulkanBranchFixture fixture : fixtures) {
+            for (int[] origin : origins) {
+                ByteBuffer metadata = ByteBuffer.allocateDirect(8 * Integer.BYTES).order(ByteOrder.nativeOrder());
+                metadata.putInt(origin[0]).putInt(origin[1]).putInt(origin[2])
+                        .putInt(2).putInt(1).putInt(1).putInt(1).putInt(1).flip();
+                float[] actual = ring.submitGraphRootsGrid(fixture.graph(), metadata, 1, 2)
+                        .get(60, TimeUnit.SECONDS);
+                if (actual.length != 2) {
+                    throw new IllegalStateException("large-coordinate noise grid returned "
+                            + actual.length + " values; expected two");
+                }
+                for (int localX = 0; localX < 2; localX++) {
+                    int x = origin[0] + localX;
+                    double expected = fixture.javaFunction().compute(
+                            new net.minecraft.world.level.levelgen.DensityFunction.SinglePointContext(
+                                    x, origin[1], origin[2]));
+                    float expectedFloat = (float) expected;
+                    if (GpuTerrainParity.decisionError(actual[localX], expectedFloat) > 0.005f) {
+                        throw new IllegalStateException("double-coordinate NormalNoise parity mismatch for "
+                                + fixture.graph().nodes().get(fixture.graph().routerRoots()[0]).opcode()
+                                + " at (" + x + ", " + origin[1] + ", " + origin[2] + "): expected "
+                                + expected + ", got " + actual[localX]);
+                    }
                 }
             }
         }
