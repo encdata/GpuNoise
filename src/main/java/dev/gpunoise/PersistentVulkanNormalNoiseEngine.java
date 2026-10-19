@@ -63,6 +63,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     // generation uploads a reduced graph. A boolean cache flag incorrectly
     // treated those different layouts as interchangeable.
     private GpuDensityGraph graphResourcesGraph;
+    private GpuDensityGraph interpolatorMapGraph;
     private final long fence;
     private final VkCommandBuffer commandBuffer;
     /** Exactly one graph-roots dispatch owns this command buffer and mapped output at a time. */
@@ -888,6 +889,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     }
 
     private void uploadInterpolatorMap(GpuDensityGraph graph, MemoryStack stack) {
+        if (interpolatorMapGraph == graph) return;
         int[] registers = graph.interpolatedMarkerRegisters();
         if (registers.length > MAX_INTERPOLATORS || graph.registerCount() > 256)
             throw new IllegalArgumentException("terrain graph exceeds interpolated marker capacity");
@@ -907,6 +909,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         for (int slot : slots) map.putInt(slot < 0 ? 0xffff_ffff : slot);
         map.flip();
         put(interpolatorMap, map, stack);
+        interpolatorMapGraph = graph;
     }
 
     private void mapPersistentBuffers(MemoryStack stack) {
