@@ -19,6 +19,11 @@ final class VulkanSubmissionRing implements AutoCloseable {
     // normal 6 GB VRAM laptop and could freeze the desktop. Keep one engine
     // until slots share one device allocation with buffer offsets.
     private static final int SLOT_COUNT = 1;
+    // Terrain callers block on their futures after submitting. Polling only
+    // once per millisecond can therefore add nearly a full millisecond to each
+    // completed dispatch, even when the GPU fence is already signalled. Keep
+    // polling frequent enough to limit that handoff delay without busy-spinning.
+    private static final long COMPLETION_POLL_MICROS = 250L;
     private final PersistentVulkanNormalNoiseEngine[] slots;
     private final AtomicInteger next = new AtomicInteger();
     /** Requests wait here, not on a worldgen thread, while the shared slot is busy. */
@@ -52,7 +57,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 if (slot != null) slot.pollGraphRootsCompletion();
             }
             drainGraphRoots();
-        }, 0, 1, TimeUnit.MILLISECONDS);
+        }, 0, COMPLETION_POLL_MICROS, TimeUnit.MICROSECONDS);
     }
 
     PersistentVulkanNormalNoiseEngine primary() { return slots[0]; }
