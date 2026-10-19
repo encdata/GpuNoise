@@ -255,6 +255,7 @@ final class GpuDensityExpressionSmoke {
 
     static void verify() {
         verifyParityRootPruning();
+        verifyTerrainDecisionFallback();
         requireOpcode("EXPR_ADD", 1);
         requireOpcode("EXPR_SUBTRACT", 2);
         requireOpcode("EXPR_MULTIPLY", 3);
@@ -419,6 +420,15 @@ final class GpuDensityExpressionSmoke {
                 (double) (float) 1.00000006, "packed-float constant");
 
         verifyBytecodeFrontend();
+    }
+
+    private static void verifyTerrainDecisionFallback() {
+        if (!GpuTerrainDensityParity.requiresJavaFallback(0.1, -0.1)
+                || !GpuTerrainDensityParity.requiresJavaFallback(0.001, 0.1)
+                || !GpuTerrainDensityParity.requiresJavaFallback(Double.NaN, Double.NaN)
+                || GpuTerrainDensityParity.requiresJavaFallback(0.1, 0.1001)) {
+            throw new AssertionError("terrain parity fallback did not isolate unsafe density decisions");
+        }
     }
 
     private static void verifyParityRootPruning() {

@@ -34,6 +34,14 @@ public final class GpuTerrainDensityParity {
                 && (TARGET_CHUNK_Z == null || TARGET_CHUNK_Z == Math.floorDiv(z, 16));
     }
 
+    /** Keeps traced terrain decisions on the exact Java value when rounding is unsafe. */
+    public static boolean requiresJavaFallback(double cpu, double gpu) {
+        return !Double.isFinite(cpu) || !Double.isFinite(gpu)
+                || ((cpu > 0.0) != (gpu > 0.0))
+                || GpuAquiferSubstance.nearDensityDecisionThreshold(cpu)
+                || GpuAquiferSubstance.nearDensityDecisionThreshold(gpu);
+    }
+
     public static void record(int x, int y, int z, double cpu, double gpu) {
         if (!shouldCompare(x, z)) return;
         SAMPLES.incrementAndGet();

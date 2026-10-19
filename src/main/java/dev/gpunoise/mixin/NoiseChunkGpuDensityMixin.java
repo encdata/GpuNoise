@@ -198,7 +198,8 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
                     GpuTerrainDensityParity.record(context.blockX(), context.blockY(), context.blockZ(),
                             cpuDensity, gpuDensity);
                 }
-                if (GpuAquiferSubstance.nearDensityDecisionThreshold(gpuDensity)) {
+                if (GpuAquiferSubstance.nearDensityDecisionThreshold(gpuDensity)
+                        || traceDensity && GpuTerrainDensityParity.requiresJavaFallback(cpuDensity, gpuDensity)) {
                     GpuTerrainProfiler.recordJavaRootFallback(GpuTerrainRoots.FINAL_DENSITY);
                     return traceDensity ? cpuDensity : vanillaFunction.compute(context) + beardifierValue;
                 }
