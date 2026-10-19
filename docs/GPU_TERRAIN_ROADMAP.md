@@ -38,16 +38,13 @@ parity checks.
 
 ## Passes
 
-### 1. Stable benchmark and correctness gate
+### 1. Dedicated-server correctness gate
 
-- Keep paired CPU and GPU runs on the same Minecraft version, seed, world
-  settings, mod set, Chunky area, and C2ME configuration.
-- Record generated chunks, exact elapsed time, CPS, GPU submissions, consumed
-  caches, CPU fallbacks, and parity results.
-- Separate Mesa correctness runs from hardware performance runs. Lavapipe
-  validates shader behavior and Vulkan plumbing; it is not a GPU speed result.
-- Repeat runs and report medians plus spread so JVM warmup and task order do not
-  decide the result.
+- Start dedicated NeoForge servers with the pinned C2ME and Chunky versions.
+- Check startup, graph parity, GPU cache consumption, CPU fallback behavior,
+  terrain generation completion, crashes, and shutdown.
+- Use Mesa Lavapipe to validate shader compilation and Vulkan behavior. CI does
+  not collect or compare CPS and does not represent physical-GPU performance.
 - Preserve server logs, crash reports, versions, and benchmark configuration
   with each CI artifact.
 
@@ -122,14 +119,13 @@ parity checks.
   `lerpInt` and `lerpDiscrete` preserve their wrapped integer subtraction,
   float multiplication and floor, and positive-delta selection semantics.
   The terrain roots queue's batch window is now configurable from 1–250 ms;
-  CI benchmarks use 50 ms and report both average batch fill and dispatch
-  latency so queue coalescing can be tuned against actual GPU CPS. The run
-  harness verifies the selected window reached the server before accepting
-  any benchmark measurement.
+  CI correctness runs use 50 ms and verify that the selected batch
+  configuration reaches the dedicated server. Batch fill and dispatch latency
+  remain available for local runtime profiling; CI does not collect CPS.
   An opt-in `gpunoise.fastMath` shader variant rounds generic density add,
   subtract, multiply, and divide through FP32 while keeping the default
   FP64 path intact. CI runs the full Vulkan parity fixtures and terrain-grid
-  parity gate on FP32 before including it in the GPU throughput comparison.
+  parity gate on FP32 before enabling it for terrain work.
   `Math.signum(float)` and
   `Math.signum(double)` retain their respective input precision.
   Minecraft's indexed sine table is generated once and uploaded to persistent
@@ -269,16 +265,16 @@ parity checks.
 - Profile shader occupancy, graph register pressure, transfer volume, queue
   latency, and CPU chunk-commit cost on several physical GPU vendors.
 - Tune batch size, dispatch scheduling, memory pools, and shader variants from
-  measured end-to-end chunks per second. Track both median throughput and
-  tail latency; CPU fallbacks and parity failures remain visible in results.
+  dedicated-server profiling on physical GPUs; keep correctness CI independent
+  from speed claims. CPU fallbacks and parity failures remain visible in tests.
 
 ## Current position
 
 The mod currently has a graph evaluator for density and aquifer roots, a cell
-grid path, optional per-block density interpolation, and a new adapter that
-translates custom density functions into supported Minecraft density graphs.
-The GPU still does not choose final solid, air, fluid, or surface block states.
-Those remain the next major terrain-generation passes.
+grid path, GPU final-density interpolation for every block, and an adapter that
+translates supported custom density functions into GPU graphs. The GPU still
+does not choose final solid, air, fluid, or surface block states. Those remain
+the next major terrain-generation passes.
 Aquifer pressure, nearest-three selection, and substance decisions now have
 packed input records, persistent Vulkan pipelines, and differential Mesa smoke
 cases. The nearest-center operation is available through the strict chunk
@@ -287,54 +283,12 @@ kernel is not yet called by `NoiseBasedAquifer.computeSubstance`; CPU fluid
 status preparation, integration of its output, and chunk state writes remain
 ahead.
 
-The first paired C2ME/Chunky CI run completed 289 chunks on each path: CPU
-36.125 CPS and Mesa Lavapipe 26.273 CPS (0.727x CPU), with 319 GPU caches
-consumed and no fallbacks. This is a coarse historical baseline from commit
-`b50cba6`; Chunky reported only whole-second task durations. Later multi-cell
-interpolation checks exposed axis and lattice-order bugs, so this measurement
-does not validate the current shader.
-
-The corrected shader passed the multi-cell Vulkan smoke and two precise paired
-289-chunk runs. The latest measured 49.829 CPU CPS and 39.603 Lavapipe CPS
-(0.795x CPU), with 318 GPU caches consumed and no fallbacks. The prior run
-measured 32.468 CPU CPS and 20.943 Lavapipe CPS (0.645x CPU). This spread shows
-the small area is too noisy for tuning. CI has now completed a 1,089-chunk
-paired run: CPU 34.903 CPS, Lavapipe 22.927 CPS (0.657x CPU), 1,214 caches
-consumed, and no fallbacks. The multi-cell shader smoke passed on the same
-commit. Lavapipe validates Vulkan behavior and overhead; physical-GPU
-performance still needs separate measurements. CI times Chunky's streamed
-task start and finish at sub-second precision.
-
-The first adaptive-capacity run completed 1,089 chunks at 42.533 CPU CPS and
-32.510 Lavapipe CPS (0.764x CPU), with zero fallbacks. Despite raising the
-dispatch ceiling to 100 chunks and bounding it by output-buffer capacity, the
-scheduler averaged only 1.82 chunks per dispatch. Queue arrival timing, rather
-than Vulkan buffer capacity, is currently preventing large batches. A follow-up
-60 ms coalescing window raised the average to 2.72 chunks but measured 22.783
-Lavapipe CPS, so the longer wait was removed. The current pass prefetches each
-aligned 5x5 chunk tile once, then batches those ready grids with a 20 ms window;
-tile bookkeeping is bounded to 4,096 entries.
-
-The first tile-prefetch CI run passed shader smoke and completed the 1,089
-chunk pair at 60.842 CPU CPS and 45.190 Lavapipe CPS (0.743x CPU). It consumed
-1,207 GPU caches with no fallbacks and averaged 15.125 chunks per dispatch,
-compared with 1.82 before prefetch. A repeated run on the aquifer pressure
-kernel commit measured 34.683 CPU CPS and 21.608 Lavapipe CPS (0.623x CPU),
-with 1,202 caches consumed, zero CPU fallbacks, and 14.6875 average chunks per
-dispatch. That run passed the pressure-kernel smoke. Runner variation is
-large, and the standalone kernel is not part of the chunk hot path, so these
-measurements do not establish a performance change from the kernel. Current
-throughput measures density/interpolation under Mesa Lavapipe, not GPU-selected
-block states or physical GPU performance.
-
-The aquifer substance pipeline now follows all three ordered pressure checks
-from the pinned `NoiseBasedAquifer.computeSubstance` implementation: nearest /
+The aquifer substance pipeline follows all three ordered pressure checks from
+the pinned `NoiseBasedAquifer.computeSubstance` implementation: nearest /
 second, nearest / third, then second / third. Mesa smoke exercises each pair,
-pressure ties, global lava, water over lava, and CPU fallback thresholds. The
-1,089 chunk paired run on the same revision measured 34.354 CPU CPS and 21.066
-Lavapipe CPS (0.613x), with 15.078 average chunks per dispatch and no reported
-GPU terrain fallbacks. This remains a standalone kernel; the result does not
-measure aquifer decision integration or final block selection.
+pressure ties, global lava, water over lava, and CPU fallback thresholds. This
+remains a standalone kernel; the result does not validate aquifer decision
+integration or final block selection.
 
 The terrain roots batcher now reuses a bounded pool of direct metadata buffers
 until each asynchronous Vulkan submission completes. This removes per-dispatch
@@ -344,13 +298,10 @@ current experiment targets 96 compatible chunks (within a 100-chunk ceiling)
 and collects for at most 50 ms; the target is reduced to the selected grid's
 actual buffer capacity so impossible batch sizes do not consume the full
 window. It no longer dispatches early after a single 25-chunk prefetch tile.
-This is a measured experiment, not a throughput claim:
-CI must check CPS and chunk tail latency. The Vulkan profile now reports CPU
-preparation/upload/command-recording time, submit-to-fence time, and readback
-time independently, alongside batch-size distribution, batch fill, and
-per-chunk latency. Submit-to-fence includes the asynchronous fence polling
-interval. Lavapipe remains a CPU Vulkan backend and cannot establish
-discrete-GPU speedup.
+This is a runtime scheduling configuration, not a CI performance measurement.
+Dedicated-server profiles can report CPU preparation/upload/command-recording
+time, submit-to-fence time, readback time, batch fill, and per-chunk latency.
+Lavapipe remains a CPU Vulkan backend and cannot establish discrete-GPU speed.
 
 The optional fused chunk scheduler now coalesces requests for at most one
 millisecond, retains incompatible FIFO requests without racing queue producers,

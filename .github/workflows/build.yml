@@ -29,9 +29,8 @@ on:
 permissions:
   contents: read
 
-# The server benchmark is CPU-heavy on Lavapipe. Serialize revisions for the
-# same ref so paired CPS measurements stay comparable without cancelling a run
-# that is already collecting benchmark data.
+# Serialize same-ref dedicated-server checks so concurrent worldgen test
+# servers do not contend for memory, CPU, and Vulkan resources.
 concurrency:
   group: gpunoise-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -84,7 +83,7 @@ jobs:
       - name: Verify single mod artifact
         run: python3 tools/ci/verify_mod_artifact.py build/libs/*-all.jar
 
-      - name: Upload mod before worldgen benchmark
+      - name: Upload mod before dedicated-server checks
         uses: actions/upload-artifact@v4
         with:
           name: gpunoise-mod-${{ github.sha }}
@@ -94,26 +93,26 @@ jobs:
       - name: Verify release jar loads in isolated client
         run: xvfb-run --auto-servernum python3 tools/ci/verify_client_artifact.py
 
-      - name: Download and verify benchmark mods
+      - name: Download and verify worldgen test mods
         run: python3 tools/ci/runserver_benchmark.py --prepare-mods
 
-      - name: Upload benchmark mods
+      - name: Upload worldgen test mods
         uses: actions/upload-artifact@v4
         with:
           name: gpunoise-benchmark-mods-${{ github.sha }}
           path: build/ci-mods/*.jar
           if-no-files-found: error
 
-      - name: Run C2ME Chunky CPU and GPU worldgen benchmark
+      - name: Run dedicated C2ME Chunky worldgen checks
         env:
           GPUNOISE_CHUNKY_RADIUS_BLOCKS: ${{ inputs.chunky_radius_blocks || '250' }}
           GPUNOISE_TERRAIN_BATCH_WINDOW_MS: ${{ inputs.terrain_batch_window_ms || '50' }}
           GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS: ${{ inputs.terrain_batch_target_chunks || '96' }}
           GPUNOISE_TERRAIN_BATCH_REGION_RADIUS: ${{ inputs.terrain_batch_region_radius || '2' }}
-          GPUNOISE_BENCHMARK_FULL_BLOCK_OUTPUT: false
+          GPUNOISE_CI_FULL_BLOCK_OUTPUT: true
         run: python3 tools/ci/runserver_benchmark.py
 
-      - name: Upload benchmark results
+      - name: Upload worldgen test logs
         if: always()
         uses: actions/upload-artifact@v4
         with:

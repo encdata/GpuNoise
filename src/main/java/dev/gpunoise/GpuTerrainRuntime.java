@@ -33,8 +33,9 @@ public final class GpuTerrainRuntime {
     private static volatile GpuDensityGraph terrainGraph;
     /** The exact router used to build and parity-check terrainGraph. */
     private static volatile NoiseRouter terrainRouter;
-    /** Full per-block readback is retained only as an explicit diagnostic fallback. */
-    private static final boolean FULL_BLOCK_OUTPUT = Boolean.getBoolean("gpunoise.fullBlockOutput");
+    /** GPU-interpolated block densities; disable with gpunoise.fullBlockOutput=false. */
+    private static final boolean FULL_BLOCK_OUTPUT = Boolean.parseBoolean(
+            System.getProperty("gpunoise.fullBlockOutput", "true"));
     private static final GpuChunkPipelineGate chunkPipelineGate = new GpuChunkPipelineGate(
             Math.max(16, Runtime.getRuntime().availableProcessors() * 2));
     /** Roots verified against both the compact graph and real cell-grid layout. */

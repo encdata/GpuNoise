@@ -13,7 +13,9 @@ import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 /** GPU cache containing the NoiseChunk cell-boundary grid for one chunk. */
 public final class GpuChunkDensityCache {
     private static final boolean READ_STATS_ENABLED = Boolean.getBoolean("gpunoise.profileTerrain");
-    private static final boolean FULL_BLOCK_OUTPUT = Boolean.getBoolean("gpunoise.fullBlockOutput");
+    private static final boolean FULL_BLOCK_OUTPUT = Boolean.parseBoolean(
+            System.getProperty("gpunoise.fullBlockOutput", "true"));
+    private static final AtomicBoolean BLOCK_INTERPOLATION_PARITY_LOGGED = new AtomicBoolean();
     private static final ConcurrentHashMap<Long, GpuChunkDensityCache> PREFETCHED = new ConcurrentHashMap<>();
     private final int minX, minZ, minY, cellWidth, cellHeight, cellsY, maxRelativeY, gridX, gridZ;
     private final boolean powerOfTwoCells;
@@ -73,9 +75,9 @@ public final class GpuChunkDensityCache {
         this.exact = exact;
         this.supportedRootMask = GpuTerrainRuntime.supportedTerrainRootMask();
         int samples = width * (cellsY + 1) * depth;
-        // Only upload/evaluate the NoiseChunk cell-boundary grid. The CPU
-        // keeps Minecraft's interpolation and block writer, avoiding the
-        // expensive full-block GPU output path.
+        // The GPU evaluates the cell lattice and materializes final-density
+        // values for every block. Minecraft retains aquifer orchestration and
+        // the authoritative chunk writer.
         this.result = exact == null ? GpuTerrainRuntime.submitTerrainGrid(grid) : null;
     }
 
@@ -413,6 +415,9 @@ public final class GpuChunkDensityCache {
                         + (minX + x) + "," + (minY + y) + "," + (minZ + z)
                         + ": GPU=" + actual + ", CPU=" + expected);
             }
+        }
+        if (BLOCK_INTERPOLATION_PARITY_LOGGED.compareAndSet(false, true)) {
+            GpuNoise.LOGGER.info("GPU per-block density interpolation parity verified: 32 samples");
         }
     }
 

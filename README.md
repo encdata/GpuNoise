@@ -56,9 +56,10 @@ remains enabled.
 
 ## Current GPU terrain scope
 
-The current path evaluates the terrain density and aquifer input roots on the
-GPU at Minecraft's cell grid. Minecraft still handles chunk scheduling,
-interpolation, surface rules, carvers, structures, and features. Moving those
+The current path evaluates terrain density and aquifer input roots on the GPU
+at Minecraft's cell grid, then interpolates final density to block resolution
+on the GPU. Minecraft still handles chunk scheduling, aquifer decisions,
+surface rules, carvers, structures, features, and chunk writes. Moving those
 stages to the GPU requires separate semantics-preserving passes; GPU Noise does
 not claim full chunk generation is GPU-only yet.
 
@@ -71,15 +72,15 @@ LWJGL core on clients and adds the bundled LWJGL core plus native resources as
 game libraries on dedicated servers. Both use the version pinned for Minecraft
 1.21.1.
 
-## CI and benchmarks
+## CI correctness checks
 
 GitHub Actions builds and validates the single mod jar, compiles GLSL with
-`glslc`, runs a Vulkan smoke dispatch on Mesa Lavapipe, and starts three fresh
-same-seed pairs of NeoForge dedicated servers with C2ME and Chunky. CPU/GPU
-order alternates between pairs; CI reports each run and the median throughput
-ratio. The Lavapipe result is a correctness and software-overhead check, not a
-discrete-GPU performance claim. Actions uploads the mod jar and the pinned
-C2ME/Chunky jars before either benchmark server starts.
+`glslc`, runs a Vulkan smoke dispatch on Mesa Lavapipe, and starts fresh
+same-seed NeoForge dedicated servers with C2ME and Chunky. It checks server
+startup, terrain graph parity, GPU cache consumption, CPU fallback behavior,
+and clean Chunky completion. CI does not collect or compare CPS; Lavapipe is
+used for correctness checks, not as a speed measurement. Actions uploads the
+mod jar and pinned C2ME/Chunky jars before the worldgen checks start.
 The default Chunky radius is 250 blocks. Manual workflow runs can select the
 radius, batch window, target size, and spatial search radius for controlled
 follow-up measurements.

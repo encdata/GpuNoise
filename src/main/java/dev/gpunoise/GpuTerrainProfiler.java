@@ -1,6 +1,5 @@
 package dev.gpunoise;
 
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -30,8 +29,6 @@ public final class GpuTerrainProfiler {
     private static final LongAdder blockWriteSamples = new LongAdder();
     private static final LongAdder[] gpuRootCalls = createRootFallbackCounters();
     private static final LongAdder[] javaRootFallbackCalls = createRootFallbackCounters();
-    private static final AtomicLong firstFillStartNanos = new AtomicLong();
-    private static final AtomicLong latestFillEndNanos = new AtomicLong();
     private static final AtomicLongArray fillLatencyHistogram = new AtomicLongArray(LATENCY_BUCKETS);
 
     private GpuTerrainProfiler() {}
@@ -41,18 +38,15 @@ public final class GpuTerrainProfiler {
     public static long beginFill() {
         if (!ENABLED) return 0L;
         long start = System.nanoTime();
-        firstFillStartNanos.compareAndSet(0L, start);
         return start;
     }
 
     public static void endFill(long start) {
         if (!ENABLED || start == 0L) return;
-        long end = System.nanoTime();
-        long elapsed = Math.max(0L, end - start);
+        long elapsed = Math.max(0L, System.nanoTime() - start);
         long completed = fills.sum() + 1L;
         fillNanos.add(elapsed);
         fillLatencyHistogram.incrementAndGet(latencyBucket(elapsed));
-        latestFillEndNanos.accumulateAndGet(end, Math::max);
         fills.increment();
         if (completed % REPORT_EVERY_FILLS == 0L) logSnapshot(completed);
     }
@@ -136,11 +130,9 @@ public final class GpuTerrainProfiler {
 
     private static void logSnapshot(long completed) {
         long totalNanos = fillNanos.sum();
-        long wallNanos = Math.max(1L, latestFillEndNanos.get() - firstFillStartNanos.get());
         double averageFillMs = totalNanos / 1_000_000.0 / completed;
-        double fillsPerSecond = completed * 1_000_000_000.0 / wallNanos;
-        GpuNoise.LOGGER.info("GPU terrain profile: fills={}, observedCps={}, avgFillMs={}, p50FillMs={}, p95FillMs={}, p99FillMs={}, finalDensityCalls={} sampled={} avgNs={}, initialDensityCalls={} sampled={} avgNs={}, climateCalls={} sampled={} avgNs={}, aquiferCalls={} sampled={} avgNs={}, blockWrites={} sampled={} avgNs={}",
-                completed, round(fillsPerSecond), round(averageFillMs), percentileMillis(0.50, completed),
+        GpuNoise.LOGGER.info("GPU terrain profile: fills={}, avgFillMs={}, p50FillMs={}, p95FillMs={}, p99FillMs={}, finalDensityCalls={} sampled={} avgNs={}, initialDensityCalls={} sampled={} avgNs={}, climateCalls={} sampled={} avgNs={}, aquiferCalls={} sampled={} avgNs={}, blockWrites={} sampled={} avgNs={}",
+                completed, round(averageFillMs), percentileMillis(0.50, completed),
                 percentileMillis(0.95, completed), percentileMillis(0.99, completed),
                 gpuFinalDensityCalls.sum(), finalDensitySamples.sum(), averageNanos(finalDensityNanos, finalDensitySamples),
                 gpuInitialDensityCalls.sum(), initialDensitySamples.sum(), averageNanos(initialDensityNanos, initialDensitySamples),

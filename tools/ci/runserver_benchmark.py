@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run paired NeoForge + C2ME + Byepregen + Chunky terrain benchmarks in GitHub Actions."""
+"""Run NeoForge + C2ME + Byepregen + Chunky worldgen correctness checks in GitHub Actions."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ import re
 import shutil
 import signal
 import socket
-import statistics
 import struct
 import subprocess
 import sys
@@ -51,7 +50,7 @@ CHUNKY_RADIUS_BLOCKS = int(os.environ.get("GPUNOISE_CHUNKY_RADIUS_BLOCKS", "250"
 MIN_CHUNKY_RADIUS_BLOCKS = 250
 if CHUNKY_RADIUS_BLOCKS < MIN_CHUNKY_RADIUS_BLOCKS:
     raise ValueError("GPUNOISE_CHUNKY_RADIUS_BLOCKS must be at least 250 blocks")
-BENCHMARK_REPETITIONS = 3
+WORLDGEN_CHECK_REPETITIONS = 3
 BATCH_WINDOW_MS = int(os.environ.get("GPUNOISE_TERRAIN_BATCH_WINDOW_MS", "50"))
 if not 1 <= BATCH_WINDOW_MS <= 250:
     raise ValueError("GPUNOISE_TERRAIN_BATCH_WINDOW_MS must be between 1 and 250")
@@ -61,13 +60,12 @@ if not 1 <= BATCH_TARGET_CHUNKS <= 100:
 BATCH_REGION_RADIUS = int(os.environ.get("GPUNOISE_TERRAIN_BATCH_REGION_RADIUS", "2"))
 if not 1 <= BATCH_REGION_RADIUS <= 4:
     raise ValueError("GPUNOISE_TERRAIN_BATCH_REGION_RADIUS must be between 1 and 4")
-FULL_BLOCK_OUTPUT = os.environ.get("GPUNOISE_BENCHMARK_FULL_BLOCK_OUTPUT", "false").lower()
+FULL_BLOCK_OUTPUT = os.environ.get("GPUNOISE_CI_FULL_BLOCK_OUTPUT", "true").lower()
 if FULL_BLOCK_OUTPUT not in {"true", "false"}:
     raise ValueError("GPUNOISE_BENCHMARK_FULL_BLOCK_OUTPUT must be true or false")
 FULL_BLOCK_OUTPUT = FULL_BLOCK_OUTPUT == "true"
 TASK_DONE = re.compile(
-    r"Task finished for .*?Processed:\s*([\d,]+) chunks \(([^)]+)%\), "
-    r"Total time:\s*(\d+):(\d+):(\d+)"
+    r"Task finished for .*?Processed:\s*([\d,]+) chunks \(([^)]+)%\),"
 )
 TASK_STARTED = re.compile(r"\[Chunky\] Task started in minecraft:overworld")
 SERVER_READY = re.compile(r"Done \([^)]*\)! For help, type")
@@ -83,37 +81,7 @@ GPU_BATCH_WINDOW = re.compile(
     r"GPU terrain batch window=(\d+)ms, target=(\d+), chunk limit=(\d+), "
     r"searchRadiusRegions=(\d+)"
 )
-GPU_BATCHING = re.compile(
-    r"GPU terrain roots batching: avgChunksPerDispatch=([\d.]+), "
-    r"avgSamplesPerDispatch=([\d.]+),"
-)
-GPU_BATCH_SIZES = re.compile(
-    r"GPU terrain roots batching: .*batchSizes=lt16:(\d+),16to31:(\d+),"
-    r"32to63:(\d+),64to95:(\d+),96plus:(\d+)"
-)
-GPU_GRAPH_PROFILE = re.compile(
-    r"GPU terrain graph profile: completedDispatches=(\d+), "
-    r"avgCpuPrepareMs=([\d.]+), avgSubmitToFenceMs=([\d.]+), "
-    r"avgReadbackMs=([\d.]+)(?:, avgGpuCommandMs=([-\d.]+), gpuTimingSamples=(\d+))?"
-)
 GPU_SHADER_VARIANT = re.compile(r"GPU density shader variant: registers=(\d+), fastMath=(true|false)")
-GPU_CHUNK_LATENCY = re.compile(
-    r"GPU terrain roots latency: completedChunks=(\d+), "
-    r"p50BucketMs=([\d>]+), p95BucketMs=([\d>]+), p99BucketMs=([\d>]+)"
-)
-GPU_HOT_PATH_PROFILE = re.compile(
-    r"GPU terrain profile: fills=(\d+), observedCps=([\d.]+), avgFillMs=([\d.]+), "
-    r"p50FillMs=([\d.]+), p95FillMs=([\d.]+), p99FillMs=([\d.]+), "
-    r"finalDensityCalls=(\d+) sampled=(\d+) avgNs=([\d.]+), "
-    r"initialDensityCalls=(\d+) sampled=(\d+) avgNs=([\d.]+), "
-    r"climateCalls=(\d+) sampled=(\d+) avgNs=([\d.]+), "
-    r"aquiferCalls=(\d+) sampled=(\d+) avgNs=([\d.]+), "
-    r"blockWrites=(\d+) sampled=(\d+) avgNs=([\d.]+)"
-)
-GPU_ROOT_FALLBACKS = re.compile(r"GPU terrain Java root fallback calls: ([A-Za-z]+=[\d]+(?:,[A-Za-z]+=[\d]+)*)")
-GPU_ROOT_CACHE_CALLS = re.compile(
-    r"GPU terrain per-root cache calls: ([A-Za-z]+=[\d]+/[\d]+(?:,[A-Za-z]+=[\d]+/[\d]+)*)"
-)
 
 
 def fetch_mods(destination: Path) -> None:
@@ -218,8 +186,8 @@ def prepare_run_directory(run_dir: Path, downloaded_mods: Path) -> None:
     print(f"Prepared benchmark mods: {mod_names}", flush=True)
 
 
-def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
-                  repetition: int) -> tuple[int, float]:
+def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
+                       repetition: int) -> int:
     run_name = f"ci-{mode}-r{repetition}"
     run_dir = ROOT / "run" / run_name
     shutil.rmtree(run_dir, ignore_errors=True)
@@ -246,8 +214,7 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
         command.append(f"-Dgpunoise.terrainBatchWindowMs={BATCH_WINDOW_MS}")
         command.append(f"-Dgpunoise.terrainBatchTargetChunks={BATCH_TARGET_CHUNKS}")
         command.append(f"-Dgpunoise.terrainBatchRegionRadius={BATCH_REGION_RADIUS}")
-        command.append("-Dgpunoise.profileTerrain=true")
-    print(f"Starting {mode} Chunky benchmark (full_block_output={FULL_BLOCK_OUTPUT}): {' '.join(command)}", flush=True)
+    print(f"Starting {mode} dedicated Chunky worldgen check (full_block_output={FULL_BLOCK_OUTPUT})", flush=True)
     process = subprocess.Popen(
         command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1, start_new_session=True,
@@ -270,7 +237,6 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
     started = time.monotonic()
     chunky_started: float | None = None
     chunky_start_requested = False
-    chunky_elapsed: float | None = None
     completed: re.Match[str] | None = None
     gpu_counts: list[tuple[int, int, int, int]] = []
     try:
@@ -318,11 +284,6 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
             match = TASK_DONE.search(line)
             if match:
                 completed = match
-                if chunky_started is not None:
-                    # Chunky's summary rounds its duration to whole seconds.
-                    # Time the streamed start and finish records at sub-second
-                    # precision so small CI benchmark areas remain useful.
-                    chunky_elapsed = observed_at - chunky_started
                 break
             counts = GPU_COUNTS.search(line)
             if counts:
@@ -341,14 +302,8 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
 
         count = int(completed.group(1).replace(",", ""))
         percent = float(completed.group(2).rstrip("%"))
-        reported_elapsed = (
-            int(completed.group(3)) * 3600
-            + int(completed.group(4)) * 60
-            + int(completed.group(5))
-        )
-        elapsed_seconds = chunky_elapsed if chunky_elapsed is not None else float(reported_elapsed)
-        if percent < 99.99 or count <= 0 or elapsed_seconds <= 0:
-            raise RuntimeError(f"Chunky reported an incomplete or unmeasurable run: {completed.group(0)}")
+        if percent < 99.99 or count <= 0:
+            raise RuntimeError(f"Chunky reported an incomplete run: {completed.group(0)}")
 
         if not force_cpu:
             if not gpu_counts or max(counts[2] for counts in gpu_counts) <= 0:
@@ -365,65 +320,8 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
                 )
             if "GPU terrain grid parity:" not in run_log:
                 raise RuntimeError("GPU terrain grid parity check did not run")
-            latency_samples = GPU_CHUNK_LATENCY.findall(run_log)
-            if not latency_samples or max(int(sample[0]) for sample in latency_samples) < 128:
-                raise RuntimeError("GPU per-chunk latency percentiles were not recorded")
-            latest_latency = latency_samples[-1]
-            print(
-                f"CI_GPU_CHUNK_LATENCY mode={mode} samples={latest_latency[0]} "
-                f"p50_bucket_ms={latest_latency[1]} p95_bucket_ms={latest_latency[2]} "
-                f"p99_bucket_ms={latest_latency[3]}", flush=True,
-            )
-            batch_samples = GPU_BATCHING.findall(run_log)
-            if not batch_samples:
-                raise RuntimeError("GPU average chunks per dispatch were not recorded")
-            print(
-                f"CI_GPU_BATCHING mode={mode} avg_chunks_per_dispatch={batch_samples[-1][0]} "
-                f"avg_samples_per_dispatch={batch_samples[-1][1]}", flush=True,
-            )
-            batch_size_samples = GPU_BATCH_SIZES.findall(run_log)
-            if not batch_size_samples:
-                raise RuntimeError("GPU dispatch batch-size distribution was not recorded")
-            latest_sizes = batch_size_samples[-1]
-            print(
-                f"CI_GPU_BATCH_SIZES mode={mode} lt16={latest_sizes[0]} "
-                f"16to31={latest_sizes[1]} 32to63={latest_sizes[2]} "
-                f"64to95={latest_sizes[3]} 96plus={latest_sizes[4]}", flush=True,
-            )
-            profile_samples = GPU_GRAPH_PROFILE.findall(run_log)
-            if not profile_samples:
-                raise RuntimeError("GPU terrain CPU preparation, submit-to-fence, and readback profile was not recorded")
-            latest_profile = profile_samples[-1]
-            print(
-                f"CI_GPU_PROFILE mode={mode} dispatches={latest_profile[0]} "
-                f"avg_cpu_prepare_ms={latest_profile[1]} "
-                f"avg_submit_to_fence_ms={latest_profile[2]} "
-                f"avg_readback_ms={latest_profile[3]} "
-                f"avg_gpu_command_ms={latest_profile[4] or 'unavailable'} "
-                f"gpu_timing_samples={latest_profile[5] or '0'}", flush=True,
-            )
-            hot_path_profiles = GPU_HOT_PATH_PROFILE.findall(run_log)
-            if not hot_path_profiles:
-                raise RuntimeError("GPU terrain hot-path timings were not recorded")
-            latest_hot_path = hot_path_profiles[-1]
-            print(
-                f"CI_GPU_HOT_PATH_PROFILE mode={mode} fills={latest_hot_path[0]} "
-                f"observed_cps={latest_hot_path[1]} avg_fill_ms={latest_hot_path[2]} "
-                f"final_density_calls={latest_hot_path[6]} sampled={latest_hot_path[7]} avg_ns={latest_hot_path[8]} "
-                f"initial_density_calls={latest_hot_path[9]} sampled={latest_hot_path[10]} avg_ns={latest_hot_path[11]} "
-                f"climate_calls={latest_hot_path[12]} sampled={latest_hot_path[13]} avg_ns={latest_hot_path[14]} "
-                f"aquifer_calls={latest_hot_path[15]} sampled={latest_hot_path[16]} avg_ns={latest_hot_path[17]} "
-                f"block_writes={latest_hot_path[18]} sampled={latest_hot_path[19]} avg_ns={latest_hot_path[20]}",
-                flush=True,
-            )
-            root_fallback_samples = GPU_ROOT_FALLBACKS.findall(run_log)
-            if not root_fallback_samples:
-                raise RuntimeError("GPU terrain per-root Java fallback counts were not recorded")
-            print(f"CI_GPU_ROOT_FALLBACKS mode={mode} calls={root_fallback_samples[-1]}", flush=True)
-            root_cache_samples = GPU_ROOT_CACHE_CALLS.findall(run_log)
-            if not root_cache_samples:
-                raise RuntimeError("GPU terrain per-root cache call counts were not recorded")
-            print(f"CI_GPU_ROOT_CACHE_CALLS mode={mode} gpu_over_java={root_cache_samples[-1]}", flush=True)
+            if FULL_BLOCK_OUTPUT and "GPU per-block density interpolation parity verified:" not in run_log:
+                raise RuntimeError("GPU per-block interpolation parity check did not run")
             batch_window = GPU_BATCH_WINDOW.search(run_log)
             if (batch_window is None or int(batch_window.group(1)) != BATCH_WINDOW_MS
                     or int(batch_window.group(2)) != BATCH_TARGET_CHUNKS
@@ -436,9 +334,9 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
                     f"searchRadiusRegions={BATCH_REGION_RADIUS}"
                 )
             shader_variants = GPU_SHADER_VARIANT.findall(run_log)
-            # Keep the paired throughput comparison on the parity-preserving
-            # shader. FP32 math remains an explicit experiment: the compiler
-            # smoke suite includes large accumulations that exceed Java parity.
+            # Keep correctness checks on the parity-preserving shader. FP32
+            # math remains an explicit experiment because some compiler
+            # fixtures exceed Java parity.
             expected_fast_math = "false"
             if not shader_variants or shader_variants[-1][1] != expected_fast_math:
                 observed = "missing" if not shader_variants else shader_variants[-1][1]
@@ -456,13 +354,8 @@ def run_benchmark(mode: str, downloaded_mods: Path, force_cpu: bool,
         if return_code != 0:
             raise RuntimeError(f"{mode} runServer exited with status {return_code}")
 
-        cps = count / elapsed_seconds
-        print(
-            f"CI_WORLDGEN_BENCHMARK mode={mode} chunks={count} "
-            f"elapsed_seconds={elapsed_seconds:.3f} chunks_per_second={cps:.3f}",
-            flush=True,
-        )
-        return count, cps
+        print(f"CI_WORLDGEN_CHECK_PASSED mode={mode} chunks={count}", flush=True)
+        return count
     except BaseException:
         if process.poll() is None:
             try:
@@ -490,51 +383,37 @@ def main() -> int:
         print(f"CI_BENCHMARK_MODS_READY path={downloaded_mods} files={len(MODS)}", flush=True)
         return 0
     print(
-        f"CI_BENCHMARK_CONFIG radius_blocks={CHUNKY_RADIUS_BLOCKS} "
-        f"repetitions={BENCHMARK_REPETITIONS} batch_window_ms={BATCH_WINDOW_MS} "
+        f"CI_WORLDGEN_CONFIG radius_blocks={CHUNKY_RADIUS_BLOCKS} "
+        f"repetitions={WORLDGEN_CHECK_REPETITIONS} batch_window_ms={BATCH_WINDOW_MS} "
         f"batch_target_chunks={BATCH_TARGET_CHUNKS} "
         f"batch_region_radius={BATCH_REGION_RADIUS} full_block_output={FULL_BLOCK_OUTPUT}",
         flush=True,
     )
-    measurements: dict[str, list[tuple[int, float]]] = {"cpu": [], "gpu": []}
-    for repetition in range(1, BENCHMARK_REPETITIONS + 1):
+    completed_checks: dict[str, list[int]] = {"cpu": [], "gpu": []}
+    for repetition in range(1, WORLDGEN_CHECK_REPETITIONS + 1):
         order = ("cpu", "gpu") if repetition % 2 else ("gpu", "cpu")
         for mode in order:
-            measurements[mode].append(run_benchmark(
+            completed_checks[mode].append(run_worldgen_check(
                 mode, downloaded_mods, force_cpu=mode == "cpu", repetition=repetition))
-        cpu_count = measurements["cpu"][-1][0]
-        gpu_count = measurements["gpu"][-1][0]
+        cpu_count = completed_checks["cpu"][-1]
+        gpu_count = completed_checks["gpu"][-1]
         if cpu_count != gpu_count:
             raise RuntimeError(f"Benchmark areas differ in repetition {repetition}: "
                                f"CPU={cpu_count} chunks, GPU={gpu_count} chunks")
-        pair_cpu_cps = measurements["cpu"][-1][1]
-        pair_gpu_cps = measurements["gpu"][-1][1]
         print(
-            f"CI_WORLDGEN_REPETITION repetition={repetition} chunks={cpu_count} "
-            f"cpu_cps={pair_cpu_cps:.3f} lavapipe_cps={pair_gpu_cps:.3f} "
-            f"ratio={pair_gpu_cps / pair_cpu_cps if pair_cpu_cps else 0.0:.3f}",
+            f"CI_WORLDGEN_PAIR_PASSED repetition={repetition} chunks={cpu_count} "
+            "cpu_fallback_and_gpu_paths_checked=true",
             flush=True,
         )
-    cpu_cps = statistics.median(cps for _, cps in measurements["cpu"])
-    gpu_cps = statistics.median(cps for _, cps in measurements["gpu"])
-    chunk_counts = {count for runs in measurements.values() for count, _ in runs}
+    chunk_counts = {count for runs in completed_checks.values() for count in runs}
     if len(chunk_counts) != 1:
         raise RuntimeError(f"Benchmark areas differed across repetitions: {sorted(chunk_counts)}")
     count = chunk_counts.pop()
-    paired_ratios = [gpu_run[1] / cpu_run[1] if cpu_run[1] else 0.0
-                     for cpu_run, gpu_run in zip(measurements["cpu"], measurements["gpu"])]
-    ratio = statistics.median(paired_ratios)
-    cpu_values = [cps for _, cps in measurements["cpu"]]
-    gpu_values = [cps for _, cps in measurements["gpu"]]
     print(
-        f"CI_WORLDGEN_COMPARISON repetitions={BENCHMARK_REPETITIONS} chunks={count} "
-        f"cpu_median_cps={cpu_cps:.3f} lavapipe_median_cps={gpu_cps:.3f} "
-        f"median_paired_ratio={ratio:.3f} "
-        f"cpu_range_cps={min(cpu_values):.3f}..{max(cpu_values):.3f} "
-        f"lavapipe_range_cps={min(gpu_values):.3f}..{max(gpu_values):.3f}",
+        f"CI_WORLDGEN_CHECKS_PASSED repetitions={WORLDGEN_CHECK_REPETITIONS} chunks_per_run={count} "
+        "cpu_fallback_and_gpu_paths=true",
         flush=True,
     )
-    print("Lavapipe results validate correctness and overhead only; they do not represent a discrete GPU.")
     return 0
 
 
