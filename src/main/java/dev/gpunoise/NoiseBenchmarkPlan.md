@@ -1,26 +1,17 @@
-# GPU terrain execution and performance roadmap
+# GPU terrain execution roadmap
 
 ## Objective and measurement rules
 
-Move supported Minecraft and modded terrain density computation from Java to
-Vulkan, preserve the source Java result within the defined parity tolerance,
-and make the supported terrain workloads faster than the CPU path. The longer
-term throughput target is 1,000 generated chunks per second on suitable
-hardware. Treat that as a hardware- and modpack-specific goal, not a result
-that can be inferred from shader microbenchmarks.
+Move supported Minecraft and modded terrain generation from Java to Vulkan in
+complete, parity-checked stages. Preserve source Java behavior and keep
+unsupported graphs on the vanilla path. Speed matters, but it must come from
+measured improvements on actual Vulkan hardware and must not weaken parity.
 
-Use Mesa Lavapipe in GitHub Actions for shader compilation, Vulkan execution,
-parity, lifecycle, and regression coverage. Lavapipe executes on the CPU; its
-throughput measures correctness and software-driver overhead, not discrete-GPU
-performance. Prove the GPU speed target on physical Vulkan devices separately.
-
-Every throughput comparison must use fresh world directories, identical
-Minecraft/mod versions, world seed, Chunky radius, C2ME settings, warmup policy,
-and machine load. Run CPU and GPU modes in alternating order, report each
-repetition plus median and range, and keep graph parity and fallback counts
-beside CPS. A faster CPS number is invalid if it used CPU fallback or generated
-different terrain. Include queue wait, batch occupancy, submit-to-completion,
-and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
+Use GitHub Actions with Mesa Lavapipe only for build, shader compilation,
+Vulkan correctness, parity, lifecycle, and runtime regression coverage. CI must
+not calculate, collect, or claim chunks-per-second or other throughput
+benchmarks. Lavapipe is a CPU software driver; its results do not predict real
+GPU speed. Any speed evaluation belongs on real Vulkan hardware outside CI.
 
 ## Current implementation
 
@@ -42,18 +33,8 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   registers. Vulkan evaluates the terrain router roots on the cell lattice.
   Java still owns interpolation, aquifer orchestration, biome selection, and
   chunk writing; full block output remains a diagnostic option.
-- Terrain dispatch profiling now reports GPU timestamp-query command duration
-  separately from CPU preparation, submit-to-fence wall time, and readback.
-  Devices with no timestamp-capable compute queue report the GPU duration as
-  unavailable rather than treating host polling time as shader execution.
-- Optional terrain profiling now times successful cache lookups for final and
-  initial density, climate roots, aquifer roots, and direct section writes.
-  Each report includes call totals and average nanoseconds, alongside whole
-  fill latency percentiles, to show whether hot-path lookup and write overhead
-  offsets the GPU's grid-evaluation work.
-- Hot-path nanosecond timing is sampled once per 64 lookups per worker thread;
-  successful operations are still counted on every call. Sampling prevents
-  diagnostic timing overhead from being added to every density evaluation.
+- Optional terrain profiling is available for separate real-hardware
+  investigation; GitHub Actions does not enable or use it as a speed gate.
 - Bytecode translation now permits dynamic forward conditionals and switches
   inside statically bounded loops. The current structured interpreter unrolls
   those loops and expresses each branch as select nodes; its existing bytecode
@@ -70,103 +51,30 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   and distance-sorted once, then reused for candidate selection and dispatch;
   this removes per-neighbor `BatchKey` construction and per-dispatch region-list
   allocation/sorting. A worker-owned pending counter also replaces repeated
-  full queue-count scans while the coalescing window is open. The paired
-  benchmark must measure occupancy and queue latency before treating this as a
-  throughput gain. Equally occupied candidate batches now prefer the one with
+  full queue-count scans while the coalescing window is open. Equally occupied
+  candidate batches now prefer the one with
   the oldest queued chunk, so Java map iteration order cannot arbitrarily pick
   which spatial region gets serviced first; a stable layout/region order breaks
   any remaining ties for reproducible scheduling.
-- The C2ME + Chunky CI scenario is configured for a 250-block radius in three
-  paired repetitions. It checks Vulkan smoke/parity and captures dispatch and
-  chunk latency metrics. The paired CPS benchmark uses the production cell-grid
-  output mode by default. Full-block GPU materialization can be selected with
-  `GPUNOISE_BENCHMARK_FULL_BLOCK_OUTPUT=true` for diagnostic runs, but its
-  additional output transfer must not be mixed into production throughput
-  comparisons. Manual Actions runs can vary the radius, batch window, target,
-  and spatial search radius while keeping push and pull-request defaults fixed.
-  CI builds and tests use Mesa Lavapipe.
-- Two completed CI runs isolate the batch target change at the same 50 ms
-  collection window. Target 32 measured median CPU 43.915 CPS and Lavapipe
-  30.336 CPS (paired ratio 0.691), with 14.93 chunks per dispatch. Target 64
-  measured median CPU 56.438 CPS and Lavapipe 40.488 CPS (paired ratio
-  0.715), with 16.50 chunks per dispatch. Runner throughput varied, so paired
-  ratios are the more useful comparison: occupancy and relative throughput
-  improved modestly. Both runs still had p95 chunk latency in the 2.5-second
-  histogram bucket. The 64-target run had p50 in the 1-second bucket. These
-  results do not meet the throughput or tail-latency goals, and Lavapipe is not
-  a discrete-GPU performance measurement. Those runs forced diagnostic
-  full-block output, so they are useful for comparing the scheduler but are
-  not the production cell-grid throughput baseline.
-- The subsequent complete-tile early-dispatch and spatial/layout queue
-  partition changes also completed a paired diagnostic run: median CPU
-  throughput was 41.724 CPS and Lavapipe was 30.508 CPS (paired ratio 0.733).
-  The three repetitions averaged 14.39, 14.93, and 15.22 chunks per dispatch;
-  p95 remained in the 2.5-second bucket, and queue wait was about 35-39 ms per
-  chunk. These results used full-block diagnostic output. They show that the
-  early-tile and layout partition changes did not yet fill 64-chunk batches or
-  remove the latency tail.
-- The first corrected production cell-grid run (commit `18a30d5`, radius 256
-  blocks, target 64) completed 1,089 chunks per repetition at median CPU 33.509
-  CPS and Lavapipe 21.780 CPS (paired ratio 0.642). Dispatches averaged
-  14.39-14.65 chunks. Chunk latency buckets were p50 2.5 seconds, p95 5
-  seconds, and p99 5 seconds. GPU cache use and zero CPU fallback gates passed.
-  At that point the scheduler still dispatched a single prefetched tile early;
-  a follow-up removed the early dispatch and raised the target to 96, measured
-  below. New CI runs use a 1,600-block radius (100 chunks per direction) to
-  measure sustained pregen, with a one-hour Chunky timeout.
-- The 96-target/no-early-tile production run (commit `f2e980a`, radius 256
-  blocks) completed at median CPU 44.632 CPS and Lavapipe 31.941 CPS (paired
-  ratio 0.718). Average dispatch fill was 18.23-19.60 chunks, still far below
-  the target. CPU preparation took 0.29-0.49 ms per dispatch, while
-  submit-to-fence took 269-289 ms and result readback 1.06-1.87 ms. The fence
-  interval includes up to 1 ms of polling and cannot be interpreted as pure
-  shader execution time. Chunk latency buckets improved to p50 1 second and
-  p95/p99 2.5 seconds, but remain too high for the no-stutter target. This
-  points the next pass toward dispatch occupancy and the compute/device path,
-  rather than CPU-side buffer preparation. The next scheduler pass searches a
-  50x50 chunk region (radius two 10x10 buckets) for compatible queued chunks,
-  keeping the 50 ms deadline and 96-chunk target unchanged. This addresses the
-  measured ~44 ms enqueue wait with only 18-20 chunks per dispatch: the queue
-  had time to collect, but the previous 30x30 search region could not find
-  enough nearby work.
-- The capacity-aware batch pass (commit `8f3fa5c`, still at a 256-block radius
-  and the 30x30 search region) built and completed all CI gates. It measured
-  median CPU 33.404 CPS and Lavapipe 23.222 CPS (ratio 0.681), with 15.84-17.62
-  chunks per dispatch and 371-395 ms average submit-to-fence. Its p50 chunk
-  latency was 2.5 seconds and p95/p99 reached 5 seconds. This runner result is
-  slower than the earlier 96-target run; the capacity check did not increase
-  occupancy, and runner variation prevents attributing the CPS change to that
-  code. The larger region search is the next isolated scheduling change.
-- Five subsequent successful 100-chunk-radius Actions runs each generated
-  40,401 chunks per CPU/GPU pair over three repetitions. Across the radius-one
-  and radius-two scheduler revisions, CPU medians ranged from 41.923 to 45.615
-  CPS and Lavapipe medians ranged from 28.611 to 32.059 CPS (paired ratios
-  0.656-0.747). The radius-two run on `f0ef1c7` measured 44.617 CPU CPS and
-  29.735 Lavapipe CPS (0.666 ratio); the later capacity-aware run on `7fa38d6`
-  measured 43.876 and 31.983 CPS (0.727). The bytecode compiler run on
-  `2ce1da2` measured 45.272 and 29.896 CPS (0.661). All used Mesa/Lavapipe,
-  so these numbers establish long-run software-Vulkan correctness and relative
-  overhead only; they do not establish physical-GPU throughput. The measured
-  CPU preparation remained around 0.42-0.54 ms per dispatch while
-  submit-to-fence spanned roughly 315-372 ms, with 1.5-1.9 ms readback.
-  Fence time includes the polling interval and Lavapipe software execution.
-  Batch occupancy and p95/p99 latency still need to improve, and the next
-  benchmark should run the same revision on actual GPU hardware.
+- The C2ME + Chunky Actions scenario is a worldgen correctness test. It checks
+  startup, shader execution, selected terrain profile loading, GPU cache use,
+  CPU fallback policy, parity, and generated-world equality. Chunk counts only
+  establish test completion; CI does not derive or report throughput. The
+  production cell-grid path is the default; full-block output is a separate
+  correctness diagnostic. Mesa Lavapipe is the required software Vulkan test
+  device.
 
 ## Latest runtime evidence and implementation state
 
-- A real modpack log from an RTX 3050 Laptop showed Chunksmith rates around
-  25-40 CPS while generating a 32,768-block radius with C2ME, Voxy, and many
-  terrain and content mods. It is not a controlled CPU/GPU comparison. The
-  compact terrain graph had one root at max error 0.005861 against the 0.005
+- A real modpack log from an RTX 3050 Laptop showed that the compact terrain
+  graph had one root at max error 0.005861 against the 0.005
   tolerance, causing the previous global parity boolean to disable all terrain
   roots. The grid check also failed globally at 0.004871 due to that earlier
   result. Runtime validation now keeps a bitmask of roots that pass compact and
   grid parity independently; failed roots stay on Java while verified roots
   may use the GPU. The old log therefore records CPU-owned terrain despite
-  graph installation and warmup messages. Its separate one-shot 65,536-sample
-  x100 noise microbenchmark was 23.68 ms CPU versus 123.65 ms GPU including
-  setup and dispatch, and must not be read as full-terrain throughput.
+  graph installation and warmup messages. That run is useful parity evidence,
+  not a controlled speed comparison.
 - The latest Vulkan Actions run built successfully but its smoke failed on a
   signed integer remainder (`x=-7`: Java expected -7.5, Vulkan returned 9.5).
   This isolated the bug to negative integer remainder in the GLSL path, before
@@ -191,12 +99,12 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
   and pass that result into initial-density, climate, aquifer, and general
   interpolation instead of re-reading the volatile cache field. They also
   skip repeated block-output checks unless diagnostic full-block mode is
-  enabled. The next paired run must quantify this hot-path change after
-  Vulkan parity is restored.
+  enabled. These changes reduce avoidable Java work without changing density
+  values or transferring chunk writes to the GPU.
 - Terrain profiling now reports Java fallback evaluations per router root in
   addition to whole-chunk fallback counts. This distinguishes intentional
   root-level CPU fallback in mixed modded graphs from GPU cache failures and
-  makes partial GPU coverage visible in Actions benchmark artifacts. It also
+  makes partial GPU coverage visible in Actions correctness artifacts. It also
   reports successful GPU cache lookups per root as `gpu/java` counts, so a
   fallback count has a useful per-root denominator. Root labels are shared
   with parity and unsupported-root logs through `GpuTerrainRoots`, avoiding a
@@ -204,20 +112,15 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
 
 ## Work passes
 
-### Pass 1: establish a reliable terrain baseline
+### Pass 1: establish reliable terrain correctness coverage
 
-1. Keep the paired CPU/GPU C2ME + Chunky workload deterministic and large
-   enough to expose steady-state throughput, startup cost, and tail latency.
-   Measure the normal production cell-grid mode; run full-block output as a
-   separate diagnostic because it changes GPU readback volume.
-2. Record the active batch window and target in each log and benchmark result.
+1. Keep CPU-reference and GPU worldgen fixtures deterministic with matching
+   seeds, mods, and generation settings. Exercise production cell-grid mode;
+   run full-block output as a separate parity diagnostic.
+2. Record the active batch policy in correctness logs to make failures
+   reproducible.
 3. Require GPU cache consumption, zero unexpected CPU fallback, graph/grid
    parity, and shader parity-preserving math for accepted comparisons.
-4. Report dispatch occupancy, input samples per dispatch, queue wait,
-   submit-to-completion, and latency percentiles with every CPS result.
-5. Run an explicit batch-target sweep (for example 16, 32, 64) on the same
-   runner and workload before choosing defaults. Use the smallest wait that
-   keeps the best sustained throughput without worsening p95/p99 materially.
 
 ### Pass 2: remove avoidable queue and dispatch cost
 
@@ -233,9 +136,8 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
 4. Avoid allocating and sorting spatial candidates on each arrival. Keep
    candidate selection bounded by the local neighborhood and make it aware of
    grid layout.
-5. Compare measured occupancy and latency before increasing target sizes.
-   Larger batches amortize transfers and submissions, but they can increase
-   fill delay, memory use, readback size, and GPU watchdog risk.
+5. Evaluate scheduler policy changes on actual Vulkan hardware; Lavapipe is
+   only a correctness gate and cannot select speed-oriented defaults.
 
 ### Pass 3: make the Java-to-GPU compiler useful to terrain mods
 
@@ -307,33 +209,27 @@ and p50/p95/p99 chunk latency so batching gains cannot hide stutter.
 4. Retain Minecraft's chunk writer unless the project scope explicitly changes;
    GPU density work must not mutate chunk state from an unsafe thread.
 
-### Pass 7: prove the throughput target
+### Pass 7: validate speed outside CI
 
-1. Keep Lavapipe as the required correctness/build gate.
-2. Add optional GPU-runner benchmarks for representative discrete and
-   integrated Vulkan devices. Label results with exact device, driver, graph
-   fingerprint, mod list, and power mode.
-3. Require repeated paired CPU/GPU results above 1,000 CPS for a named workload
-   and hardware profile before claiming that target. Also require the GPU path
-   to beat its CPU baseline and meet a stated p95/p99 latency budget.
-4. If one device or mod graph is slower, use profiling and a measured policy
-   to choose Java or Vulkan per graph/device; do not claim universal speedup.
+1. Keep GitHub Actions and Lavapipe limited to build, shader, parity, and
+   runtime correctness gates. Do not collect throughput metrics in CI.
+2. Evaluate speed only outside CI on actual Vulkan devices. Record the exact
+   device, driver, graph fingerprint, mod list, and power profile.
+3. If a device or mod graph is slower, use the real-device profile to improve
+   the implementation or choose Java for that graph/device; do not infer
+   physical-GPU performance from Lavapipe.
 
 ## Immediate next actions
 
-1. Read the corrected production cell-grid benchmark and fullest-cluster
-   candidate-selection results from GitHub Actions.
-2. Compare production-mode paired ratios, chunks per dispatch, queue wait,
-   submit-to-completion, and p95/p99. Keep full-block diagnostic results
-   separate from production-mode results.
-3. If occupancy remains near 16 chunks, improve cross-request coalescing before
-   increasing the target again. If the wait/latency tail worsens, lower the
-   target or shorten the adaptive fill window.
-4. Enforce zero CPU fallback in the GPU benchmark so a partial CPU result
-   cannot inflate the reported throughput.
-5. After the scheduler result is stable, profile the graph interpreter versus
-   shader execution and choose the next shader specialization experiment.
+1. Resolve the saved-world terrain mismatch using the targeted final-density
+   trace and preserve exact Java fallback where the GPU path differs.
+2. Expand terrain-mod fixtures so bytecode translation and registered adapters
+   are both validated through graph lowering, interpolation, and aquifer use.
+3. Continue reducing CPU work and transfer volume in fused GPU stages without
+   relying on Lavapipe timing to choose performance parameters.
+4. Keep CI assertions focused on shader execution, parity, fallback policy,
+   lifecycle, and generated-world correctness.
 
 The overall goal is intentionally ongoing. A green Lavapipe run proves the
 tested paths compile and execute; it does not prove support for arbitrary Java
-terrain code, faster-than-CPU generation on discrete GPUs, or 1,000 CPS.
+terrain code or faster-than-CPU generation on discrete GPUs.
