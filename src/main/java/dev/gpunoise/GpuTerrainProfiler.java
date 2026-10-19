@@ -19,6 +19,11 @@ public final class GpuTerrainProfiler {
     private static final LongAdder aquiferDecisionBuildCalls = new LongAdder();
     private static final LongAdder aquiferDecisionBuildNanos = new LongAdder();
     private static final LongAdder aquiferDecisionBuildSamples = new LongAdder();
+    private static final LongAdder aquiferStatusPrefillCalls = new LongAdder();
+    private static final LongAdder aquiferStatusPrefillNanos = new LongAdder();
+    private static final LongAdder aquiferStatusPrefillSamples = new LongAdder();
+    private static final LongAdder aquiferStatusPrefillCenters = new LongAdder();
+    private static final LongAdder aquiferStatusPrefillJavaFallbacks = new LongAdder();
     private static final LongAdder blockWrites = new LongAdder();
     private static final LongAdder finalDensityNanos = new LongAdder();
     private static final LongAdder initialDensityNanos = new LongAdder();
@@ -120,6 +125,18 @@ public final class GpuTerrainProfiler {
         }
     }
 
+    /** Records the C2ME-style batched status kernel and its conservative Java fallbacks. */
+    public static void recordAquiferStatusPrefill(long start, int centers, int javaFallbacks) {
+        if (!ENABLED) return;
+        aquiferStatusPrefillCalls.increment();
+        aquiferStatusPrefillCenters.add(Math.max(0, centers));
+        aquiferStatusPrefillJavaFallbacks.add(Math.max(0, javaFallbacks));
+        if (start != 0L) {
+            aquiferStatusPrefillNanos.add(Math.max(0L, System.nanoTime() - start));
+            aquiferStatusPrefillSamples.increment();
+        }
+    }
+
     public static void recordBlockWrite() {
         if (ENABLED) blockWrites.increment();
     }
@@ -155,6 +172,10 @@ public final class GpuTerrainProfiler {
         GpuNoise.LOGGER.info("GPU terrain aquifer decision preparation: calls={}, sampled={} avgNs={}",
                 aquiferDecisionBuildCalls.sum(), aquiferDecisionBuildSamples.sum(),
                 averageNanos(aquiferDecisionBuildNanos, aquiferDecisionBuildSamples));
+        GpuNoise.LOGGER.info("GPU terrain aquifer status prefill: calls={}, centers={}, javaFallbacks={}, sampled={} avgNs={}",
+                aquiferStatusPrefillCalls.sum(), aquiferStatusPrefillCenters.sum(),
+                aquiferStatusPrefillJavaFallbacks.sum(), aquiferStatusPrefillSamples.sum(),
+                averageNanos(aquiferStatusPrefillNanos, aquiferStatusPrefillSamples));
         GpuNoise.LOGGER.info("GPU terrain Java root fallback calls: {}", formatRootFallbacks());
         GpuNoise.LOGGER.info("GPU terrain per-root cache calls: {}", formatRootCalls());
     }

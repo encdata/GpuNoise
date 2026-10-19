@@ -521,11 +521,14 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private void gpunoise$prefillC2meFluidStatuses(GpuChunkDensityCache cache,
                                                     AquiferQueries queries,
                                                     FluidStatusCache statusCache) {
+        long prefillStart = GpuTerrainProfiler.beginPhase();
+        int javaFallbacks = 0;
         int[][] offsets = {
                 {0, 0}, {-2, -1}, {-1, -1}, {0, -1}, {1, -1}, {-3, 0},
                 {-2, 0}, {-1, 0}, {1, 0}, {-2, 1}, {-1, 1}, {0, 1}, {1, 1}
         };
         Map<Long, Integer> indexes = new HashMap<>();
+        Map<Integer, Aquifer.FluidStatus> fluidLevelSampler = new HashMap<>();
         List<int[]> centers = new ArrayList<>();
         for (int query = 0; query < queries.size(); query++) {
             for (int[] center : queries.centers(query)) {
@@ -541,7 +544,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         for (int index = 0; index < centers.size(); index++) {
             int[] center = centers.get(index);
             int centerX = center[0], centerY = center[1], centerZ = center[2];
-            Aquifer.FluidStatus defaultStatus = globalFluidPicker.computeFluid(0, centerY, 0);
+            Aquifer.FluidStatus defaultStatus = gpunoise$sampleGlobalFluidLevel(
+                    fluidLevelSampler, cache, centerY);
             float[] surfaces = new float[offsets.length];
             int[] globalLevels = new int[offsets.length];
             int[] globalKinds = new int[offsets.length];
@@ -553,7 +557,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         ? access.gpunoise$preliminarySurfaceLevel(surfaceX, surfaceZ)
                         : Float.NaN;
                 int surfaceY = (int) Math.floor(surfaces[sample]) + 8;
-                Aquifer.FluidStatus sampled = globalFluidPicker.computeFluid(0, surfaceY, 0);
+                Aquifer.FluidStatus sampled = gpunoise$sampleGlobalFluidLevel(
+                        fluidLevelSampler, cache, surfaceY);
                 samples[sample] = sampled;
                 globalLevels[sample] = gpunoise$fluidLevel(sampled);
                 BlockState sampledState = sampled.at(surfaceY);
@@ -590,10 +595,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             if ((flags & GpuAquiferFluidStatus.FLAG_CPU_FALLBACK) != 0
                     || source < 0 || source > GpuAquiferFluidStatus.SURFACE_SAMPLES) {
                 status = gpunoise$getAquiferStatus(key);
+                javaFallbacks++;
             } else if ((flags & GpuAquiferFluidStatus.FLAG_LAVA_OVERRIDE) != 0) {
                 status = new Aquifer.FluidStatus(level, Blocks.LAVA.defaultBlockState());
             } else if (source == 0) {
-                Aquifer.FluidStatus defaultStatus = globalFluidPicker.computeFluid(0, center[1], 0);
+                Aquifer.FluidStatus defaultStatus = gpunoise$sampleGlobalFluidLevel(
+                        fluidLevelSampler, cache, center[1]);
                 status = new Aquifer.FluidStatus(level,
                         ((AquiferFluidStatusAccessor) (Object) defaultStatus).gpunoise$fluidType());
             } else {
@@ -603,6 +610,15 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             }
             statusCache.put(key, status);
         }
+        GpuTerrainProfiler.recordAquiferStatusPrefill(prefillStart, centers.size(), javaFallbacks);
+    }
+
+    @org.spongepowered.asm.mixin.Unique
+    private Aquifer.FluidStatus gpunoise$sampleGlobalFluidLevel(
+            Map<Integer, Aquifer.FluidStatus> sampler, GpuChunkDensityCache cache, int y) {
+        int clampedY = Math.max(cache.minY(), Math.min(cache.minY() + cache.height() - 1, y));
+        return sampler.computeIfAbsent(clampedY,
+                sampleY -> globalFluidPicker.computeFluid(0, sampleY, 0));
     }
 
     @org.spongepowered.asm.mixin.Unique
