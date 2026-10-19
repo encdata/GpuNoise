@@ -493,7 +493,7 @@ final class GpuDensityExpressionSmoke {
                         new GpuDensityGraph.Node("Constant", new int[0], new double[]{8.0}, null),
                         new GpuDensityGraph.Node("Marker", new int[]{2}, new double[0], "Interpolated"),
                         new GpuDensityGraph.Node("Constant", new int[0], new double[]{3.0}, null),
-                        new GpuDensityGraph.Node("GpuMath", new int[]{1, 4}, new double[0], "ADD"),
+                        new GpuDensityGraph.Node("GpuMath", new int[]{1, 1}, new double[0], "EXPR_MULTIPLY"),
                         new GpuDensityGraph.Node("Constant", new int[0], new double[]{0.0}, null),
                         new GpuDensityGraph.Node("GpuMath", new int[]{3, 6}, new double[0], "ADD")),
                 roots, java.util.List.of(), java.util.List.of(), java.util.List.of(),

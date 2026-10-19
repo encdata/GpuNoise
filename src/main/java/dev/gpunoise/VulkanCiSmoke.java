@@ -467,9 +467,10 @@ public final class VulkanCiSmoke {
             assertSharedLatticeInterpolationResults(terrainResults);
 
             // Exercise the production sequence: evaluate cell corners, pass
-            // interpolated Marker values into the block graph, and verify that
-            // marker-only child instructions can be skipped without changing
-            // any written terrain root.
+            // interpolated Marker values into the block graph. Squaring the
+            // marker after block interpolation proves nonlinear density work
+            // runs after interpolation, rather than interpolating a composed
+            // root at cell corners. Also verify marker-only children can skip.
             GpuDensityGraph markerGraph = GpuDensityExpressionSmoke.interpolatedMarkerGraphForVulkanSmoke();
             ByteBuffer markerGrid = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder());
             markerGrid.putInt(0).putInt(0).putInt(0)
@@ -490,7 +491,8 @@ public final class VulkanCiSmoke {
                 for (int blockX = 0; blockX < 16; blockX++) {
                     for (int root = 0; root < GpuTerrainRoots.COUNT; root++) {
                         float value = markerBlocks.valueAt(blockX, 0, blockZ, root);
-                        float expected = root == 1 || root == 2 ? 8.0f : blockX + 3.0f;
+                        float expected = root == 0 ? blockX * blockX
+                                : root == 1 || root == 2 ? 8.0f : blockX + 3.0f;
                         if (Math.abs(value - expected) > 1.0e-5f) {
                             throw new IllegalStateException("Interpolated-marker block graph mismatch at "
                                     + blockX + ",0," + blockZ + " root " + root + ": expected "
