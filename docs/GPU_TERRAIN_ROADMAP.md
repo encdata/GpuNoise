@@ -129,7 +129,13 @@ parity checks.
   Retained terrain caches now have a bounded live budget (default 32, tunable
   with `gpunoise.terrainCacheBudget`); speculative tile prefetch skips work
   when the budget is full, while requested chunks apply backpressure until a
-  cache is released. The roots queue defaults to 512 pending grids rather than
+  cache is released. Independent chunk caches can prepare concurrently, with
+  CPU-heavy strict dependency construction capped separately (default is half
+  the reported processor count, clamped to 1–4; tunable up to eight with
+  `gpunoise.terrainCacheBuildConcurrency`). Speculative cache builds never wait
+  for a build slot. The roots batcher refreshes its spatial candidate scan at
+  bounded intervals while collecting arrivals and makes the final candidate
+  choice from a fresh scan before dispatch. The roots queue defaults to 512 pending grids rather than
   allowing a large producer burst to accumulate thousands of requests. These
   limits protect full-block output from exhausting the heap under parallel
   chunk generation; tune them against the target server's memory and profiling

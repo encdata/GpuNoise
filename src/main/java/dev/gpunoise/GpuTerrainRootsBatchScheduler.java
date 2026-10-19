@@ -67,9 +67,10 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
 
     GpuTerrainRootsBatchScheduler() {
         for (int i = 0; i < 8; i++) metadataPool.add(new DispatchMetadata());
-        GpuNoise.LOGGER.info("GPU terrain batch window={}ms, target={}, chunk limit={}, searchRadiusRegions={}, queueCapacity={}, outputBufferMiB={}",
+        GpuNoise.LOGGER.info("GPU terrain batch window={}ms, target={}, chunk limit={}, searchRadiusRegions={}, queueCapacity={}, cacheBuildConcurrency={}, outputBufferMiB={}",
                 TimeUnit.NANOSECONDS.toMillis(BATCH_WINDOW_NANOS), TARGET_CHUNKS, MAX_CHUNKS,
                 SEARCH_RADIUS_REGIONS, PENDING_QUEUE_CAPACITY,
+                GpuTerrainAreaRegistry.maxConcurrentCacheBuilds(),
                 (long) PersistentVulkanNormalNoiseEngine.INTERPOLATION_OUTPUT_FLOATS * Float.BYTES / (1024L * 1024L));
         worker.execute(this::run);
     }
