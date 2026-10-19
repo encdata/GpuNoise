@@ -21,7 +21,6 @@ struct InputRecord {
     uint globalStateId;
     uint flags;
     uint nearestStateId;
-    uint reserved;
 };
 struct OutputRecord { uint action; uint stateId; uint schedule; uint reserved; };
 

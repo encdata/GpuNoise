@@ -7,7 +7,7 @@ import java.util.List;
 
 /** Packed contract and double-precision reference for vanilla aquifer results. */
 public final class GpuAquiferSubstance {
-    public static final int RECORD_BYTES = 80;
+    public static final int RECORD_BYTES = 76;
     public static final int OUTPUT_INTS = 4;
     /**
      * Substance evaluation is a compact one-dispatch pass over the full block
@@ -65,7 +65,7 @@ public final class GpuAquiferSubstance {
                 .putInt(input.distance0).putInt(input.distance1).putInt(input.distance2).putInt(input.distance3)
                 .putInt(input.kind0).putInt(input.kind1).putInt(input.kind2).putInt(input.kind3)
                 .putInt(input.statusEqualityMask).putInt(input.globalStateId).putInt(flags)
-                .putInt(input.nearestStateId).putInt(0);
+                .putInt(input.nearestStateId);
     }
 
     /** Incremental direct-buffer staging for chunk-sized aquifer decisions. */
@@ -148,7 +148,7 @@ public final class GpuAquiferSubstance {
                     .putInt(distance0).putInt(distance1).putInt(distance2).putInt(distance3)
                     .putInt(kind0).putInt(kind1).putInt(kind2).putInt(kind3)
                     .putInt(statusEqualityMask).putInt(globalStateId).putInt(flags)
-                    .putInt(nearestStateId).putInt(0);
+                    .putInt(nearestStateId);
             size++;
         }
     }
