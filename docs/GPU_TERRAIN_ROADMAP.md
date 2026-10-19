@@ -47,6 +47,10 @@ parity checks.
   not collect or compare CPS and does not represent physical-GPU performance.
 - Preserve server logs, crash reports, versions, and benchmark configuration
   with each CI artifact.
+- Compare saved CPU/GPU Anvil block-state palettes and scheduled fluid ticks
+  for the same seed and mod profile after both servers stop. Report the first
+  differing world coordinate and states. Keep this as correctness evidence,
+  not a throughput measurement.
 
 ### 2. Versioned graph compiler and custom density API
 

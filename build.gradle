@@ -103,6 +103,8 @@ runs {
         systemProperty 'gpunoise.disableChunkWriter', System.getProperty('gpunoise.disableChunkWriter', 'false')
         systemProperty 'gpunoise.terrainBatchWindowMs', System.getProperty('gpunoise.terrainBatchWindowMs', '20')
         systemProperty 'gpunoise.terrainBatchTargetChunks', System.getProperty('gpunoise.terrainBatchTargetChunks', '64')
+        systemProperty 'gpunoise.terrainBatchRegionRadius', System.getProperty('gpunoise.terrainBatchRegionRadius', '2')
+        systemProperty 'gpunoise.verifyAquiferGpu', System.getProperty('gpunoise.verifyAquiferGpu', 'false')
         systemProperty 'gpunoise.fastMath', System.getProperty('gpunoise.fastMath', 'false')
         systemProperty 'gpunoise.vulkanSmoke', System.getProperty('gpunoise.vulkanSmoke', 'false')
         argument '--nogui'

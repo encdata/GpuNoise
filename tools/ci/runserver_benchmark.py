@@ -18,6 +18,7 @@ import time
 import urllib.request
 from pathlib import Path
 from terrain_mods import TERRAIN_LIBRARIES, TERRAIN_MODS, TERRAIN_TEST_PROFILES
+from compare_worldgen_chunks import compare_worlds
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -398,6 +399,12 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
         if return_code != 0:
             raise RuntimeError(f"{mode} runServer exited with status {return_code}")
 
+        if force_cpu:
+            cpu_world = ROOT / "run" / run_name / "world"
+            snapshot_chunks, snapshot_sections, snapshot_blocks = compare_worlds(cpu_world, cpu_world)
+            print(f"CI_WORLDGEN_CPU_SNAPSHOT_PARSED chunks={snapshot_chunks} "
+                  f"sections={snapshot_sections} blocks={snapshot_blocks}", flush=True)
+
         print(f"CI_WORLDGEN_CHECK_PASSED mode={mode} chunks={count}", flush=True)
         return count
     except BaseException:
@@ -459,6 +466,11 @@ def main() -> int:
         if counts["cpu"] != counts["gpu"]:
             raise RuntimeError(f"{case_name} CPU/GPU Chunky areas differ: "
                                f"CPU={counts['cpu']} chunks, GPU={counts['gpu']} chunks")
+        cpu_world = ROOT / "run" / f"ci-{case_name}-cpu-r1" / "world"
+        gpu_world = ROOT / "run" / f"ci-{case_name}-gpu-r1" / "world"
+        compared_chunks, compared_sections, compared_blocks = compare_worlds(cpu_world, gpu_world)
+        print(f"CI_WORLDGEN_BLOCK_PARITY_PASSED case={case_name} chunks={compared_chunks} "
+              f"sections={compared_sections} blocks={compared_blocks}", flush=True)
         completed_cases.append(case_name)
         print(f"CI_WORLDGEN_CASE_PASSED case={case_name} chunks={counts['gpu']} "
               "cpu_gpu_correctness_paths=true", flush=True)
