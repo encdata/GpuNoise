@@ -64,6 +64,11 @@ final class GpuDensityGraphLowerer {
             }
             int[] children = node.children();
             for (int i = 0; i < children.length; i++) if (children[i] >= 0) children[i] = remap[children[i]];
+            int selectedOptimizedBranch = constantBranch(nodes, node, children);
+            if (selectedOptimizedBranch >= 0) {
+                remap[old] = selectedOptimizedBranch;
+                continue;
+            }
             double[] constants = node.constants();
             GpuDensityGraph.Node folded = foldConstantNode(nodes, node, children, constants);
             if (folded != null) {
@@ -314,6 +319,26 @@ final class GpuDensityGraphLowerer {
         if (node.opcode().equals("GpuSelect") && children.length == 3) {
             if (samePureBranchValue(graph, children[1], children[2])) return children[1];
             Double condition = constantValue(graph, children[0]);
+            if (condition != null) return condition != 0.0 ? children[1] : children[2];
+        }
+        return -1;
+    }
+
+    /** Rechecks selectors after earlier nodes have folded or merged in the lowered IR. */
+    private static int constantBranch(List<GpuDensityGraph.Node> nodes,
+                                      GpuDensityGraph.Node node, int[] children) {
+        if (node.opcode().equals("RangeChoice") && children.length == 3) {
+            if (children[1] == children[2]) return children[1];
+            double[] bounds = node.constants();
+            if (bounds.length < 2) return -1;
+            Double input = constantNodeValue(nodes, children[0]);
+            if (input == null) return -1;
+            return input >= (float) bounds[0] && input < (float) bounds[1]
+                    ? children[1] : children[2];
+        }
+        if (node.opcode().equals("GpuSelect") && children.length == 3) {
+            if (children[1] == children[2]) return children[1];
+            Double condition = constantNodeValue(nodes, children[0]);
             if (condition != null) return condition != 0.0 ? children[1] : children[2];
         }
         return -1;

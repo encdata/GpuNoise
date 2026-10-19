@@ -516,6 +516,22 @@ final class GpuDensityExpressionSmoke {
                 || clamped.nodes().get(0).constants()[0] != 1.0) {
             throw new AssertionError("strict constant clamp bounds should fold without changing shader precision");
         }
+
+        GpuDensityGraph foldedSelector = new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{1.0}, null),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{1.0}, null),
+                        new GpuDensityGraph.Node("Ap2", new int[]{0, 1}, new double[0], "ADD"),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{10.0}, null),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{20.0}, null),
+                        new GpuDensityGraph.Node("RangeChoice", new int[]{2, 3, 4}, new double[]{1.5, 2.5}, null)),
+                new int[]{5}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(source, source, source, source, source, source));
+        GpuDensityGraph selected = GpuDensityGraphLowerer.lower(foldedSelector);
+        if (selected.nodes().size() != 1 || !selected.nodes().get(0).opcode().equals("Constant")
+                || selected.nodes().get(0).constants()[0] != 10.0) {
+            throw new AssertionError("folded constant conditions should prune selector branches before shader dispatch");
+        }
     }
 
     private static void verifyConstantBranchPruning() {
