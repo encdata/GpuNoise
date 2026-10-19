@@ -251,6 +251,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         PendingDecisions pending = new PendingDecisions(decisionCapacity, gpunoise$verifyAquifer);
         NeighborhoodCache neighborhoods = new NeighborhoodCache(Math.max(16, (height + 11) / 12 * 4));
         FluidStatusCache fluidStatuses = new FluidStatusCache(Math.max(16, (height + 11) / 12 * 4));
+        Map<Integer, Aquifer.FluidStatus> c2meGlobalFluidLevels = c2meAquifer ? new HashMap<>() : null;
         // C2ME OCL evaluates these density roots on its device. Use the same
         // strict GPU root cache here; exact Java evaluation remains an explicit
         // diagnostic mode and the fallback for missing cache coordinates.
@@ -287,7 +288,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         positiveDensityDecisions++;
                         continue;
                     }
-                    Aquifer.FluidStatus global = globalFluidPicker.computeFluid(x, y, z);
+                    Aquifer.FluidStatus global = c2meAquifer
+                            ? gpunoise$sampleGlobalFluidLevel(c2meGlobalFluidLevels, cache, y)
+                            : globalFluidPicker.computeFluid(x, y, z);
                     BlockState globalState = global.at(y);
                     if (c2meAquifer && y > c2meSamplingCutoff) {
                         // C2ME OCL bypasses local aquifer pressure above its
@@ -340,8 +343,10 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                             GpuTerrainProfiler.recordJavaRootFallback(GpuTerrainRoots.BARRIER);
                     }
                     if (!Double.isFinite(barrier)) continue;
-                    boolean belowIsLava = globalFluidPicker.computeFluid(x, y - 1, z)
-                            .at(y - 1).is(Blocks.LAVA);
+                    Aquifer.FluidStatus belowGlobal = c2meAquifer
+                            ? gpunoise$sampleGlobalFluidLevel(c2meGlobalFluidLevels, cache, y - 1)
+                            : globalFluidPicker.computeFluid(x, y - 1, z);
+                    boolean belowIsLava = belowGlobal.at(y - 1).is(Blocks.LAVA);
                     queries.add(index, x, y, z, density, barrier, belowIsLava, centers);
                 }
             }
@@ -352,7 +357,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         // 13 surface probes, global fluid samples, and terrain roots together
         // on Vulkan, then retain the original Java statuses for custom fluids.
         if (c2meAquifer && queries.size() > 0) {
-            gpunoise$prefillC2meFluidStatuses(cache, queries, fluidStatuses);
+            gpunoise$prefillC2meFluidStatuses(cache, queries, fluidStatuses,
+                    c2meGlobalFluidLevels);
         }
 
         List<CompletableFuture<int[]>> nearestBatches = new ArrayList<>();
@@ -546,7 +552,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     @org.spongepowered.asm.mixin.Unique
     private void gpunoise$prefillC2meFluidStatuses(GpuChunkDensityCache cache,
                                                     AquiferQueries queries,
-                                                    FluidStatusCache statusCache) {
+                                                    FluidStatusCache statusCache,
+                                                    Map<Integer, Aquifer.FluidStatus> fluidLevelSampler) {
         long prefillStart = GpuTerrainProfiler.beginPhase();
         int javaFallbacks = 0;
         int[][] offsets = {
@@ -554,7 +561,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 {-2, 0}, {-1, 0}, {1, 0}, {-2, 1}, {-1, 1}, {0, 1}, {1, 1}
         };
         Map<Long, Integer> indexes = new HashMap<>();
-        Map<Integer, Aquifer.FluidStatus> fluidLevelSampler = new HashMap<>();
         List<int[]> centers = new ArrayList<>();
         for (int query = 0; query < queries.size(); query++) {
             for (int[] center : queries.centers(query)) {
