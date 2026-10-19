@@ -69,6 +69,11 @@ final class GpuDensityGraphLowerer {
                 remap[old] = selectedOptimizedBranch;
                 continue;
             }
+            int identityValue = identityOperand(nodes, node, children);
+            if (identityValue >= 0) {
+                remap[old] = identityValue;
+                continue;
+            }
             double[] constants = node.constants();
             GpuDensityGraph.Node folded = foldConstantNode(nodes, node, children, constants);
             if (folded != null) {
@@ -165,6 +170,21 @@ final class GpuDensityGraphLowerer {
                 graph.unsupportedRouterRootReasons());
     }
 
+    /** Applies only identities that preserve the shader's special zero semantics. */
+    private static int identityOperand(List<GpuDensityGraph.Node> nodes,
+                                       GpuDensityGraph.Node node, int[] children) {
+        if (!node.opcode().equals("Ap2") || children.length != 2) return -1;
+        Double left = constantNodeValue(nodes, children[0]);
+        Double right = constantNodeValue(nodes, children[1]);
+        String operation = node.payload();
+        if ("MUL".equals(operation) && left != null && left == 1.0) return children[1];
+        if ("ADD".equals(operation)) {
+            if (left != null && Double.doubleToRawLongBits(left) == Long.MIN_VALUE) return children[1];
+            if (right != null && Double.doubleToRawLongBits(right) == Long.MIN_VALUE) return children[0];
+        }
+        return -1;
+    }
+
     /**
      * Folds only operations whose shader fast-math and precise paths produce
      * the same exactly float-representable result. This keeps the folded
@@ -176,6 +196,11 @@ final class GpuDensityGraphLowerer {
         if (node.opcode().equals("Ap2") && children.length == 2) {
             Double left = constantNodeValue(nodes, children[0]);
             Double right = constantNodeValue(nodes, children[1]);
+            if ("MUL".equals(node.payload()) && left != null && left == 0.0) {
+                // The Ap2 shader explicitly maps either signed zero on the
+                // left operand to positive zero before multiplying.
+                return new GpuDensityGraph.Node("Constant", new int[0], new double[]{0.0}, null);
+            }
             if (left == null || right == null) return null;
             double precise;
             double fast;

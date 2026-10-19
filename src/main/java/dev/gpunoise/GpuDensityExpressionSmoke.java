@@ -549,6 +549,45 @@ final class GpuDensityExpressionSmoke {
                         + " density mapping should fold before terrain dispatch");
             }
         }
+
+        GpuDensityGraph zeroProduct = new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{-0.0}, null),
+                        new GpuDensityGraph.Node("GpuCoordinate", new int[0], new double[0], "X"),
+                        new GpuDensityGraph.Node("Ap2", new int[]{0, 1}, new double[0], "MUL")),
+                new int[]{2}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(source, source, source));
+        GpuDensityGraph zeroFolded = GpuDensityGraphLowerer.lower(zeroProduct);
+        if (zeroFolded.nodes().size() != 1 || !zeroFolded.nodes().get(0).opcode().equals("Constant")
+                || Double.doubleToRawLongBits(zeroFolded.nodes().get(0).constants()[0]) != 0L) {
+            throw new AssertionError("Ap2 multiplication by signed zero must fold to its defined positive zero");
+        }
+
+        GpuDensityGraph identityProduct = new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{1.0}, null),
+                        new GpuDensityGraph.Node("GpuCoordinate", new int[0], new double[0], "X"),
+                        new GpuDensityGraph.Node("Ap2", new int[]{0, 1}, new double[0], "MUL")),
+                new int[]{2}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(source, source, source));
+        GpuDensityGraph identityLowered = GpuDensityGraphLowerer.lower(identityProduct);
+        if (identityLowered.nodes().size() != 1
+                || !identityLowered.nodes().get(0).opcode().equals("GpuCoordinate")) {
+            throw new AssertionError("Ap2 multiplication with a left identity should reuse its child value");
+        }
+
+        GpuDensityGraph negativeZeroAdd = new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("GpuCoordinate", new int[0], new double[0], "X"),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{-0.0}, null),
+                        new GpuDensityGraph.Node("Ap2", new int[]{0, 1}, new double[0], "ADD")),
+                new int[]{2}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(source, source, source));
+        GpuDensityGraph zeroAddLowered = GpuDensityGraphLowerer.lower(negativeZeroAdd);
+        if (zeroAddLowered.nodes().size() != 1
+                || !zeroAddLowered.nodes().get(0).opcode().equals("GpuCoordinate")) {
+            throw new AssertionError("adding negative zero should preserve the other Ap2 input");
+        }
     }
 
     private static void verifyConstantBranchPruning() {
