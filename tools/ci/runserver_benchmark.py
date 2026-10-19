@@ -178,6 +178,18 @@ def prepare_run_directory(run_dir: Path, downloaded_mods: Path,
     for filename in selected_mods:
         shutil.copy2(downloaded_mods / filename, mods_dir / filename)
     (run_dir / "eula.txt").write_text("eula=true\n", encoding="utf-8")
+    # C2ME's aquifer rewrite has a different nearest-center and fluid-tick
+    # contract from vanilla. GPU Noise's aquifer kernel implements the vanilla
+    # contract, so pin C2ME to its vanilla-compatible mode in both CPU and GPU
+    # runs. This keeps the CPU world as the reference while actually exercising
+    # GPU density and aquifer decisions instead of silently benchmarking the
+    # exact-Java C2ME fallback.
+    config_dir = run_dir / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "c2me.toml").write_text(
+        "version = 3\n\n[vanillaWorldGenOptimizations]\noptimizeAquifer = false\n",
+        encoding="utf-8",
+    )
     properties = {
         "level-name": "world",
         "level-seed": "7136249183512570431",
@@ -194,6 +206,7 @@ def prepare_run_directory(run_dir: Path, downloaded_mods: Path,
     )
     mod_names = ", ".join(sorted(path.name for path in mods_dir.glob("*.jar")))
     print(f"Prepared benchmark mods: {mod_names}", flush=True)
+    print("CI_C2ME_CONFIG optimizeAquifer=false (vanilla aquifer parity mode)", flush=True)
 
 
 def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
