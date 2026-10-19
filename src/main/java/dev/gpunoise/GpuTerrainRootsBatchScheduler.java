@@ -203,15 +203,6 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 if (region.isEmpty()) pendingByLayout.remove(batchCandidate.layout);
                 batch.removeIf(item -> item.future.isCancelled());
                 if (batch.isEmpty()) continue;
-                input = 0;
-                for (Pending item : batch) input = Math.addExact(input, item.grid.sampleCount());
-                dispatchCount.incrementAndGet();
-                totalChunksDispatched.addAndGet(batch.size());
-                totalSamplesDispatched.addAndGet(input);
-                batchSizes.record(batch.size());
-                long queueWaitNanos = 0L;
-                for (Pending item : batch) queueWaitNanos += System.nanoTime() - item.enqueuedNanos;
-                totalQueueWaitNanos.addAndGet(queueWaitNanos);
                 dispatch(batch, samplesPerChunk);
             }
         } catch (InterruptedException interrupted) {
@@ -363,6 +354,13 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         if (batch.isEmpty()) return;
         int inputCount = 0;
         for (Pending item : batch) inputCount = Math.addExact(inputCount, item.grid.sampleCount());
+        dispatchCount.incrementAndGet();
+        totalChunksDispatched.addAndGet(batch.size());
+        totalSamplesDispatched.addAndGet(inputCount);
+        batchSizes.record(batch.size());
+        long queueWaitNanos = 0L;
+        for (Pending item : batch) queueWaitNanos += System.nanoTime() - item.enqueuedNanos;
+        totalQueueWaitNanos.addAndGet(queueWaitNanos);
         DispatchMetadata buffers;
         try {
             buffers = metadataPool.take();
