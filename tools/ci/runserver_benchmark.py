@@ -43,6 +43,7 @@ MODS = {
     ),
 }
 RCON_PASSWORD = "gpunoise-ci-only"
+C2ME_MOD = "c2me-neoforge-mc1.21.1-0.4.0-alpha.0.123.jar"
 SERVER_START_TIMEOUT = 300
 CHUNKY_RUN_TIMEOUT = 3600
 SHUTDOWN_TIMEOUT = 90
@@ -172,9 +173,11 @@ def prepare_run_directory(run_dir: Path, downloaded_mods: Path,
                           terrain_profile: str | None) -> None:
     mods_dir = run_dir / "mods"
     mods_dir.mkdir(parents=True, exist_ok=True)
-    profile_mods = set(TERRAIN_TEST_PROFILES[terrain_profile]) if terrain_profile else set()
-    selected_mods = MODS | ({name: TERRAIN_MODS[name] for name in profile_mods} | TERRAIN_LIBRARIES
-                            if terrain_profile else {})
+    profile_mods = set(TERRAIN_TEST_PROFILES[terrain_profile]) if terrain_profile in TERRAIN_TEST_PROFILES else set()
+    base_mods = ({name: spec for name, spec in MODS.items() if name != C2ME_MOD}
+                 if terrain_profile == "without-c2me" else MODS)
+    selected_mods = base_mods | ({name: TERRAIN_MODS[name] for name in profile_mods} | TERRAIN_LIBRARIES
+                                 if profile_mods else {})
     for filename in selected_mods:
         shutil.copy2(downloaded_mods / filename, mods_dir / filename)
     (run_dir / "eula.txt").write_text("eula=true\n", encoding="utf-8")
@@ -280,7 +283,7 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                     raise RuntimeError(
                         f"{mode} dedicated server reached ready state without Byepregen in NeoForge's mod list"
                     )
-                if terrain_profile:
+                if terrain_profile in TERRAIN_TEST_PROFILES:
                     missing_mods = [filename for filename in TERRAIN_TEST_PROFILES[terrain_profile]
                                     if filename not in server_log]
                     if missing_mods:
@@ -330,28 +333,33 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
             if not gpu_counts or max(counts[2] for counts in gpu_counts) <= 0:
                 raise RuntimeError("GPU benchmark completed without any GPU terrain cache being consumed")
             run_log = log_path.read_text(encoding="utf-8")
-            if "GPU aquifer substance batch:" not in run_log:
+            has_aquifer_batch = "GPU aquifer substance batch:" in run_log
+            c2me_java_fallback = (
+                "GPU aquifer decision preflight skipped: C2ME aquifer rewrite is active; "
+                "keeping its fluid decisions on the exact Java path" in run_log
+            )
+            if not has_aquifer_batch and not c2me_java_fallback:
                 skip_reasons = re.findall(r"GPU aquifer decision preflight skipped: ([^\r\n]+)", run_log)
                 reason_detail = "; ".join(dict.fromkeys(skip_reasons)) or "no preflight skip reason was logged"
                 raise RuntimeError(
                     "GPU benchmark did not execute the chunk-batched aquifer substance shader: "
                     + reason_detail
                 )
-            if VERIFY_AQUIFER_GPU:
+            if VERIFY_AQUIFER_GPU and has_aquifer_batch:
                 nearest_results = re.findall(
                     r"GPU aquifer nearest parity: samples=(\d+), mismatches=(\d+)",
                     log_path.read_text(encoding="utf-8"))
                 if not nearest_results or any(int(samples) == 0 or int(mismatches) != 0
                                               for samples, mismatches in nearest_results):
                     raise RuntimeError(
-                        "GPU aquifer nearest-three selection did not pass vanilla parity for every prepared chunk")
+                        "GPU aquifer four-center selection did not pass runtime parity for every prepared chunk")
                 parity_results = re.findall(
                     r"GPU aquifer substance parity: samples=(\d+), mismatches=(\d+)",
                     log_path.read_text(encoding="utf-8"))
                 if not parity_results or any(int(samples) == 0 or int(mismatches) != 0
                                              for samples, mismatches in parity_results):
                     raise RuntimeError(
-                        "GPU aquifer substance decisions did not pass vanilla parity for every prepared chunk")
+                        "GPU aquifer substance decisions did not pass runtime parity for every prepared chunk")
             fallback_chunks = max(counts[3] for counts in gpu_counts)
             if fallback_chunks != 0:
                 raise RuntimeError(
@@ -429,10 +437,10 @@ def main() -> int:
     profile = None
     if sys.argv[1:] and not prepare_only:
         if len(sys.argv) != 3 or sys.argv[1] != "--profile":
-            choices = ", ".join(("without-terrain-mods", *TERRAIN_TEST_PROFILES))
+            choices = ", ".join(("without-terrain-mods", "without-c2me", *TERRAIN_TEST_PROFILES))
             raise ValueError(f"usage: runserver_benchmark.py [--prepare-mods | --profile PROFILE]; profiles: {choices}")
         profile = sys.argv[2]
-        if profile not in ("without-terrain-mods", *TERRAIN_TEST_PROFILES):
+        if profile not in ("without-terrain-mods", "without-c2me", *TERRAIN_TEST_PROFILES):
             raise ValueError(f"unknown worldgen profile {profile!r}")
     downloaded_mods = ROOT / "build" / "ci-mods"
     fetch_mods(downloaded_mods)
@@ -443,7 +451,7 @@ def main() -> int:
         return 0
     print(
         f"CI_WORLDGEN_CONFIG radius_blocks={CHUNKY_RADIUS_BLOCKS} "
-        f"test_cases={1 + len(TERRAIN_TEST_PROFILES)} selected_profile={profile or 'all'} "
+        f"test_cases={2 + len(TERRAIN_TEST_PROFILES)} selected_profile={profile or 'all'} "
         f"repetitions={WORLDGEN_CHECK_REPETITIONS} "
         f"terrain_mods={len(TERRAIN_MODS)} modded_profiles={len(TERRAIN_TEST_PROFILES)} "
         f"batch_window_ms={BATCH_WINDOW_MS} "
@@ -454,6 +462,7 @@ def main() -> int:
     completed_cases: list[str] = []
     all_cases: tuple[tuple[str, str | None], ...] = (
         (("without-terrain-mods", None),)
+        + (("without-c2me", "without-c2me"),)
         + tuple((profile, profile) for profile in TERRAIN_TEST_PROFILES)
     )
     cases = tuple(case for case in all_cases if profile is None or case[0] == profile)

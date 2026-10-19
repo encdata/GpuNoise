@@ -148,6 +148,11 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                                  dev.gpunoise.GpuNoiseChunkAccess noiseAccess,
                                                  PositionalRandomFactory randomFactory) {
         boolean c2meAquifer = GpuAquiferRuntimeMode.c2meAquiferRewriteEnabled();
+        if (c2meAquifer) {
+            gpunoise$logAquiferPreflightSkip(
+                    "C2ME aquifer rewrite is active; keeping its fluid decisions on the exact Java path");
+            return;
+        }
         final int minX = cache.minX(), minY = cache.minY(), minZ = cache.minZ();
         final int height = cache.height();
         Decision[] decisions = new Decision[Math.multiplyExact(height, 256)];
