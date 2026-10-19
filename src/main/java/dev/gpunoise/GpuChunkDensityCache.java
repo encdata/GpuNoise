@@ -155,7 +155,7 @@ public final class GpuChunkDensityCache {
      * is unavailable, the dispatch is incomplete, or a threshold-ambiguous
      * sample needs the Java scanner.
      */
-    int preliminarySurfaceLevelFromBlocks(int x, int z) {
+    public int preliminarySurfaceLevelFromBlocks(int x, int z) {
         if (!supportsRoot(GpuTerrainRoots.INITIAL_DENSITY) || !containsSurfaceColumn(x, z)) {
             return Integer.MIN_VALUE;
         }
@@ -169,7 +169,7 @@ public final class GpuChunkDensityCache {
             int ry = y - minY;
             if (!blocks.contains(rx, ry, rz)) return Integer.MIN_VALUE;
             double density = blocks.valueAtUnchecked(rx, ry, rz, GpuTerrainRoots.INITIAL_DENSITY);
-            if (!Float.isFinite(density)
+            if (!Double.isFinite(density)
                     || Math.abs(density - 0.390625) <= GpuTerrainRuntime.GRAPH_PARITY_EPSILON) {
                 return Integer.MIN_VALUE;
             }
