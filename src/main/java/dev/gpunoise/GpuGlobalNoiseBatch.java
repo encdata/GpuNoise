@@ -64,8 +64,9 @@ final class GpuGlobalNoiseBatch {
                     * MinecraftNoiseParameters.PERMUTATION_SIZE * Integer.BYTES;
             octaveBytes += (data.first().length + data.second().length) * MinecraftNoiseParameters.OCTAVE_BYTES;
         }
-        // std430 array stride for { vec4 position; uint samplerId; } is 32 bytes.
-        ByteBuffer coordinates = ByteBuffer.allocateDirect(size * 32).order(ByteOrder.nativeOrder());
+        // Keep the sampler index in the unused w word of vec4, yielding a
+        // 16-byte record instead of std430's 32-byte struct stride.
+        ByteBuffer coordinates = ByteBuffer.allocateDirect(size * 16).order(ByteOrder.nativeOrder());
         ByteBuffer results = ByteBuffer.allocateDirect(size * Float.BYTES).order(ByteOrder.nativeOrder());
         ByteBuffer permutations = ByteBuffer.allocateDirect(permutationBytes).order(ByteOrder.nativeOrder());
         ByteBuffer octaves = ByteBuffer.allocateDirect(octaveBytes).order(ByteOrder.nativeOrder());
@@ -78,8 +79,7 @@ final class GpuGlobalNoiseBatch {
                     .putFloat((float) data.valueFactor()).putInt(permutationBase[i]);
         }
         for (int i = 0; i < size; i++) {
-            coordinates.putFloat(x[i]).putFloat(y[i]).putFloat(z[i]).putFloat(0)
-                    .putInt(samplerIds[i]).putInt(0).putInt(0).putInt(0);
+            coordinates.putFloat(x[i]).putFloat(y[i]).putFloat(z[i]).putInt(samplerIds[i]);
         }
         return new Packed(flip(coordinates), flip(results), flip(permutations), flip(octaves),
                 flip(metadata), size, samplers.size());

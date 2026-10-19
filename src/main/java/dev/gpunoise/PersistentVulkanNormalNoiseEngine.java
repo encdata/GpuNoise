@@ -99,7 +99,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             ownsDevice = true;
             queueSubmitLock = new Object();
             PointerBuffer qh = stack.mallocPointer(1); vkGetDeviceQueue(device, queueFamily, 0, qh); queue = new VkQueue(qh.get(0), device);
-            coordinates = buffer(CAPACITY * 32L, stack); // 32-byte global-noise sample records
+            coordinates = buffer(CAPACITY * 16L, stack); // vec4 position; sampler id occupies unused w
             // Graph dispatches can return up to 16 router roots per sample.
             results = buffer(CAPACITY * 16L * 4L, stack);
             graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack); graphNodes = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack); graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 64L * 16L, stack); graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack); graphBlendInputs = hostVisibleBuffer(CAPACITY * 8L, stack); graphRoots = deviceLocalBuffer(64L, stack);
@@ -160,7 +160,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         Configuration.STACK_SIZE.set(64 * 1_048_576);
         MemoryStack stack = MemoryStack.stackPush();
         try {
-            coordinates = buffer(CAPACITY * 32L, stack);
+            coordinates = buffer(CAPACITY * 16L, stack);
             results = buffer(CAPACITY * 16L * 4L, stack);
             graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack);
             graphNodes = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack);
