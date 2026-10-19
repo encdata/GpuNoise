@@ -75,11 +75,14 @@ public final class GpuAquiferNearestThree {
             int dy = centers[i][1] - query[1];
             int dz = centers[i][2] - query[2];
             int distance = dx * dx + dy * dy + dz * dz;
-            if (distances[0] > distance) {
+            // Vanilla's NoiseBasedAquifer uses inclusive comparisons at all
+            // three ranks. Equal-distance candidates therefore move ahead
+            // of earlier candidates, including at the first and second rank.
+            if (distances[0] >= distance) {
                 indices[2] = indices[1]; distances[2] = distances[1];
                 indices[1] = indices[0]; distances[1] = distances[0];
                 indices[0] = i; distances[0] = distance;
-            } else if (distances[1] > distance) {
+            } else if (distances[1] >= distance) {
                 indices[2] = indices[1]; distances[2] = distances[1];
                 indices[1] = i; distances[1] = distance;
             } else if (distances[2] >= distance) {

@@ -30,13 +30,12 @@ void main() {
     for (int i = 0; i < 12; i++) {
         ivec3 delta = query.centers[i].xyz - query.point.xyz;
         int distance = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
-        // Keep NoiseBasedAquifer's strict comparisons for the first two
-        // ranks and its inclusive comparison for the third rank.
-        if (distances[0] > distance) {
+        // NoiseBasedAquifer uses inclusive comparisons for all three ranks.
+        if (distances[0] >= distance) {
             indices[2] = indices[1]; distances[2] = distances[1];
             indices[1] = indices[0]; distances[1] = distances[0];
             indices[0] = i; distances[0] = distance;
-        } else if (distances[1] > distance) {
+        } else if (distances[1] >= distance) {
             indices[2] = indices[1]; distances[2] = distances[1];
             indices[1] = i; distances[1] = distance;
         } else if (distances[2] >= distance) {

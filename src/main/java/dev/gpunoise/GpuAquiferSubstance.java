@@ -17,7 +17,8 @@ public final class GpuAquiferSubstance {
     // Matches the router parity gate while float64 classification is not yet
     // selected as a device capability variant.
     static final float PRECISION_EPSILON = 5.0e-3f;
-    static final double FLOWING_UPDATE_SIMILARITY = 0.96;
+    // Vanilla: similarity(square(10), square(12)) = 1 - (144 - 100) / 25.
+    static final double FLOWING_UPDATE_SIMILARITY = 1.0 - (12 * 12 - 10 * 10) / 25.0;
 
     private GpuAquiferSubstance() {}
 

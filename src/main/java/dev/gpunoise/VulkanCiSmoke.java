@@ -490,8 +490,8 @@ public final class VulkanCiSmoke {
             }
             if (!java.util.Arrays.deepEquals(plannedCenters, expectedCenters))
                 throw new IllegalStateException("Aquifer positional-random neighborhood mismatch");
-            // Four equal-distance centers pin the precise tie order in the
-            // three nearest slots, including vanilla's inclusive third test.
+            // Four equal-distance centers pin vanilla's inclusive tie order
+            // across all three nearest slots.
             centers[0][0] = new int[]{queries[0][0] + 1, queries[0][1], queries[0][2]};
             centers[0][1] = new int[]{queries[0][0] - 1, queries[0][1], queries[0][2]};
             centers[0][2] = new int[]{queries[0][0], queries[0][1] + 1, queries[0][2]};
@@ -520,6 +520,16 @@ public final class VulkanCiSmoke {
                             40, 24, 12, 10, 35, 60,
                             GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
                             GpuAquiferSubstance.OTHER, 0, false, false, 402),
+                    // Vanilla schedules a fluid update for a non-positive
+                    // similarity down to 1 - (12^2 - 10^2) / 25 == -0.76.
+                    new GpuAquiferSubstance.Input(-0.2, 0.25, 50,
+                            40, 24, 12, 10, 53, 60,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.OTHER, 0, false, false, 412),
+                    new GpuAquiferSubstance.Input(-0.2, 0.25, 50,
+                            40, 24, 12, 10, 55, 60,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.OTHER, 0, false, false, 413),
                     new GpuAquiferSubstance.Input(-0.2, 0.25, 50,
                             40, 24, 12, 10, 11, 12,
                             GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,

@@ -32,6 +32,7 @@ const uint RETURN_DEFAULT = 0u;
 const uint RETURN_STATE = 1u;
 const uint CPU_FALLBACK = 2u;
 const float PRECISION_EPSILON = 5.0e-3;
+const float FLOWING_UPDATE_SIMILARITY = 1.0 - float(12 * 12 - 10 * 10) / 25.0;
 
 float similarity(int firstDistance, int secondDistance) {
     return 1.0 - float(abs(secondDistance - firstDistance)) / 25.0;
@@ -83,7 +84,8 @@ void main() {
 
     float similarity01 = similarity(r.distance0, r.distance1);
     if (similarity01 <= 0.0) {
-        emit(i, RETURN_STATE, r.nearestStateId, similarity01 >= 0.96 ? 1u : 0u);
+        emit(i, RETURN_STATE, r.nearestStateId,
+                similarity01 >= FLOWING_UPDATE_SIMILARITY ? 1u : 0u);
         return;
     }
     if (r.kind0 == WATER && r.belowIsLava != 0u) {
