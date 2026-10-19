@@ -248,11 +248,33 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                                                            int chunkCount, int samplesPerChunk,
                                                                            ByteBuffer outputMetadata,
                                                                            int blocksPerChunk) {
+        int[] outputRoots = new int[graph.routerRootCount()];
+        for (int i = 0; i < outputRoots.length; i++) outputRoots[i] = i;
+        return submitGraphGridInterpolated(graph, gridMetadata, chunkCount, samplesPerChunk,
+                outputMetadata, blocksPerChunk, outputRoots);
+    }
+
+    CompletableFuture<GpuTerrainBatchResult> submitGraphGridInterpolated(ByteBuffer gridMetadata,
+                                                                           int chunkCount,
+                                                                           int samplesPerChunk,
+                                                                           ByteBuffer outputMetadata,
+                                                                           int blocksPerChunk,
+                                                                           int[] outputRootIndexes) {
+        return submitGraphGridInterpolated(GpuTerrainRuntime.currentTerrainGraph(), gridMetadata,
+                chunkCount, samplesPerChunk, outputMetadata, blocksPerChunk, outputRootIndexes);
+    }
+
+    CompletableFuture<GpuTerrainBatchResult> submitGraphGridInterpolated(GpuDensityGraph graph,
+                                                                           ByteBuffer gridMetadata,
+                                                                           int chunkCount, int samplesPerChunk,
+                                                                           ByteBuffer outputMetadata,
+                                                                           int blocksPerChunk,
+                                                                           int[] outputRootIndexes) {
         PersistentVulkanNormalNoiseEngine slot = slots[Math.floorMod(next.getAndIncrement(), slots.length)];
         return CompletableFuture.supplyAsync(() -> {
             try {
                 return slot.submitGraphGridInterpolated(graph, gridMetadata, chunkCount,
-                        samplesPerChunk, outputMetadata, blocksPerChunk);
+                        samplesPerChunk, outputMetadata, blocksPerChunk, outputRootIndexes);
             } catch (Exception failure) {
                 throw new IllegalStateException("GPU grid terrain output dispatch failed", failure);
             }

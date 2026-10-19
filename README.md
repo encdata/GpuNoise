@@ -58,8 +58,12 @@ remains enabled.
 
 The current path evaluates terrain density and aquifer input roots on the GPU
 at Minecraft's cell grid, then interpolates final density to block resolution
-on the GPU. The full-block path also batches aquifer fluid decisions on
-Vulkan when the required density and barrier data are available. Minecraft
+on the GPU. Per-block readback contains only roots that pass graph and runtime
+parity checks, with omitted roots served from the verified cell grid or Java
+fallback. This keeps speculative or unsupported roots out of the block output
+buffer and lets compatible chunk batches fit more work into each dispatch.
+The full-block path also batches aquifer fluid decisions on Vulkan when the
+required density and barrier data are available. Minecraft
 retains fluid-status lookup, the chunk writer, surface rules, carvers,
 structures, and features. Unsupported or mismatched aquifer decisions return
 to vanilla Java. This does not make full chunk generation GPU-only.

@@ -139,8 +139,13 @@ parity checks.
   allowing a large producer burst to accumulate thousands of requests. These
   limits protect full-block output from exhausting the heap under parallel
   chunk generation; tune them against the target server's memory and profiling
-  data. The single Vulkan device slot also bounds aquifer decision-table
-  producers to three by default (tunable with `gpunoise.aquiferDecisionConcurrency`,
+  data. Per-block result packing now includes only roots that passed graph and
+  runtime parity checks. Unsupported or unverified roots are read from the
+  corner grid or use their Java fallback, while the compact root map preserves
+  router-root identity. This reduces readback and raises the dispatch capacity
+  when a modded graph supports only part of the router. The single Vulkan
+  device slot also bounds aquifer decision-table producers to three by default
+  (tunable with `gpunoise.aquiferDecisionConcurrency`,
   capped at eight). This allows CPU preparation to overlap without letting all
   worldgen workers allocate chunk-sized decision and candidate buffers while
   waiting for the same slot. Full per-block output's mapped Vulkan buffer now defaults

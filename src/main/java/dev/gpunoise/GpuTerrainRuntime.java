@@ -293,7 +293,7 @@ public final class GpuTerrainRuntime {
         terrainProvider = null;
         terrainScheduler = null;
         chunkFillCoordinator = null;
-        GpuNoise.LOGGER.info("GPU chunk terrain provider ready: async exact slabs, batches up to {} chunks, all {} router roots per dispatch.",
+        GpuNoise.LOGGER.info("GPU chunk terrain provider ready: async exact slabs, batches up to {} chunks, {} router roots per cell-grid dispatch; block output is parity-filtered.",
                 TerrainNoiseApi.MAX_CHUNKS_PER_BATCH, routerRootCount);
     }
 
@@ -382,7 +382,7 @@ public final class GpuTerrainRuntime {
                             new GpuTerrainBlockResult(new float[0], 0, 0, 1, 16, 0, 16)));
         }
         return ring.submitGraphGridInterpolated(gridMetadata, chunkCount, samplesPerChunk,
-                outputMetadata, blocksPerChunk);
+                outputMetadata, blocksPerChunk, terrainBlockOutputRootIndexes());
     }
 
     static boolean terrainBlockOutputEnabled() {
@@ -437,9 +437,33 @@ public final class GpuTerrainRuntime {
         return 12;
     }
 
-    /** Materialize all router roots in the GPU block-grid pass. */
+    /** Number of parity-verified roots in compact per-block GPU output. */
     static int terrainBlockOutputRootCount() {
-        return terrainOutputRootCount();
+        return Integer.bitCount(terrainBlockOutputRootMask());
+    }
+
+    /** Stable root ordering for compact block readback, derived only from parity-verified roots. */
+    static int[] terrainBlockOutputRootIndexes() {
+        GpuDensityGraph graph = terrainGraph;
+        if (graph == null) {
+            int[] roots = new int[GpuTerrainRoots.COUNT];
+            for (int i = 0; i < roots.length; i++) roots[i] = i;
+            return roots;
+        }
+        int mask = terrainBlockOutputRootMask();
+        int[] roots = new int[Integer.bitCount(mask)];
+        int output = 0;
+        for (int root = 0; root < GpuTerrainRoots.COUNT; root++) {
+            if ((mask & (1 << root)) != 0) roots[output++] = root;
+        }
+        return roots;
+    }
+
+    private static int terrainBlockOutputRootMask() {
+        GpuDensityGraph graph = terrainGraph;
+        if (graph == null) return (1 << GpuTerrainRoots.COUNT) - 1;
+        int rootLimit = Math.min(GpuTerrainRoots.COUNT, graph.routerRootCount());
+        return supportedTerrainRootMask() & ((1 << rootLimit) - 1);
     }
 
     static java.util.concurrent.CompletionStage<GpuFusedResult> submitFusedDirect(int[] x, int[] y, int[] z,

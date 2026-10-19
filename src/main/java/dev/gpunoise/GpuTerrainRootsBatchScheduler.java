@@ -59,6 +59,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     private final AtomicLong totalQueueWaitNanos = new AtomicLong();
     private final AtomicLong completedDispatches = new AtomicLong();
     private final AtomicLong totalDispatchLatencyNanos = new AtomicLong();
+    private final AtomicLong totalBlockOutputBytes = new AtomicLong();
     private final AtomicLong queueBackpressureEvents = new AtomicLong();
     private final BatchSizeHistogram batchSizes = new BatchSizeHistogram();
     private final LatencyHistogram chunkLatency = new LatencyHistogram();
@@ -67,10 +68,11 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
 
     GpuTerrainRootsBatchScheduler() {
         for (int i = 0; i < 8; i++) metadataPool.add(new DispatchMetadata());
-        GpuNoise.LOGGER.info("GPU terrain batch window={}ms, target={}, chunk limit={}, searchRadiusRegions={}, queueCapacity={}, cacheBuildConcurrency={}, outputBufferMiB={}",
+        GpuNoise.LOGGER.info("GPU terrain batch window={}ms, target={}, chunk limit={}, searchRadiusRegions={}, queueCapacity={}, cacheBuildConcurrency={}, blockOutputRoots={}, outputBufferMiB={}",
                 TimeUnit.NANOSECONDS.toMillis(BATCH_WINDOW_NANOS), TARGET_CHUNKS, MAX_CHUNKS,
                 SEARCH_RADIUS_REGIONS, PENDING_QUEUE_CAPACITY,
                 GpuTerrainAreaRegistry.maxConcurrentCacheBuilds(),
+                GpuTerrainRuntime.terrainBlockOutputRootCount(),
                 (long) PersistentVulkanNormalNoiseEngine.INTERPOLATION_OUTPUT_FLOATS * Float.BYTES / (1024L * 1024L));
         worker.execute(this::run);
     }
@@ -356,6 +358,9 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         metadata.flip();
         if (!blockOutput) outputMetadata.limit(0);
         outputMetadata.flip();
+        if (blockOutput) {
+            totalBlockOutputBytes.addAndGet((long) batch.size() * blocksPerChunk * outputRoots * Float.BYTES);
+        }
         long submittedAt = System.nanoTime();
         try {
             GpuTerrainRuntime.submitTerrainGridInterpolated(metadata, batch.size(), samplesPerChunk,
@@ -393,9 +398,10 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         long completedChunks = chunkLatency.count();
         long batchBucket = completedChunks >>> 8;
         if (batchBucket > 0L && lastBatchLogBucket.getAndSet(batchBucket) != batchBucket) {
-            GpuNoise.LOGGER.info("GPU terrain roots batching: avgChunksPerDispatch={}, avgSamplesPerDispatch={}, avgQueueWaitMsPerChunk={}, avgSubmitToCompleteMsPerDispatch={}, queueBackpressureEvents={}, batchSizes={}",
+            GpuNoise.LOGGER.info("GPU terrain roots batching: avgChunksPerDispatch={}, avgSamplesPerDispatch={}, avgOutputKiBPerDispatch={}, avgQueueWaitMsPerChunk={}, avgSubmitToCompleteMsPerDispatch={}, queueBackpressureEvents={}, batchSizes={}",
                     (double) totalChunksDispatched.get() / dispatchCount.get(),
                     (double) totalSamplesDispatched.get() / dispatchCount.get(),
+                    totalBlockOutputBytes.get() / (double) completed / 1024.0,
                     totalQueueWaitNanos.get() / (double) totalChunksDispatched.get() / 1_000_000.0,
                     totalDispatchLatencyNanos.get() / (double) completed / 1_000_000.0,
                     queueBackpressureEvents.get(),

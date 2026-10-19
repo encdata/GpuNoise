@@ -348,8 +348,8 @@ public final class GpuChunkDensityCache {
 
     private double sampleBlockRoot(int rx, int ry, int rz, int root) {
         GpuTerrainBlockResult blocks = readyBlocks;
-        if (blocks == null || root >= blocks.rootCount() || !blocks.contains(rx, ry, rz)) return Double.NaN;
-        return blocks.valueAt(rx, ry, rz, root);
+        if (blocks == null || !blocks.contains(rx, ry, rz)) return Double.NaN;
+        return blocks.valueAtUnchecked(rx, ry, rz, root);
     }
 
     private double sampleRoot(int rx, int ry, int rz, int root) {
@@ -419,14 +419,18 @@ public final class GpuChunkDensityCache {
         return lerp3(c000, c100, c010, c110, c001, c101, c011, c111, tx, ty, tz);
     }
 
-    /** Checks that the GPU returned a complete block volume with every router root. */
+    /** Checks that the GPU returned the complete block volume and every selected root. */
     private void validateBlockOutput() {
         GpuTerrainBlockResult blocks = readyBlocks;
         if (blocks == null || blocks.isEmpty()) {
             throw new IllegalStateException("GPU block output was enabled but returned no values");
         }
         int rootCount = GpuTerrainRuntime.terrainBlockOutputRootCount();
-        if (blocks.rootCount() < rootCount || !blocks.contains(15, maxRelativeY - 1, 15)) {
+        int[] rootIndexes = GpuTerrainRuntime.terrainBlockOutputRootIndexes();
+        boolean missingRoot = blocks.rootCount() != rootIndexes.length;
+        for (int root : rootIndexes) missingRoot |= blocks.outputIndexForRoot(root) < 0;
+        if (missingRoot || blocks.rootCount() != rootCount
+                || !blocks.contains(15, maxRelativeY - 1, 15)) {
             throw new IllegalStateException("GPU block output is incomplete: roots=" + blocks.rootCount()
                     + ", expectedRoots=" + rootCount + ", maxY=" + maxRelativeY);
         }

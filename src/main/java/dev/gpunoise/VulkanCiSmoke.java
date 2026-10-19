@@ -503,6 +503,29 @@ public final class VulkanCiSmoke {
             }
             System.out.println("Vulkan CI smoke: interpolated-marker block graph completed");
 
+            // Production batches omit graph roots that did not pass parity.
+            // Verify the compact output remains indexed by the original
+            // router-root ID rather than by its packed output slot.
+            int[] compactRoots = {GpuTerrainRoots.BARRIER, GpuTerrainRoots.FINAL_DENSITY};
+            GpuTerrainBatchResult compactTerrain = ring.submitGraphGridInterpolated(markerGraph,
+                    markerGrid.duplicate().order(ByteOrder.nativeOrder()), 1, 8,
+                    markerOutput.duplicate().order(ByteOrder.nativeOrder()), 256, compactRoots)
+                    .get(60, TimeUnit.SECONDS);
+            GpuTerrainBlockResult compactBlocks = compactTerrain.blocks();
+            if (compactBlocks.rootCount() != compactRoots.length
+                    || compactBlocks.rootIndexAt(0) != GpuTerrainRoots.BARRIER
+                    || compactBlocks.rootIndexAt(1) != GpuTerrainRoots.FINAL_DENSITY) {
+                throw new IllegalStateException("Compact terrain block output lost its router-root mapping");
+            }
+            for (int blockX = 0; blockX < 16; blockX++) {
+                float density = compactBlocks.valueAt(blockX, 0, 0, GpuTerrainRoots.FINAL_DENSITY);
+                float barrier = compactBlocks.valueAt(blockX, 0, 0, GpuTerrainRoots.BARRIER);
+                if (Math.abs(density - blockX * blockX) > 1.0e-5f || Math.abs(barrier - 8.0f) > 1.0e-5f) {
+                    throw new IllegalStateException("Compact terrain block output mismatch at X=" + blockX);
+                }
+            }
+            System.out.println("Vulkan CI smoke: parity-selected compact block output completed");
+
             // Differentially exercise the first exact numeric component of
             // vanilla's aquifer block decision. Record fields and boundary
             // cases are shared with the production pressure input contract.

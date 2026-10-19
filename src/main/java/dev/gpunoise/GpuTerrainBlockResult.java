@@ -6,10 +6,18 @@ final class GpuTerrainBlockResult {
     private final int offset;
     private final int blocks;
     private final int roots;
+    private final int[] rootIndexes;
+    private final int[] outputIndexesByRoot;
     private final int blocksX, blocksY, blocksZ;
 
     GpuTerrainBlockResult(float[] values, int offset, int blocks, int roots,
                           int blocksX, int blocksY, int blocksZ) {
+        this(values, offset, blocks, sequentialRoots(roots), blocksX, blocksY, blocksZ);
+    }
+
+    GpuTerrainBlockResult(float[] values, int offset, int blocks, int[] rootIndexes,
+                          int blocksX, int blocksY, int blocksZ) {
+        int roots = rootIndexes == null ? 0 : rootIndexes.length;
         if (values == null || offset < 0 || blocks < 0 || roots <= 0
                 || offset > values.length - blocks * roots)
             throw new IllegalArgumentException("invalid GPU terrain block result");
@@ -17,6 +25,15 @@ final class GpuTerrainBlockResult {
         this.offset = offset;
         this.blocks = blocks;
         this.roots = roots;
+        this.rootIndexes = rootIndexes.clone();
+        this.outputIndexesByRoot = new int[GpuTerrainRoots.COUNT];
+        java.util.Arrays.fill(this.outputIndexesByRoot, -1);
+        for (int output = 0; output < this.rootIndexes.length; output++) {
+            int root = this.rootIndexes[output];
+            if (root < 0 || root >= this.outputIndexesByRoot.length || this.outputIndexesByRoot[root] >= 0)
+                throw new IllegalArgumentException("invalid or duplicate terrain block root " + root);
+            this.outputIndexesByRoot[root] = output;
+        }
         this.blocksX = blocksX;
         this.blocksY = blocksY;
         this.blocksZ = blocksZ;
@@ -26,7 +43,7 @@ final class GpuTerrainBlockResult {
         if (blockOffset < 0 || blockCount < 0 || blockOffset + blockCount > blocks)
             throw new IndexOutOfBoundsException();
         return new GpuTerrainBlockResult(values, offset + blockOffset * roots, blockCount,
-                roots, blocksX, blocksY, blocksZ);
+                rootIndexes, blocksX, blocksY, blocksZ);
     }
 
     boolean contains(int x, int y, int z) {
@@ -41,18 +58,36 @@ final class GpuTerrainBlockResult {
         return roots;
     }
 
+    int rootIndexAt(int outputIndex) {
+        return rootIndexes[outputIndex];
+    }
+
+    int outputIndexForRoot(int root) {
+        return root < 0 || root >= outputIndexesByRoot.length ? -1 : outputIndexesByRoot[root];
+    }
+
     float valueAt(int x, int y, int z, int root) {
-        if (!contains(x, y, z) || root < 0 || root >= roots) throw new IndexOutOfBoundsException();
+        if (!contains(x, y, z) || outputIndexForRoot(root) < 0) throw new IndexOutOfBoundsException();
         return valueAtUnchecked(x, y, z, root);
     }
 
     float valueAtUnchecked(int x, int y, int z, int root) {
+        int outputRoot = outputIndexForRoot(root);
+        if (outputRoot < 0) return Float.NaN;
         int index = (y * blocksZ + z) * blocksX + x;
-        return values[offset + index * roots + root];
+        return values[offset + index * roots + outputRoot];
     }
 
     float finalValueAtUnchecked(int x, int y, int z) {
+        int outputRoot = outputIndexForRoot(GpuTerrainRoots.FINAL_DENSITY);
+        if (outputRoot < 0) return Float.NaN;
         int index = (y * blocksZ + z) * blocksX + x;
-        return values[offset + index * roots + GpuTerrainRoots.FINAL_DENSITY];
+        return values[offset + index * roots + outputRoot];
+    }
+
+    private static int[] sequentialRoots(int count) {
+        int[] roots = new int[count];
+        for (int i = 0; i < count; i++) roots[i] = i;
+        return roots;
     }
 }

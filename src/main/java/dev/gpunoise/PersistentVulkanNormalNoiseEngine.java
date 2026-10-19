@@ -560,6 +560,17 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                                                                      ByteBuffer gridMetadata, int chunkCount,
                                                                      int samplesPerChunk, ByteBuffer outputMetadata,
                                                                      int blocksPerChunk) throws Exception {
+        int[] outputRoots = new int[graph.routerRootCount()];
+        for (int i = 0; i < outputRoots.length; i++) outputRoots[i] = i;
+        return submitGraphGridInterpolated(graph, gridMetadata, chunkCount, samplesPerChunk,
+                outputMetadata, blocksPerChunk, outputRoots);
+    }
+
+    synchronized GpuTerrainBatchResult submitGraphGridInterpolated(GpuDensityGraph graph,
+                                                                     ByteBuffer gridMetadata, int chunkCount,
+                                                                     int samplesPerChunk, ByteBuffer outputMetadata,
+                                                                     int blocksPerChunk,
+                                                                     int[] outputRootIndexes) throws Exception {
         if (chunkCount <= 0 || samplesPerChunk <= 0 || blocksPerChunk <= 0
                 || (long) chunkCount * samplesPerChunk > CAPACITY
                 || gridMetadata.remaining() < chunkCount * 32L
@@ -568,7 +579,16 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         if (graph == null) throw new IllegalArgumentException("terrain graph is not installed");
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
         int rootCount = graph.routerRootCount();
-        int outputRoots = GpuTerrainRuntime.terrainBlockOutputRootCount();
+        int outputRoots = outputRootIndexes.length;
+        if (outputRoots == 0) throw new IllegalArgumentException("grid interpolation needs at least one block output root");
+        int[] allBlockRootRegisters = packed.blockRootRegisters();
+        int[] blockRootRegisters = new int[outputRoots];
+        for (int i = 0; i < outputRoots; i++) {
+            int root = outputRootIndexes[i];
+            if (root < 0 || root >= allBlockRootRegisters.length)
+                throw new IllegalArgumentException("invalid terrain block output root " + root);
+            blockRootRegisters[i] = allBlockRootRegisters[root];
+        }
         int markerCount = graph.interpolatedMarkerCount();
         int cornerStride = rootCount + markerCount;
         int sampleCount = Math.multiplyExact(chunkCount, samplesPerChunk);
@@ -593,7 +613,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 put(samplerMetadata, packed.samplerMetadata(), stack); graphResourcesGraph = graph;
             }
             uploadInterpolatorMap(graph, stack);
-            uploadGraphRoots(graph.routerRoots(), packed.blockRootRegisters(), stack);
+            uploadGraphRoots(graph.routerRoots(), blockRootRegisters, stack);
             ByteBuffer metadata = outputMetadata.duplicate().order(ByteOrder.nativeOrder());
             metadata.limit(metadata.position() + chunkCount * GpuInterpolationBatch.METADATA_BYTES);
             put(interpolationMetadata, metadata, stack);
@@ -680,7 +700,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     submitToFenceNanos, stageGpuNanos, System.nanoTime() - readbackStarted);
             return new GpuTerrainBatchResult(new GpuTerrainRootsResult(corners, 0, corners.length,
                     rootCount),
-                    new GpuTerrainBlockResult(blocks, 0, blockCount, outputRoots,
+                    new GpuTerrainBlockResult(blocks, 0, blockCount, outputRootIndexes,
                             16, blocksPerChunk / 256, 16));
         }
     }
