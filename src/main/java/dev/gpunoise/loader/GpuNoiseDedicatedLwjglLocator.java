@@ -1,7 +1,7 @@
 package dev.gpunoise.loader;
 
-import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URL;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -131,18 +131,37 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
                     System.getProperty("os.name"), System.getProperty("os.arch"));
             return null;
         }
-        try (JarFile mod = new JarFile(modPayload.toFile()); ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+        Path modsDirectory = sourceJar.getParent();
+        Path gameDirectory = modsDirectory != null && modsDirectory.getParent() != null
+                ? modsDirectory.getParent()
+                : Paths.get(".").toAbsolutePath().normalize();
+        Path cacheDirectory = gameDirectory.resolve(".gpunoise/bootstrap");
+        Path temporary = null;
+        try {
+            Files.createDirectories(cacheDirectory);
+            temporary = Files.createTempFile(cacheDirectory, "lwjgl-natives-", ".jar.tmp");
+            var nativeDigest = MessageDigest.getInstance("SHA-256");
             Manifest manifest = new Manifest();
             Attributes attributes = manifest.getMainAttributes();
             attributes.putValue("Manifest-Version", "1.0");
             attributes.putValue("FMLModType", "LIBRARY");
             int copied = 0;
-            try (JarOutputStream output = new JarOutputStream(bytes, manifest)) {
+            try (JarFile mod = new JarFile(modPayload.toFile());
+                 OutputStream fileOutput = Files.newOutputStream(temporary);
+                 JarOutputStream output = new JarOutputStream(fileOutput, manifest)) {
                 var entries = mod.entries();
                 while (entries.hasMoreElements()) {
                     JarEntry entry = entries.nextElement();
                     if (entry.isDirectory() || !entry.getName().startsWith(nativePrefix)) continue;
-                    output.putNextEntry(new JarEntry(entry.getName()));
+                    nativeDigest.update(entry.getName().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    nativeDigest.update((byte) 0);
+                    nativeDigest.update(Long.toString(entry.getSize()).getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+                    nativeDigest.update((byte) 0);
+                    nativeDigest.update(Long.toString(entry.getCrc()).getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+                    nativeDigest.update((byte) '\n');
+                    JarEntry outputEntry = new JarEntry(entry.getName());
+                    outputEntry.setTime(0L);
+                    output.putNextEntry(outputEntry);
                     try (InputStream input = mod.getInputStream(entry)) {
                         input.transferTo(output);
                     }
@@ -152,40 +171,38 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
             }
             if (copied == 0) {
                 LOGGER.error("Embedded mod {} contains no LWJGL resources under {}", modPayload, nativePrefix);
+                Files.deleteIfExists(temporary);
                 return null;
             }
 
-            byte[] libraryBytes = bytes.toByteArray();
-            String digest = sha256(libraryBytes);
-            Path modsDirectory = sourceJar.getParent();
-            Path gameDirectory = modsDirectory != null && modsDirectory.getParent() != null
-                    ? modsDirectory.getParent()
-                    : Paths.get(".").toAbsolutePath().normalize();
-            Path cacheDirectory = gameDirectory.resolve(".gpunoise/bootstrap");
-            Files.createDirectories(cacheDirectory);
+            String digest = java.util.HexFormat.of().formatHex(nativeDigest.digest());
             String platform = nativePrefix.substring(0, nativePrefix.length() - 1).replace('/', '-');
             Path destination = cacheDirectory.resolve("lwjgl-natives-gpunoise-server-" + platform + "-"
                     + digest.substring(0, 16) + ".jar");
-            if (Files.isRegularFile(destination) && Files.size(destination) == libraryBytes.length) {
+            long generatedBytes = Files.size(temporary);
+            if (Files.isRegularFile(destination) && Files.size(destination) == generatedBytes) {
+                Files.deleteIfExists(temporary);
                 return destination;
             }
 
-            Path temporary = Files.createTempFile(cacheDirectory, "lwjgl-natives-", ".jar.tmp");
             try {
-                Files.write(temporary, libraryBytes);
-                try {
-                    Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING,
-                            StandardCopyOption.ATOMIC_MOVE);
-                } catch (AtomicMoveNotSupportedException ignored) {
-                    Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING);
-                }
-            } finally {
-                Files.deleteIfExists(temporary);
+                Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING,
+                        StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException ignored) {
+                Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING);
             }
             return destination;
         } catch (Exception failure) {
             LOGGER.error("Failed to prepare platform-specific LWJGL native library", failure);
             return null;
+        } finally {
+            if (temporary != null) {
+                try {
+                    Files.deleteIfExists(temporary);
+                } catch (Exception cleanupFailure) {
+                    LOGGER.debug("Could not clean temporary LWJGL native archive {}", temporary, cleanupFailure);
+                }
+            }
         }
     }
 
