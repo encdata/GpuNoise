@@ -5,11 +5,19 @@ intermediate representation, compiles the matching compute shaders to SPIR-V,
 and evaluates terrain samples through Vulkan. Mesa Lavapipe is used in CI to
 compile the shaders and exercise the Vulkan path without a physical GPU.
 
-## Custom density functions
+## Modded density functions
 
-Other mods can register an adapter for a custom `DensityFunction` before the
-server terrain graph is compiled. The adapter returns an equivalent graph
-composed from Minecraft density functions that GPU Noise already supports:
+Mods do not need to register with GPU Noise. During world startup GPU Noise
+inspects each custom `DensityFunction` implementation, lowers supported Java
+bytecode into its density IR, checks the result against the original Java
+function, and emits graph-specialized GLSL for Vulkan. The generated shader
+contains the graph's operations as direct instructions; it does not interpret
+a runtime opcode table for each sample. Functions with side effects or
+operations that cannot be represented stay on Minecraft's CPU path with a
+diagnostic naming the rejected class and behavior.
+
+For a density mod that already exposes a vanilla-equivalent graph, the
+optional adapter API can still provide an explicit mapping:
 
 ```java
 GpuDensityFunctionTranslators.register(MyTerrainDensity.class,

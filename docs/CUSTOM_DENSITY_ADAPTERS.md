@@ -1,12 +1,16 @@
-# Custom density adapters
+# Automatic custom density translation and optional adapters
 
-Adapters let a terrain mod provide a checked GPU representation for one of its
-custom DensityFunction types. They can describe an expression directly or
-lower to equivalent built-in Minecraft density operations. For functions with
-no adapter, GPU Noise also has a conservative bytecode frontend for a bounded
-subset of pure `compute(FunctionContext):double` methods. It checks complete
-control flow and rejects unsupported operations; it does not infer behavior
-from class or method names.
+Other mods do not need to call this API. GPU Noise first translates supported
+custom `compute(FunctionContext):double` implementations automatically from
+their Java bytecode, recursively inlining bounded pure helpers and capturing
+final configuration fields. It rejects side effects and unsupported calls and
+keeps the original Java function as the parity reference and fallback. This
+mirrors the graph-to-source compilation strategy used by C2ME OCL, with Vulkan
+GLSL generated from GPU Noise's validated IR.
+
+The adapter API below is an optional escape hatch for behavior that cannot be
+derived from bytecode or when a mod already provides an equivalent vanilla
+graph. It is not the normal compatibility path.
 
 Register adapters during mod initialization, before world terrain graphs are
 compiled. The registry freezes on the first graph compilation. An exact class

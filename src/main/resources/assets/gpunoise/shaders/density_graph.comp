@@ -332,6 +332,13 @@ double graphDivide(double x, double y){
     return x/y;
 #endif
 }
+double densityGradient(double from, double to, double t){
+#ifdef FAST_MATH
+    return graphAdd(from, graphMultiply(graphSubtract(to, from), t));
+#else
+    return mix(from, to, t);
+#endif
+}
 double mapValue(double x,uint op){
     if(op==5u)return abs(x); if(op==6u)return graphMultiply(x,x); if(op==7u)return graphMultiply(graphMultiply(x,x),x);
     if(op==8u)return x>0?x:graphMultiply(x,.5); if(op==9u)return x>0?x:graphMultiply(x,.25);
@@ -426,6 +433,7 @@ void main(){
     bool blockEvaluation=(reserved & BLOCK_EVALUATION)!=0u;
     uint nodeBase=blockEvaluation ? (rootCount >> 5u) : 0u;
     uint outputRootCount=blockEvaluation ? (rootCount & 31u) : rootCount;
+    // GPU_NOISE_STATIC_GRAPH_EVAL_BEGIN
     for(uint i=0;i<nodeCount;i++){
         Node n=nodes[nodeBase+i];
         uint op=n.ids.x; double v=0.0;
@@ -503,6 +511,7 @@ void main(){
         }
         values[n.meta.w]=v;
     }
+    // GPU_NOISE_STATIC_GRAPH_EVAL_END
 #ifdef GRID_INPUT
     uint interpolationCount=interpolatorMap[0];
     uint outputStride=rootCount+interpolationCount;

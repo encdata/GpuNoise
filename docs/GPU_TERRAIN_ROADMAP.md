@@ -367,13 +367,15 @@ returns its host slab even when asynchronous result handling fails. Its
 periodic batch-fill and latency counters will show whether this path is
 dispatch-bound or request-arrival-bound; CI results are still pending.
 
-C2ME OpenCL's density path specializes an optimized density AST into generated
-kernels and combines that with area-aligned batch execution and reusable
-buffers. GPU Noise now removes transparent wrappers and constant branches from
-its IR, but the Vulkan shader still interprets a generic opcode stream for each
-sample. A graph-keyed specialized SPIR-V path is the larger remaining
-compiler-side speed opportunity; it needs a runtime-safe compiler or another
-way to produce graph-specific SPIR-V without requiring a system `glslc`.
+C2ME OpenCL specializes an optimized density AST into generated source and
+combines it with area-aligned batches and reusable buffers. GPU Noise now uses
+the same compile-at-world-graph strategy for Vulkan: supported custom Java
+density methods lower automatically into the validated IR, and runtime
+shaderc emits a graph-specific GLSL evaluator with one static instruction per
+IR node. The per-sample dynamic opcode switch and graph-node fetch are removed.
+Mesa Lavapipe compiles and executes this generated path in worldgen CI. The
+chunk writer remains Minecraft-owned; Vulkan produces parity-checked density
+and interpolation data for the existing CPU terrain stages.
 
 ## Large-coordinate precision
 
