@@ -120,13 +120,15 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         try {
             while (!closed) {
                 Pending first = queue.poll();
-                if (first != null) addPending(first);
+                if (first != null && !first.future.isCancelled()) addPending(first);
                 while (pendingByLayout.isEmpty()) {
-                    addPending(queue.take());
+                    Pending next = queue.take();
+                    if (!next.future.isCancelled()) addPending(next);
                 }
                 long batchStarted = System.nanoTime();
                 long deadline = batchStarted + BATCH_WINDOW_NANOS;
                 BatchCandidate batchCandidate = largestNearbyBatch();
+                if (batchCandidate == null) continue;
                 int compatibleCount = batchCandidate.chunks;
                 int batchTarget = Math.min(TARGET_CHUNKS, batchCandidate.capacity);
                 int refreshAfterArrivals = candidateRefreshInterval(batchTarget - compatibleCount);
@@ -139,10 +141,12 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                             ? queue.poll(remaining, TimeUnit.NANOSECONDS)
                             : queue.poll();
                     if (next == null) break;
+                    if (next.future.isCancelled()) continue;
                     addPending(next);
                     arrivalsSinceRefresh++;
                     if (arrivalsSinceRefresh >= refreshAfterArrivals) {
                         batchCandidate = largestNearbyBatch();
+                        if (batchCandidate == null) break;
                         compatibleCount = batchCandidate.chunks;
                         batchTarget = Math.min(TARGET_CHUNKS, batchCandidate.capacity);
                         refreshAfterArrivals = candidateRefreshInterval(batchTarget - compatibleCount);
@@ -152,9 +156,14 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 // Candidate selection is exact at dispatch time. During the
                 // collection window, bounded refresh intervals avoid rescanning
                 // every spatial bucket for each individual C2ME arrival.
-                if (arrivalsSinceRefresh != 0) batchCandidate = largestNearbyBatch();
+                if (arrivalsSinceRefresh != 0) {
+                    batchCandidate = largestNearbyBatch();
+                    if (batchCandidate == null) continue;
+                }
                 Map<Long, ArrayDeque<Pending>> region = pendingByLayout.get(batchCandidate.layout);
+                if (region == null) continue;
                 ArrayDeque<Pending> seedQueue = region.get(batchCandidate.region);
+                if (seedQueue == null || seedQueue.isEmpty()) continue;
                 Pending seed = seedQueue.peekFirst();
                 int samplesPerChunk = seed.grid.sampleCount();
                 int maxChunks = batchCandidate.capacity;
@@ -171,6 +180,11 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                     if (candidateQueue == null) continue;
                     while (!candidateQueue.isEmpty() && batch.size() < maxChunks) {
                         Pending item = candidateQueue.peekFirst();
+                        if (item.future.isCancelled()) {
+                            candidateQueue.removeFirst();
+                            pendingChunks--;
+                            continue;
+                        }
                         if ((long) input + item.grid.sampleCount() > MAX_INPUT) break;
                         long itemOutputFloats = (long) blocksPerChunk(item.grid)
                                 * GpuTerrainRuntime.terrainBlockOutputRootCount();
@@ -187,6 +201,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                     if (batch.size() == maxChunks) break;
                 }
                 if (region.isEmpty()) pendingByLayout.remove(batchCandidate.layout);
+                if (batch.isEmpty()) continue;
                 dispatchCount.incrementAndGet();
                 totalChunksDispatched.addAndGet(batch.size());
                 totalSamplesDispatched.addAndGet(input);
@@ -224,6 +239,23 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         pendingChunks++;
     }
 
+    /** Removes canceled requests before they can consume GPU batch capacity. */
+    private void pruneCancelledPending() {
+        var layouts = pendingByLayout.entrySet().iterator();
+        while (layouts.hasNext()) {
+            Map<Long, ArrayDeque<Pending>> regions = layouts.next().getValue();
+            var regionEntries = regions.entrySet().iterator();
+            while (regionEntries.hasNext()) {
+                ArrayDeque<Pending> requests = regionEntries.next().getValue();
+                int before = requests.size();
+                requests.removeIf(item -> item.future.isCancelled());
+                pendingChunks -= before - requests.size();
+                if (requests.isEmpty()) regionEntries.remove();
+            }
+            if (regions.isEmpty()) layouts.remove();
+        }
+    }
+
     private static int candidateRefreshInterval(int chunksUntilTarget) {
         return Math.max(1, Math.min(16, chunksUntilTarget));
     }
@@ -248,6 +280,8 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     }
 
     private BatchCandidate largestNearbyBatch() {
+        pruneCancelledPending();
+        if (pendingByLayout.isEmpty()) return null;
         GridLayout bestLayout = null;
         long bestRegion = 0L;
         int bestCount = 0;
@@ -370,10 +404,13 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                     int cornerOffset0 = 0;
                     int blockOffset0 = 0;
                     for (Pending item : batch) {
-                        chunkLatency.record(completedAt - item.enqueuedNanos);
-                        if (failure != null) item.future.completeExceptionally(failure);
-                        else {
-                            item.future.complete(values.slice(cornerOffset0, item.grid.sampleCount(), blockOffset0, blocksPerChunk));
+                        if (!item.future.isDone()) {
+                            chunkLatency.record(completedAt - item.enqueuedNanos);
+                            if (failure != null) item.future.completeExceptionally(failure);
+                            else {
+                                item.future.complete(values.slice(cornerOffset0, item.grid.sampleCount(),
+                                        blockOffset0, blocksPerChunk));
+                            }
                         }
                         cornerOffset0 += item.grid.sampleCount();
                         blockOffset0 += blocksPerChunk;
