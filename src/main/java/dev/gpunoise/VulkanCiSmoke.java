@@ -624,8 +624,20 @@ public final class VulkanCiSmoke {
             };
             var substanceFuture = ring.submitAquiferSubstance(
                     GpuAquiferSubstance.pack(substanceCases), substanceCases.length);
+            // A complete overworld chunk contains more than the former
+            // 16,384-query limit. Ensure one substance dispatch can now hold
+            // a full chunk-sized batch without splitting or truncating it.
+            int chunkBatchSize = 16 * 16 * 384;
+            if (chunkBatchSize > GpuAquiferSubstance.MAX_QUERIES) {
+                throw new IllegalStateException("Aquifer substance capacity is smaller than a 384-block chunk");
+            }
+            GpuAquiferSubstance.Input[] chunkBatch = new GpuAquiferSubstance.Input[chunkBatchSize];
+            java.util.Arrays.fill(chunkBatch, positiveDensityMaterialCase);
+            var chunkSubstanceFuture = ring.submitAquiferSubstance(
+                    GpuAquiferSubstance.pack(chunkBatch), chunkBatch.length);
             int[] nearest = nearestFuture.get(60, TimeUnit.SECONDS);
             int[] substanceResults = substanceFuture.get(60, TimeUnit.SECONDS);
+            int[] chunkSubstanceResults = chunkSubstanceFuture.get(60, TimeUnit.SECONDS);
             assertConstantResults("queued terrain grid", queuedGrid.get(60, TimeUnit.SECONDS), 8);
             System.out.println("Vulkan CI smoke: four-center aquifer selection completed");
             for (int q = 0; q < queryCount; q++) {
@@ -639,6 +651,17 @@ public final class VulkanCiSmoke {
                 }
             }
             System.out.println("Vulkan CI smoke: aquifer substance decisions completed");
+            if (chunkSubstanceResults.length != chunkBatchSize * GpuAquiferSubstance.OUTPUT_INTS) {
+                throw new IllegalStateException("Chunk-sized aquifer batch returned a truncated output");
+            }
+            for (int i = 0; i < chunkBatchSize; i++) {
+                int base = i * GpuAquiferSubstance.OUTPUT_INTS;
+                if (chunkSubstanceResults[base] != GpuAquiferSubstance.RETURN_DEFAULT
+                        || chunkSubstanceResults[base + 1] != 0 || chunkSubstanceResults[base + 2] != 0) {
+                    throw new IllegalStateException("Chunk-sized aquifer decision mismatch at row " + i);
+                }
+            }
+            System.out.println("Vulkan CI smoke: full-chunk aquifer batch completed (98,304 blocks, one dispatch)");
             for (int i = 0; i < substanceCases.length; i++) {
                 int[] expected = GpuAquiferSubstance.evaluate(substanceCases[i]);
                 for (int field = 0; field < GpuAquiferSubstance.OUTPUT_INTS; field++) {

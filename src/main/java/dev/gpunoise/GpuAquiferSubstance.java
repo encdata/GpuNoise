@@ -7,7 +7,12 @@ import java.nio.ByteOrder;
 public final class GpuAquiferSubstance {
     public static final int RECORD_BYTES = 80;
     public static final int OUTPUT_INTS = 4;
-    public static final int MAX_QUERIES = GpuAquiferNearestThree.MAX_QUERIES;
+    /**
+     * Substance evaluation is a compact one-dispatch pass over the full block
+     * volume. Keep center selection's smaller limit independent: its records
+     * are wider and can be split without forcing additional substance submits.
+     */
+    public static final int MAX_QUERIES = PersistentVulkanNormalNoiseEngine.CAPACITY;
     public static final int OTHER = 0;
     public static final int WATER = GpuAquiferPressure.WATER;
     public static final int LAVA = GpuAquiferPressure.LAVA;

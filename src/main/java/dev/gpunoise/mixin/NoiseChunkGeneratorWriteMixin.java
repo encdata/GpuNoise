@@ -129,6 +129,8 @@ abstract class NoiseChunkGeneratorWriteMixin {
             try {
                 return gpunoise$doFill(blender, structures, randomState, chunk, minCellY, cellCountY);
             } finally {
+                dev.gpunoise.GpuTerrainDensityParity.reportChunk(
+                        chunk.getPos().x, chunk.getPos().z);
                 GpuTerrainProfiler.endFill(fillStart);
                 state.debugVoidTerrainCached = false;
                 GpuTerrainRuntime.clearFillCache();

@@ -20,6 +20,13 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private static final boolean FAST_GRAPH_MATH = Boolean.getBoolean("gpunoise.fastMath");
     static final int CAPACITY = 262_144;
     static final int GRAPH_NODE_CAPACITY = 2048;
+    private static final long AQUIFER_INPUT_BYTES = Math.max(
+            (long) GpuAquiferNearestThree.MAX_QUERIES * GpuAquiferNearestThree.RECORD_BYTES,
+            (long) GpuAquiferSubstance.MAX_QUERIES * GpuAquiferSubstance.RECORD_BYTES);
+    private static final long AQUIFER_OUTPUT_BYTES = Math.max(
+            (long) GpuAquiferNearestThree.MAX_QUERIES * GpuAquiferNearestThree.OUTPUT_INTS,
+            (long) GpuAquiferSubstance.MAX_QUERIES * GpuAquiferSubstance.OUTPUT_INTS)
+            * Integer.BYTES;
     // interpolationOutput stores the compact per-block final-density output.
     static final int INTERPOLATION_OUTPUT_FLOATS = CAPACITY * 16;
     private final VkInstance instance;
@@ -99,10 +106,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
             interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack); interpolationOutput = buffer((long) CAPACITY * 16L * Float.BYTES, stack);
             aquiferPressureInputs = hostVisibleBuffer((long) CAPACITY * GpuAquiferPressure.RECORD_BYTES, stack);
-            aquiferNearestInputs = hostVisibleBuffer((long) GpuAquiferNearestThree.MAX_QUERIES
-                    * GpuAquiferNearestThree.RECORD_BYTES, stack);
-            aquiferNearestOutput = buffer((long) GpuAquiferNearestThree.MAX_QUERIES
-                    * GpuAquiferNearestThree.OUTPUT_INTS * Integer.BYTES, stack);
+            aquiferNearestInputs = hostVisibleBuffer(AQUIFER_INPUT_BYTES, stack);
+            aquiferNearestOutput = buffer(AQUIFER_OUTPUT_BYTES, stack);
             permutations = deviceLocalBuffer(8 * 1024 * 1024L, stack); octaves = deviceLocalBuffer(8 * 1024 * 1024L, stack); samplerMetadata = deviceLocalBuffer(64 * 1024L, stack);
             shader = shader(stack); descriptorLayout = descriptorLayout(stack); pipelineLayout = pipelineLayout(stack);
             pipeline = pipeline(stack); descriptorPool = descriptorPool(stack); descriptorSet = descriptorSet(stack);
@@ -166,10 +171,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
             interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack); interpolationOutput = buffer((long) CAPACITY * 16L * Float.BYTES, stack);
             aquiferPressureInputs = hostVisibleBuffer((long) CAPACITY * GpuAquiferPressure.RECORD_BYTES, stack);
-            aquiferNearestInputs = hostVisibleBuffer((long) GpuAquiferNearestThree.MAX_QUERIES
-                    * GpuAquiferNearestThree.RECORD_BYTES, stack);
-            aquiferNearestOutput = buffer((long) GpuAquiferNearestThree.MAX_QUERIES
-                    * GpuAquiferNearestThree.OUTPUT_INTS * Integer.BYTES, stack);
+            aquiferNearestInputs = hostVisibleBuffer(AQUIFER_INPUT_BYTES, stack);
+            aquiferNearestOutput = buffer(AQUIFER_OUTPUT_BYTES, stack);
             permutations = deviceLocalBuffer(8 * 1024 * 1024L, stack);
             octaves = deviceLocalBuffer(8 * 1024 * 1024L, stack);
             samplerMetadata = deviceLocalBuffer(64 * 1024L, stack);
