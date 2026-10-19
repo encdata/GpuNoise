@@ -1268,9 +1268,10 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long graphPipeline(long shaderModule, MemoryStack s){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(shaderModule).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(graphPipelineLayout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),"block graph pipeline");return h.get(0);}
     private long gridPipeline(MemoryStack s){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(gridShader).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(graphPipelineLayout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),"grid pipeline");return h.get(0);}
     private long compileRuntimeShader(String resource, String programName, Map<String, String> definitions,
-                                      GpuDensityGraphBuffer.Packed packed, boolean blockProgram) {
+                                      GpuDensityGraph graph, GpuDensityGraphBuffer.Packed packed,
+                                      boolean blockProgram) {
         ByteBuffer spirv = GpuRuntimeShaderCompiler.compileResource(resource, programName, definitions,
-                packed, blockProgram);
+                graph, packed, blockProgram);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkShaderModuleCreateInfo create = VkShaderModuleCreateInfo.calloc(stack)
                     .sType$Default().pCode(spirv);
@@ -1292,12 +1293,12 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         defines.put("REGISTER_COUNT", Integer.toString(variant));
         if (FAST_GRAPH_MATH) defines.put("FAST_MATH", "1");
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
-        long nextGraphShader = compileRuntimeShader(source, "density graph", defines, packed, false);
+        long nextGraphShader = compileRuntimeShader(source, "density graph", defines, graph, packed, false);
         long nextGridShader;
         try {
             Map<String, String> gridDefines = new java.util.HashMap<>(defines);
             gridDefines.put("GRID_INPUT", "1");
-            nextGridShader = compileRuntimeShader(source, "terrain grid", gridDefines, packed, false);
+            nextGridShader = compileRuntimeShader(source, "terrain grid", gridDefines, graph, packed, false);
         } catch (Throwable failure) {
             vkDestroyShaderModule(device, nextGraphShader, null);
             throw failure;
@@ -1334,7 +1335,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         long nextShader = compileRuntimeShader("/assets/gpunoise/shaders/density_graph.comp",
                 "block density graph", FAST_GRAPH_MATH
                         ? Map.of("REGISTER_COUNT", Integer.toString(variant), "FAST_MATH", "1")
-                        : Map.of("REGISTER_COUNT", Integer.toString(variant)), packed, true);
+                        : Map.of("REGISTER_COUNT", Integer.toString(variant)), graph, packed, true);
         long nextPipeline;
         try {
             nextPipeline = graphPipeline(nextShader, stack);

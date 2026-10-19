@@ -1,6 +1,7 @@
 package dev.gpunoise;
 
 import java.util.List;
+import java.util.TreeSet;
 import net.minecraft.world.level.levelgen.synth.NormalNoise;
 import net.minecraft.world.level.levelgen.DensityFunction;
 
@@ -91,6 +92,19 @@ record GpuDensityGraph(List<Node> nodes, int[] routerRoots, List<NormalNoise> no
     }
 
     int routerRootCount() { return routerRoots.length; }
+
+    /** Mod supplied density implementations that contributed nodes to this compiled graph. */
+    List<String> customDensityFunctionTypes() {
+        TreeSet<String> types = new TreeSet<>();
+        for (DensityFunction function : sourceFunctions) {
+            Class<?> type = function.getClass();
+            String name = type.getName();
+            if (!name.startsWith("net.minecraft.") && !name.startsWith("dev.gpunoise.")) {
+                types.add(name);
+            }
+        }
+        return List.copyOf(types);
+    }
 
     /** Registers whose NoiseChunk marker requires per-function cell interpolation. */
     int[] interpolatedMarkerRegisters() {
