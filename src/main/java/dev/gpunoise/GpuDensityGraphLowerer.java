@@ -18,6 +18,12 @@ final class GpuDensityGraphLowerer {
     private GpuDensityGraphLowerer() {}
 
     private record NodeKey(String opcode, List<Integer> children, List<Long> constants, String payload) {}
+    private record NodePair(int left, int right) {}
+    private static final Set<String> PURE_BRANCH_VALUES = Set.of(
+            "Constant", "Noise", "Ap2", "MulOrAdd", "Clamp", "Mapped", "GpuCoordinate",
+            "GpuMath", "GpuCompare", "GpuSelect", "GpuInt", "GpuFloat", "GpuCast",
+            "Shift", "ShiftA", "ShiftB", "ShiftedNoise", "Spline", "BlendedNoise",
+            "YClampedGradient", "BlendDensity", "RangeChoice", "WeirdScaledSampler", "GpuNoise3");
 
     static GpuDensityGraph lower(GpuDensityGraph graph) {
         validateGraphShape(graph);
@@ -296,7 +302,7 @@ final class GpuDensityGraphLowerer {
     private static int constantBranch(GpuDensityGraph graph, GpuDensityGraph.Node node) {
         int[] children = node.children();
         if (node.opcode().equals("RangeChoice") && children.length == 3) {
-            if (children[1] == children[2]) return children[1];
+            if (samePureBranchValue(graph, children[1], children[2])) return children[1];
             double[] bounds = node.constants();
             if (bounds.length < 2) return -1;
             Double input = constantValue(graph, children[0]);
@@ -306,11 +312,42 @@ final class GpuDensityGraphLowerer {
             return input >= minInclusive && input < maxExclusive ? children[1] : children[2];
         }
         if (node.opcode().equals("GpuSelect") && children.length == 3) {
-            if (children[1] == children[2]) return children[1];
+            if (samePureBranchValue(graph, children[1], children[2])) return children[1];
             Double condition = constantValue(graph, children[0]);
             if (condition != null) return condition != 0.0 ? children[1] : children[2];
         }
         return -1;
+    }
+
+    /** Compares branch values structurally without recursion or marker/cache identity assumptions. */
+    private static boolean samePureBranchValue(GpuDensityGraph graph, int leftRoot, int rightRoot) {
+        if (leftRoot == rightRoot) return true;
+        List<GpuDensityGraph.Node> nodes = graph.nodes();
+        ArrayDeque<NodePair> pending = new ArrayDeque<>();
+        Set<NodePair> visited = new java.util.HashSet<>();
+        pending.addLast(new NodePair(leftRoot, rightRoot));
+        while (!pending.isEmpty()) {
+            NodePair pair = pending.removeLast();
+            if (pair.left() == pair.right() || !visited.add(pair)) continue;
+            GpuDensityGraph.Node left = nodes.get(pair.left());
+            GpuDensityGraph.Node right = nodes.get(pair.right());
+            if (!left.opcode().equals(right.opcode()) || !PURE_BRANCH_VALUES.contains(left.opcode())
+                    || !java.util.Objects.equals(left.payload(), right.payload())) return false;
+            double[] leftConstants = left.constants();
+            double[] rightConstants = right.constants();
+            if (leftConstants.length != rightConstants.length) return false;
+            for (int index = 0; index < leftConstants.length; index++) {
+                if (Double.doubleToRawLongBits(leftConstants[index])
+                        != Double.doubleToRawLongBits(rightConstants[index])) return false;
+            }
+            int[] leftChildren = left.children();
+            int[] rightChildren = right.children();
+            if (leftChildren.length != rightChildren.length) return false;
+            for (int child = 0; child < leftChildren.length; child++) {
+                pending.addLast(new NodePair(leftChildren[child], rightChildren[child]));
+            }
+        }
+        return true;
     }
 
     /** Reads constants through only transparent wrappers, matching the float-backed shader ABI. */

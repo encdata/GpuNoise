@@ -543,6 +543,21 @@ final class GpuDensityExpressionSmoke {
             throw new AssertionError("constant range/select branches should prune unused shader subgraphs");
         }
         GpuDensityGraphBuffer.pack(lowered);
+
+        GpuDensityGraph equivalentBranches = new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("GpuCoordinate", new int[0], new double[0], "X"),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{12.0}, null),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{12.0}, null),
+                        new GpuDensityGraph.Node("RangeChoice", new int[]{0, 1, 2}, new double[]{-1.0, 1.0}, null)),
+                new int[]{3}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(source, source, source, source));
+        GpuDensityGraph equivalentLowered = GpuDensityGraphLowerer.lower(equivalentBranches);
+        if (equivalentLowered.nodes().size() != 1
+                || !equivalentLowered.nodes().get(0).opcode().equals("Constant")
+                || equivalentLowered.nodes().get(0).constants()[0] != 12.0) {
+            throw new AssertionError("structurally identical range branches should eliminate selector and condition nodes");
+        }
     }
 
     private static void verifyTerrainDecisionFallback() {
