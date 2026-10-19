@@ -89,7 +89,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         }
         if (GpuTerrainRuntime.terrainBlockOutputEnabled()) {
             GpuDensityGraph graph = GpuTerrainRuntime.currentTerrainGraph();
-            int markerCount = graph == null ? 0 : graph.interpolatedMarkerRegisters().length;
+            int markerCount = graph == null ? 0 : graph.interpolatedMarkerCount();
             if ((long) blocksPerChunk(grid) * markerCount
                     > PersistentVulkanNormalNoiseEngine.INTERPOLATED_INPUT_FLOATS) {
                 future.completeExceptionally(new IllegalArgumentException(
@@ -216,7 +216,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
             maxChunks = Math.min(maxChunks,
                     (int) (PersistentVulkanNormalNoiseEngine.INTERPOLATION_OUTPUT_FLOATS / floatsPerChunk));
             GpuDensityGraph graph = GpuTerrainRuntime.currentTerrainGraph();
-            int markerCount = graph == null ? 0 : graph.interpolatedMarkerRegisters().length;
+            int markerCount = graph == null ? 0 : graph.interpolatedMarkerCount();
             if (markerCount > 0) {
                 long markersPerChunk = (long) blocksPerChunk(grid) * markerCount;
                 maxChunks = Math.min(maxChunks,

@@ -7,7 +7,8 @@ import net.minecraft.world.level.levelgen.DensityFunction;
 /** Immutable serialized form of one vanilla NoiseRouter graph for GPU compilation. */
 record GpuDensityGraph(List<Node> nodes, int[] routerRoots, List<NormalNoise> noises, List<Spline> splines, List<Blended> blended,
                        List<DensityFunction> sourceFunctions, int registerCount,
-                       int supportedRouterRootMask, String[] unsupportedRouterRootReasons) {
+                       int supportedRouterRootMask, String[] unsupportedRouterRootReasons,
+                       int interpolatedMarkerCount) {
     record Node(String opcode, int[] children, double[] constants, String payload, int register) {
         Node(String opcode, int[] children, double[] constants, String payload) {
             this(opcode, children, constants, payload, -1);
@@ -42,6 +43,13 @@ record GpuDensityGraph(List<Node> nodes, int[] routerRoots, List<NormalNoise> no
     }
 
     GpuDensityGraph(List<Node> nodes, int[] routerRoots, List<NormalNoise> noises, List<Spline> splines,
+                    List<Blended> blended, List<DensityFunction> sourceFunctions, int registerCount,
+                    int supportedRouterRootMask, String[] unsupportedRouterRootReasons) {
+        this(nodes, routerRoots, noises, splines, blended, sourceFunctions, registerCount,
+                supportedRouterRootMask, unsupportedRouterRootReasons, 0);
+    }
+
+    GpuDensityGraph(List<Node> nodes, int[] routerRoots, List<NormalNoise> noises, List<Spline> splines,
                     List<Blended> blended, List<DensityFunction> sourceFunctions,
                     int supportedRouterRootMask, String[] unsupportedRouterRootReasons) {
         this(nodes, routerRoots, noises, splines, blended, sourceFunctions, nodes.size(),
@@ -56,6 +64,7 @@ record GpuDensityGraph(List<Node> nodes, int[] routerRoots, List<NormalNoise> no
         splines = List.copyOf(splines);
         blended = List.copyOf(blended);
         sourceFunctions = List.copyOf(sourceFunctions);
+        interpolatedMarkerCount = countInterpolatedMarkers(nodes);
         if (registerCount <= 0) throw new IllegalArgumentException("register count must be positive");
         if (routerRoots.length > Integer.SIZE - 1
                 || unsupportedRouterRootReasons.length != routerRoots.length) {
@@ -83,10 +92,22 @@ record GpuDensityGraph(List<Node> nodes, int[] routerRoots, List<NormalNoise> no
 
     /** Registers whose NoiseChunk marker requires per-function cell interpolation. */
     int[] interpolatedMarkerRegisters() {
-        return nodes.stream()
-                .filter(node -> node.opcode().equals("Marker") && "Interpolated".equals(node.payload()))
-                .mapToInt(Node::register)
-                .toArray();
+        int[] registers = new int[interpolatedMarkerCount];
+        int index = 0;
+        for (Node node : nodes) {
+            if (node.opcode().equals("Marker") && "Interpolated".equals(node.payload())) {
+                registers[index++] = node.register();
+            }
+        }
+        return registers;
+    }
+
+    private static int countInterpolatedMarkers(List<Node> nodes) {
+        int count = 0;
+        for (Node node : nodes) {
+            if (node.opcode().equals("Marker") && "Interpolated".equals(node.payload())) count++;
+        }
+        return count;
     }
 
     private static int completeRootMask(int roots) {

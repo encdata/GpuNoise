@@ -404,7 +404,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         if (graph == null) throw new IllegalStateException("GPU terrain graph is not installed");
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
         int rootCount = graph.routerRoots().length;
-        int resultStride = rootCount + graph.interpolatedMarkerRegisters().length;
+        int resultStride = rootCount + graph.interpolatedMarkerCount();
         if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16) throw new IllegalArgumentException("density graph exceeds GPU capacity");
         long preparationStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
         try (MemoryStack stack = MemoryStack.stackPush()) {

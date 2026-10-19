@@ -419,6 +419,20 @@ public final class VulkanCiSmoke {
             System.out.println("Vulkan CI smoke: anisotropic terrain interpolation completed");
             assertAnisotropicInterpolationResults(anisotropicResults);
 
+            // Axis-coded linear values cannot expose interpolation-order or
+            // float-contraction differences. Use non-associative corner data
+            // and compare the production kernel bit-for-bit with the
+            // Y-then-X-then-Z float sequence used by NoiseChunk's cache.
+            float[] roundingCorners = {
+                    -1.0e20f, -1.0e5f, -100.0f, 1.0e10f,
+                    1.0e20f, -1.0e10f, -1.0e10f, 1.0e-5f
+            };
+            float[] roundingResults = ring.submitInterpolation(roundingCorners,
+                            GpuInterpolationBatch.metadata(1, 1, 1, 1, 2, 2, 8, 8),
+                            1, 8, 1, 1)
+                    .get(60, TimeUnit.SECONDS);
+            assertVanillaInterpolationRounding(roundingResults, roundingCorners);
+
             // Production chunks reuse shared lattice corners and interleave
             // twelve terrain roots at each grid sample. Exercise both strides
             // across multiple cells, including samples on cell boundaries.
@@ -773,7 +787,7 @@ public final class VulkanCiSmoke {
         }
 
         System.out.println("Vulkan CI smoke passed on " + device.name()
-                + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, and shared 12-root terrain lattices; aquifer pressure, four-center selection, and vanilla/C2ME substance decisions matched Java reference cases.");
+                + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, shared 12-root terrain lattices, and non-associative Y-X-Z float rounding; aquifer pressure, four-center selection, and vanilla/C2ME substance decisions matched Java reference cases.");
     }
 
     private static void verifyTranslatorRegistry() {
@@ -924,6 +938,28 @@ public final class VulkanCiSmoke {
             float expected = x * 0.125f + y * 0.25f + z;
             if (Math.abs(values[index] - expected) > 1.0e-6f) {
                 throw new IllegalStateException("anisotropic interpolation spacing mismatch at sample " + index
+                        + ": expected " + expected + ", got " + values[index]);
+            }
+        }
+    }
+
+    private static void assertVanillaInterpolationRounding(float[] values, float[] corners) {
+        if (values.length != 8 || corners.length != 8) {
+            throw new IllegalStateException("rounding interpolation fixture has an invalid size");
+        }
+        for (int index = 0; index < values.length; index++) {
+            float tx = (index & 1) * 0.5f;
+            float tz = ((index >> 1) & 1) * 0.5f;
+            float ty = ((index >> 2) & 1) * 0.5f;
+            float y00 = corners[0] + (corners[4] - corners[0]) * ty;
+            float y10 = corners[2] + (corners[6] - corners[2]) * ty;
+            float y01 = corners[1] + (corners[5] - corners[1]) * ty;
+            float y11 = corners[3] + (corners[7] - corners[3]) * ty;
+            float x0 = y00 + (y10 - y00) * tx;
+            float x1 = y01 + (y11 - y01) * tx;
+            float expected = x0 + (x1 - x0) * tz;
+            if (Float.floatToIntBits(values[index]) != Float.floatToIntBits(expected)) {
+                throw new IllegalStateException("vanilla interpolation rounding mismatch at sample " + index
                         + ": expected " + expected + ", got " + values[index]);
             }
         }

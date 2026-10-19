@@ -344,7 +344,7 @@ public final class GpuTerrainRuntime {
         return ring.submitGraphRootsGrid(metadata, chunkCount, samplesPerChunk)
                 .thenApply(values -> {
                     int roots = graph.routerRoots().length;
-                    int markers = graph.interpolatedMarkerRegisters().length;
+                    int markers = graph.interpolatedMarkerCount();
                     return new GpuTerrainRootsResult(values, 0, values.length, roots, roots + markers, markers);
                 });
     }
@@ -377,8 +377,8 @@ public final class GpuTerrainRuntime {
                             new GpuTerrainRootsResult(values, 0, values.length,
                                     terrainGraph.routerRoots().length,
                                     terrainGraph.routerRoots().length
-                                            + terrainGraph.interpolatedMarkerRegisters().length,
-                                    terrainGraph.interpolatedMarkerRegisters().length),
+                                            + terrainGraph.interpolatedMarkerCount(),
+                                    terrainGraph.interpolatedMarkerCount()),
                             new GpuTerrainBlockResult(new float[0], 0, 0, 1, 16, 0, 16)));
         }
         return ring.submitGraphGridInterpolated(gridMetadata, chunkCount, samplesPerChunk,

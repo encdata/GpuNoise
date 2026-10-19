@@ -432,7 +432,7 @@ public final class GpuChunkDensityCache {
         }
         if (BLOCK_OUTPUT_LOGGED.compareAndSet(false, true)) {
             GpuDensityGraph graph = GpuTerrainRuntime.currentTerrainGraph();
-            int interpolatedMarkers = graph == null ? 0 : graph.interpolatedMarkerRegisters().length;
+            int interpolatedMarkers = graph == null ? 0 : graph.interpolatedMarkerCount();
             GpuNoise.LOGGER.info("GPU per-block terrain output materialized: blocks={}x{}x16, roots={}, interpolatedMarkers={}",
                     16, maxRelativeY, blocks.rootCount(), interpolatedMarkers);
         }
