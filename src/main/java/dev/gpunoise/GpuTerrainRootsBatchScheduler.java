@@ -201,7 +201,10 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                     if (batch.size() == maxChunks) break;
                 }
                 if (region.isEmpty()) pendingByLayout.remove(batchCandidate.layout);
+                batch.removeIf(item -> item.future.isCancelled());
                 if (batch.isEmpty()) continue;
+                input = 0;
+                for (Pending item : batch) input = Math.addExact(input, item.grid.sampleCount());
                 dispatchCount.incrementAndGet();
                 totalChunksDispatched.addAndGet(batch.size());
                 totalSamplesDispatched.addAndGet(input);
@@ -209,7 +212,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 long queueWaitNanos = 0L;
                 for (Pending item : batch) queueWaitNanos += System.nanoTime() - item.enqueuedNanos;
                 totalQueueWaitNanos.addAndGet(queueWaitNanos);
-                dispatch(batch, samplesPerChunk, input);
+                dispatch(batch, samplesPerChunk);
             }
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
@@ -355,7 +358,11 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         return ((long) regionX << 32) ^ (regionZ & 0xffffffffL);
     }
 
-    private void dispatch(List<Pending> batch, int samplesPerChunk, int inputCount) {
+    private void dispatch(List<Pending> batch, int samplesPerChunk) {
+        batch.removeIf(item -> item.future.isCancelled());
+        if (batch.isEmpty()) return;
+        int inputCount = 0;
+        for (Pending item : batch) inputCount = Math.addExact(inputCount, item.grid.sampleCount());
         DispatchMetadata buffers;
         try {
             buffers = metadataPool.take();
@@ -392,6 +399,10 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         metadata.flip();
         if (!blockOutput) outputMetadata.limit(0);
         outputMetadata.flip();
+        if (batch.stream().allMatch(item -> item.future.isCancelled())) {
+            metadataPool.offer(buffers);
+            return;
+        }
         if (blockOutput) {
             totalBlockOutputBytes.addAndGet((long) batch.size() * blocksPerChunk * outputRoots * Float.BYTES);
         }
