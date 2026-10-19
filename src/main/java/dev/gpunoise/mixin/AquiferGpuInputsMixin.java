@@ -120,8 +120,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         final int minX = cache.minX(), minY = cache.minY(), minZ = cache.minZ();
         final int height = cache.height();
         GpuDecision[] decisions = new GpuDecision[Math.multiplyExact(height, 256)];
-        List<GpuAquiferSubstance.Input> inputs = new ArrayList<>();
-        List<PendingDecision> pending = new ArrayList<>();
+        List<AquiferQuery> queries = new ArrayList<>();
         Map<GridNeighborhood, int[][]> neighborhoods = new HashMap<>();
         int directLavaDecisions = 0;
 
@@ -146,67 +145,121 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         centers = GpuAquiferNearestThree.centersForQuery(randomFactory, new int[]{x, y, z});
                         neighborhoods.put(key, centers);
                     }
-                    int[] selected = GpuAquiferNearestThree.select(new int[]{x, y, z}, centers);
-                    Aquifer.FluidStatus status0 = gpunoise$getAquiferStatus(
-                            BlockPos.asLong(centers[selected[0]][0], centers[selected[0]][1], centers[selected[0]][2]));
-                    Aquifer.FluidStatus status1 = gpunoise$getAquiferStatus(
-                            BlockPos.asLong(centers[selected[1]][0], centers[selected[1]][1], centers[selected[1]][2]));
-                    Aquifer.FluidStatus status2 = gpunoise$getAquiferStatus(
-                            BlockPos.asLong(centers[selected[2]][0], centers[selected[2]][1], centers[selected[2]][2]));
                     double barrier = cache.aquiferBarrier(x, y, z);
                     if (!Double.isFinite(barrier)) continue;
-                    BlockState nearestState = status0.at(y);
                     boolean belowIsLava = globalFluidPicker.computeFluid(x, y - 1, z)
                             .at(y - 1).is(Blocks.LAVA);
-                    inputs.add(new GpuAquiferSubstance.Input(density, barrier, y,
-                            gpunoise$fluidLevel(status0), gpunoise$fluidLevel(status1),
-                            gpunoise$fluidLevel(status2),
-                            selected[3], selected[4], selected[5],
-                            gpunoise$fluidKind(status0.at(y)), gpunoise$fluidKind(status1.at(y)),
-                            gpunoise$fluidKind(status2.at(y)), 0, false, belowIsLava, 0));
-                    pending.add(new PendingDecision(index, nearestState,
-                            new DensityFunction.SinglePointContext(x, y, z), density));
+                    queries.add(new AquiferQuery(index, x, y, z, density, barrier,
+                            belowIsLava, centers));
                 }
             }
         }
 
-        List<CompletableFuture<int[]>> batches = new ArrayList<>();
+        List<CompletableFuture<int[]>> nearestBatches = new ArrayList<>();
+        for (int offset = 0; offset < queries.size(); offset += GpuAquiferNearestThree.MAX_QUERIES) {
+            int count = Math.min(GpuAquiferNearestThree.MAX_QUERIES, queries.size() - offset);
+            int[][] points = new int[count][3];
+            int[][][] candidates = new int[count][][];
+            for (int i = 0; i < count; i++) {
+                AquiferQuery query = queries.get(offset + i);
+                points[i][0] = query.x;
+                points[i][1] = query.y;
+                points[i][2] = query.z;
+                candidates[i] = query.centers;
+            }
+            nearestBatches.add(GpuTerrainRuntime.submitAquiferNearestThree(
+                    GpuAquiferNearestThree.pack(points, candidates), count).toCompletableFuture());
+        }
+        CompletableFuture.allOf(nearestBatches.toArray(CompletableFuture[]::new)).join();
+
+        List<GpuAquiferSubstance.Input> inputs = new ArrayList<>();
+        List<PendingDecision> pending = new ArrayList<>();
+        int nearestParitySamples = 0;
+        int nearestParityMismatches = 0;
+        int queryOffset = 0;
+        for (CompletableFuture<int[]> batch : nearestBatches) {
+            int[] selectedRows = batch.join();
+            for (int row = 0; row < selectedRows.length / GpuAquiferNearestThree.OUTPUT_INTS; row++) {
+                AquiferQuery query = queries.get(queryOffset++);
+                int base = row * GpuAquiferNearestThree.OUTPUT_INTS;
+                int first = selectedRows[base], second = selectedRows[base + 1], third = selectedRows[base + 2];
+                int distance0 = selectedRows[base + 3], distance1 = selectedRows[base + 4];
+                int distance2 = selectedRows[base + 5];
+                if (gpunoise$verifyAquifer) {
+                    int[] expectedNearest = GpuAquiferNearestThree.select(
+                            new int[]{query.x, query.y, query.z}, query.centers);
+                    nearestParitySamples++;
+                    if (selectedRows[base] != expectedNearest[0]
+                            || selectedRows[base + 1] != expectedNearest[1]
+                            || selectedRows[base + 2] != expectedNearest[2]
+                            || distance0 != expectedNearest[3] || distance1 != expectedNearest[4]
+                            || distance2 != expectedNearest[5]) {
+                        nearestParityMismatches++;
+                        continue;
+                    }
+                }
+                if (first < 0 || first >= GpuAquiferNearestThree.CANDIDATES
+                        || second < 0 || second >= GpuAquiferNearestThree.CANDIDATES
+                        || third < 0 || third >= GpuAquiferNearestThree.CANDIDATES
+                        || first == second || first == third || second == third
+                        || distance0 < 0 || distance1 < 0 || distance2 < 0) continue;
+                Aquifer.FluidStatus status0 = gpunoise$getAquiferStatus(BlockPos.asLong(
+                        query.centers[first][0], query.centers[first][1], query.centers[first][2]));
+                Aquifer.FluidStatus status1 = gpunoise$getAquiferStatus(BlockPos.asLong(
+                        query.centers[second][0], query.centers[second][1], query.centers[second][2]));
+                Aquifer.FluidStatus status2 = gpunoise$getAquiferStatus(BlockPos.asLong(
+                        query.centers[third][0], query.centers[third][1], query.centers[third][2]));
+                BlockState nearestState = status0.at(query.y);
+                inputs.add(new GpuAquiferSubstance.Input(query.density, query.barrier, query.y,
+                        gpunoise$fluidLevel(status0), gpunoise$fluidLevel(status1),
+                        gpunoise$fluidLevel(status2), distance0, distance1, distance2,
+                        gpunoise$fluidKind(status0.at(query.y)), gpunoise$fluidKind(status1.at(query.y)),
+                        gpunoise$fluidKind(status2.at(query.y)), 0, false, query.belowIsLava, 0));
+                pending.add(new PendingDecision(query.index, nearestState,
+                        new DensityFunction.SinglePointContext(query.x, query.y, query.z), query.density));
+            }
+        }
+        if (gpunoise$verifyAquifer) {
+            nearestParityMismatches += queries.size() - nearestParitySamples;
+        }
+
+        List<CompletableFuture<int[]>> substanceBatches = new ArrayList<>();
         for (int offset = 0; offset < inputs.size(); offset += GpuAquiferSubstance.MAX_QUERIES) {
             int count = Math.min(GpuAquiferSubstance.MAX_QUERIES, inputs.size() - offset);
             GpuAquiferSubstance.Input[] batch = inputs.subList(offset, offset + count)
                     .toArray(GpuAquiferSubstance.Input[]::new);
-            batches.add(GpuTerrainRuntime.submitAquiferSubstance(
+            substanceBatches.add(GpuTerrainRuntime.submitAquiferSubstance(
                     GpuAquiferSubstance.pack(batch), batch.length).toCompletableFuture());
         }
-        CompletableFuture.allOf(batches.toArray(CompletableFuture[]::new)).join();
+        CompletableFuture.allOf(substanceBatches.toArray(CompletableFuture[]::new)).join();
 
         int outputOffset = 0;
         int acceptedDecisions = directLavaDecisions;
         int vanillaParitySamples = 0;
         int vanillaParityMismatches = 0;
-        for (CompletableFuture<int[]> batch : batches) {
+        for (CompletableFuture<int[]> batch : substanceBatches) {
             int[] outputs = batch.join();
             for (int row = 0; row < outputs.length / GpuAquiferSubstance.OUTPUT_INTS; row++) {
                 int query = outputOffset++;
-                GpuAquiferSubstance.Input input = inputs.get(query);
-                int[] expected = GpuAquiferSubstance.evaluate(input);
                 int base = row * GpuAquiferSubstance.OUTPUT_INTS;
-                if (outputs[base] != expected[0] || outputs[base + 1] != expected[1]
-                        || outputs[base + 2] != expected[2]
-                        || expected[0] == GpuAquiferSubstance.CPU_FALLBACK) continue;
+                int action = outputs[base];
+                if (action == GpuAquiferSubstance.CPU_FALLBACK) continue;
+                if ((action != GpuAquiferSubstance.RETURN_DEFAULT
+                        && action != GpuAquiferSubstance.RETURN_STATE)
+                        || outputs[base + 1] != 0 || (outputs[base + 2] & ~1) != 0) continue;
                 PendingDecision source = pending.get(query);
-                BlockState state = expected[0] == GpuAquiferSubstance.RETURN_STATE
+                BlockState state = action == GpuAquiferSubstance.RETURN_STATE
                         ? source.nearestState : null;
                 if (gpunoise$verifyAquifer) {
                     BlockState vanilla = gpunoise$invokeVanillaComputeSubstance(source.context, source.density);
                     boolean vanillaSchedule = shouldScheduleFluidUpdate;
                     vanillaParitySamples++;
-                    if (!Objects.equals(vanilla, state) || vanillaSchedule != (expected[2] != 0)) {
+                    if (!Objects.equals(vanilla, state) || vanillaSchedule != (outputs[base + 2] != 0)) {
                         vanillaParityMismatches++;
                         continue;
                     }
                 }
-                decisions[source.index] = new GpuDecision(state, expected[2] != 0);
+                decisions[source.index] = new GpuDecision(state, outputs[base + 2] != 0);
                 acceptedDecisions++;
             }
         }
@@ -214,6 +267,11 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         gpunoise$decisionMinY = minY;
         gpunoise$decisionMinZ = minZ;
         gpunoise$decisions = decisions;
+        if (gpunoise$verifyAquifer) {
+            dev.gpunoise.GpuNoise.LOGGER.info(
+                    "GPU aquifer nearest parity: samples={}, mismatches={}",
+                    nearestParitySamples, nearestParityMismatches);
+        }
         if (gpunoise$verifyAquifer) {
             dev.gpunoise.GpuNoise.LOGGER.info(
                     "GPU aquifer substance parity: samples={}, mismatches={}",
@@ -241,6 +299,10 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
 
     @org.spongepowered.asm.mixin.Unique
     private record GridNeighborhood(int x, int y, int z) {}
+
+    @org.spongepowered.asm.mixin.Unique
+    private record AquiferQuery(int index, int x, int y, int z, double density,
+                                double barrier, boolean belowIsLava, int[][] centers) {}
 
     @org.spongepowered.asm.mixin.Unique
     private record PendingDecision(int index, BlockState nearestState,

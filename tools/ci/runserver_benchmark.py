@@ -331,6 +331,13 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
             if "GPU aquifer substance batch:" not in log_path.read_text(encoding="utf-8"):
                 raise RuntimeError("GPU benchmark did not execute the chunk-batched aquifer substance shader")
             if VERIFY_AQUIFER_GPU:
+                nearest_results = re.findall(
+                    r"GPU aquifer nearest parity: samples=(\d+), mismatches=(\d+)",
+                    log_path.read_text(encoding="utf-8"))
+                if not nearest_results or any(int(samples) == 0 or int(mismatches) != 0
+                                              for samples, mismatches in nearest_results):
+                    raise RuntimeError(
+                        "GPU aquifer nearest-three selection did not pass vanilla parity for every prepared chunk")
                 parity_results = re.findall(
                     r"GPU aquifer substance parity: samples=(\d+), mismatches=(\d+)",
                     log_path.read_text(encoding="utf-8"))

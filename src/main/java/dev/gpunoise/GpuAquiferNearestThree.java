@@ -9,13 +9,13 @@ import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 public final class GpuAquiferNearestThree {
     // Vanilla visits grid X offsets 0..1, Y offsets -1..1, Z offsets 0..1.
     public static final int CANDIDATES = 12;
-    static final int RECORD_BYTES = 16 * (CANDIDATES + 1);
-    static final int OUTPUT_INTS = 8;
-    static final int MAX_QUERIES = 16_384;
+    public static final int RECORD_BYTES = 16 * (CANDIDATES + 1);
+    public static final int OUTPUT_INTS = 8;
+    public static final int MAX_QUERIES = 16_384;
 
     private GpuAquiferNearestThree() {}
 
-    static ByteBuffer pack(int[][] queries, int[][][] centers) {
+    public static ByteBuffer pack(int[][] queries, int[][][] centers) {
         if (queries.length != centers.length || queries.length > MAX_QUERIES)
             throw new IllegalArgumentException("invalid aquifer nearest-three batch");
         ByteBuffer packed = ByteBuffer.allocateDirect(queries.length * RECORD_BYTES)
