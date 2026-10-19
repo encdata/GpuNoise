@@ -87,7 +87,7 @@ final class GpuDensityGraphCompiler {
                 router.initialDensityWithoutJaggedness(), router.barrierNoise(),
                 router.fluidLevelFloodednessNoise(), router.fluidLevelSpreadNoise(), router.lavaNoise(),
                 router.erosion(), router.depth(), router.temperature(), router.vegetation(),
-                router.continents(), router.ridges(), router.preliminarySurfaceLevel()});
+                router.continents(), router.ridges()});
     }
 
     /** Compiles terrain roots transactionally so one modded root cannot poison its siblings. */

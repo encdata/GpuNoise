@@ -14,11 +14,9 @@ public final class GpuTerrainRoots {
     public static final int VEGETATION = 9;
     public static final int CONTINENTS = 10;
     public static final int RIDGES = 11;
-    public static final int PRELIMINARY_SURFACE_LEVEL = 12;
-    public static final int COUNT = 13;
+    public static final int COUNT = 12;
     private static final String[] NAMES = {"finalDensity", "initialDensity", "barrier", "floodedness",
-            "spread", "lava", "erosion", "depth", "temperature", "vegetation", "continents", "ridges",
-            "preliminarySurfaceLevel"};
+            "spread", "lava", "erosion", "depth", "temperature", "vegetation", "continents", "ridges"};
 
     public static String name(int root) {
         return root >= 0 && root < NAMES.length ? NAMES[root] : "unknown";

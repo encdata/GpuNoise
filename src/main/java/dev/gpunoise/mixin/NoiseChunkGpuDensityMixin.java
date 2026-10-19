@@ -28,10 +28,13 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.Overwrite;
+import org.spongepowered.asm.mixin.gen.Invoker;
 
 /** Replaces only the final terrain-density evaluation with the GPU slab. */
 @Mixin(NoiseChunk.class)
 abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
+    @Invoker("preliminarySurfaceLevel")
+    protected abstract int gpunoise$invokePreliminarySurfaceLevel(int x, int z);
     @Shadow @Final private NoiseSettings noiseSettings;
     @Shadow @Final private DensityFunctions.BeardifierOrMarker beardifier;
     @Shadow @Final private List<NoiseChunk.NoiseInterpolator> interpolators;
@@ -103,6 +106,11 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     public double gpunoise$withBeardifier(double cachedDensity, int x, int y, int z) {
         if (gpunoise$zeroBeardifier) return cachedDensity;
         return cachedDensity + beardifier.compute(new DensityFunction.SinglePointContext(x, y, z));
+    }
+
+    @Override
+    public int gpunoise$preliminarySurfaceLevel(int x, int z) {
+        return gpunoise$invokePreliminarySurfaceLevel(x, z);
     }
 
     @Unique

@@ -549,7 +549,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             for (int sample = 0; sample < offsets.length; sample++) {
                 int surfaceX = Math.floorDiv(centerX + (offsets[sample][0] << 4), 4) * 4;
                 int surfaceZ = Math.floorDiv(centerZ + (offsets[sample][1] << 4), 4) * 4;
-                surfaces[sample] = (float) cache.aquiferPreliminarySurfaceLevel(surfaceX, surfaceZ);
+                surfaces[sample] = noiseChunk instanceof GpuNoiseChunkAccess access
+                        ? access.gpunoise$preliminarySurfaceLevel(surfaceX, surfaceZ)
+                        : Float.NaN;
                 int surfaceY = (int) Math.floor(surfaces[sample]) + 8;
                 Aquifer.FluidStatus sampled = globalFluidPicker.computeFluid(0, surfaceY, 0);
                 samples[sample] = sampled;
@@ -660,7 +662,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     builder.add(center[0], center[1], center[2]);
                     builder.addSpreadFromBlock(center[0], center[1], center[2]);
                     builder.addLavaFromBlock(center[0], center[1], center[2]);
-                    GpuWorldgenDependency.addAquiferSurfaceCoordinates(builder, center[0], center[2]);
                 }
             }
         }

@@ -13,10 +13,6 @@ import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 
 /** Exact GPU coordinate dependencies for one chunk-generation task. */
 public final class GpuWorldgenDependency {
-    private static final int[][] AQUIFER_SURFACE_OFFSETS = {
-            {0, 0}, {-2, -1}, {-1, -1}, {0, -1}, {1, -1}, {-3, 0},
-            {-2, 0}, {-1, 0}, {1, 0}, {-2, 1}, {-1, 1}, {0, 1}, {1, 1}
-    };
     private final List<Page> pages;
     private final Map<Coordinate, Sample> index;
     private volatile CompletableFuture<Void> submitted;
@@ -176,23 +172,8 @@ public final class GpuWorldgenDependency {
                     builder.add(center[0], center[1], center[2]);
                     builder.addSpreadFromBlock(center[0], center[1], center[2]);
                     builder.addLavaFromBlock(center[0], center[1], center[2]);
-                    addAquiferSurfaceCoordinates(builder, center[0], center[2]);
                 }
             }
-        }
-    }
-
-    /** Declares the quart-aligned preliminary-surface samples used by aquifer status generation. */
-    public static void addAquiferSurfaceCoordinates(Builder builder, int centerX, int centerZ) {
-        // Same 13-neighbor shape as NoiseBasedAquifer.CHUNK_POS_OFFSETS and
-        // C2ME OCL's __aquifer_chunkPosOffset table.
-        for (int[] offset : AQUIFER_SURFACE_OFFSETS) {
-            int surfaceX = centerX + (offset[0] << 4);
-            int surfaceZ = centerZ + (offset[1] << 4);
-            // C2ME maps the block position through biome coordinates before
-            // evaluating preliminarySurfaceLevel, rounding down to four.
-            builder.add(Math.floorDiv(surfaceX, 4) * 4, 0,
-                    Math.floorDiv(surfaceZ, 4) * 4);
         }
     }
 

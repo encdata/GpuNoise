@@ -462,8 +462,8 @@ public final class GpuTerrainRuntime {
     /** Number of roots currently materialized into the per-block terrain output. */
     static int terrainOutputRootCount() {
         // final, initial, barrier, floodedness, spread, lava, erosion, depth,
-        // temperature, vegetation, continents, ridges, preliminary surface
-        return GpuTerrainRoots.COUNT;
+        // temperature, vegetation, continents, ridges
+        return 12;
     }
 
     /** Number of parity-verified roots in compact per-block GPU output. */
