@@ -8,6 +8,10 @@ import dev.gpunoise.GpuTerrainRoots;
 import dev.gpunoise.GpuAquiferCoordinatePlanner;
 import dev.gpunoise.GpuAquiferNearestThree;
 import dev.gpunoise.GpuAquiferSubstance;
+import dev.gpunoise.GpuAquiferDecisionData.AquiferQuery;
+import dev.gpunoise.GpuAquiferDecisionData.Decision;
+import dev.gpunoise.GpuAquiferDecisionData.GridNeighborhood;
+import dev.gpunoise.GpuAquiferDecisionData.PendingDecision;
 import dev.gpunoise.GpuWorldgenDependency;
 import dev.gpunoise.GpuTerrainProfiler;
 import net.minecraft.core.BlockPos;
@@ -56,7 +60,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     @Shadow private boolean shouldScheduleFluidUpdate;
 
     @org.spongepowered.asm.mixin.Unique
-    private volatile GpuDecision[] gpunoise$decisions;
+    private volatile Decision[] gpunoise$decisions;
 
     @org.spongepowered.asm.mixin.Unique
     private int gpunoise$decisionMinX, gpunoise$decisionMinY, gpunoise$decisionMinZ;
@@ -101,14 +105,14 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private void gpunoise$usePreparedGpuAquiferDecision(
             DensityFunction.FunctionContext context, double density,
             CallbackInfoReturnable<BlockState> cir) {
-        GpuDecision[] decisions = gpunoise$decisions;
+        Decision[] decisions = gpunoise$decisions;
         if (decisions == null) return;
         int x = context.blockX() - gpunoise$decisionMinX;
         int y = context.blockY() - gpunoise$decisionMinY;
         int z = context.blockZ() - gpunoise$decisionMinZ;
         int height = decisions.length / 256;
         if (x < 0 || x >= 16 || z < 0 || z >= 16 || y < 0 || y >= height) return;
-        GpuDecision decision = decisions[y * 256 + z * 16 + x];
+        Decision decision = decisions[y * 256 + z * 16 + x];
         if (decision == null) return;
         shouldScheduleFluidUpdate = decision.scheduleFluidUpdate;
         cir.setReturnValue(decision.state);
@@ -119,7 +123,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                                  PositionalRandomFactory randomFactory) {
         final int minX = cache.minX(), minY = cache.minY(), minZ = cache.minZ();
         final int height = cache.height();
-        GpuDecision[] decisions = new GpuDecision[Math.multiplyExact(height, 256)];
+        Decision[] decisions = new Decision[Math.multiplyExact(height, 256)];
         List<AquiferQuery> queries = new ArrayList<>();
         Map<GridNeighborhood, int[][]> neighborhoods = new HashMap<>();
         int directLavaDecisions = 0;
@@ -133,7 +137,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     Aquifer.FluidStatus global = globalFluidPicker.computeFluid(x, y, z);
                     BlockState globalState = global.at(y);
                     if (globalState.is(Blocks.LAVA)) {
-                        decisions[index] = new GpuDecision(globalState, false);
+                        decisions[index] = new Decision(globalState, false);
                         directLavaDecisions++;
                         continue;
                     }
@@ -259,7 +263,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         continue;
                     }
                 }
-                decisions[source.index] = new GpuDecision(state, outputs[base + 2] != 0);
+                decisions[source.index] = new Decision(state, outputs[base + 2] != 0);
                 acceptedDecisions++;
             }
         }
@@ -296,20 +300,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private static int gpunoise$fluidLevel(Aquifer.FluidStatus status) {
         return ((AquiferFluidStatusAccessor) (Object) status).gpunoise$fluidLevel();
     }
-
-    @org.spongepowered.asm.mixin.Unique
-    private record GridNeighborhood(int x, int y, int z) {}
-
-    @org.spongepowered.asm.mixin.Unique
-    private record AquiferQuery(int index, int x, int y, int z, double density,
-                                double barrier, boolean belowIsLava, int[][] centers) {}
-
-    @org.spongepowered.asm.mixin.Unique
-    private record PendingDecision(int index, BlockState nearestState,
-                                   DensityFunction.FunctionContext context, double density) {}
-
-    @org.spongepowered.asm.mixin.Unique
-    private record GpuDecision(BlockState state, boolean scheduleFluidUpdate) {}
 
     @Override
     public void gpunoise$addDependencyCoordinates(GpuWorldgenDependency.Builder builder) {
