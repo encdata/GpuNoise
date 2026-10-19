@@ -48,6 +48,11 @@ public final class GpuAquiferStatusRegionCache {
         return value == null ? Integer.MIN_VALUE : value;
     }
 
+    public static boolean isSurfaceDisabled(Object graphIdentity, Object fluidPickerIdentity) {
+        return graphIdentity == null || fluidPickerIdentity == null
+                || DISABLED_SURFACE_SCOPES.contains(new Scope(graphIdentity, fluidPickerIdentity));
+    }
+
     public static void putSurface(Object graphIdentity, Object fluidPickerIdentity,
                                   int blockX, int blockZ, int surfaceLevel) {
         if (graphIdentity == null || fluidPickerIdentity == null) return;

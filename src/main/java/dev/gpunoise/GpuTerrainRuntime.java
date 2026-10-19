@@ -87,6 +87,11 @@ public final class GpuTerrainRuntime {
     /** Stable identity for bounded caches whose values depend on this terrain router. */
     public static Object aquiferCacheGraphIdentity() { return terrainRouter; }
 
+    /** Looks up an already-claimed neighboring terrain cache without claiming new work. */
+    public static GpuChunkDensityCache terrainCacheForSurface(int blockX, int blockZ, Object graphIdentity) {
+        return GpuTerrainAreaRegistry.findSurfaceCache(blockX, blockZ, graphIdentity);
+    }
+
     /** The biome-stage cache wrapper is only safe with C2ME's staged flow. */
     public static boolean c2meDfcAvailable() {
         return classAvailable("com.ishland.c2me.opts.dfc.common.gen.jvm.AbstractCompiledDensityFunction");

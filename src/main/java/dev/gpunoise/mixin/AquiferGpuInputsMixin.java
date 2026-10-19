@@ -751,6 +751,29 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             return reference;
         }
         if (!(noiseChunk instanceof GpuNoiseChunkAccess access)) return Float.NaN;
+        if (!GpuAquiferStatusRegionCache.isSurfaceDisabled(graphIdentity, globalFluidPicker)) {
+            GpuChunkDensityCache terrain = GpuTerrainRuntime.terrainCacheForSurface(
+                    blockX, blockZ, graphIdentity);
+            if (terrain != null) {
+                int gpuSurface = terrain.preliminarySurfaceLevelFromBlocks(blockX, blockZ);
+                if (gpuSurface != Integer.MIN_VALUE) {
+                    if (gpunoise$verifyAquifer) {
+                        int reference = access.gpunoise$preliminarySurfaceLevel(blockX, blockZ);
+                        if (gpuSurface != reference) {
+                            if (GpuAquiferStatusRegionCache.disableSurface(graphIdentity, globalFluidPicker)) {
+                                dev.gpunoise.GpuNoise.LOGGER.warn(
+                                        "Shared GPU aquifer surface grid failed parity at ({}, {}); disabling it for this terrain graph and fluid picker. GPU={}, Java={}",
+                                        blockX, blockZ, gpuSurface, reference);
+                            }
+                            return reference;
+                        }
+                    }
+                    GpuAquiferStatusRegionCache.putSurface(
+                            graphIdentity, globalFluidPicker, blockX, blockZ, gpuSurface);
+                    return gpuSurface;
+                }
+            }
+        }
         int surface = access.gpunoise$preliminarySurfaceLevel(blockX, blockZ);
         GpuAquiferStatusRegionCache.putSurface(graphIdentity, globalFluidPicker, blockX, blockZ, surface);
         return surface;

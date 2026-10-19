@@ -2,6 +2,8 @@ package dev.gpunoise;
 
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -141,6 +143,52 @@ public final class GpuChunkDensityCache {
     public int minY() { return minY; }
     public int height() { return maxRelativeY; }
     public Object terrainGraphIdentity() { return terrainGraphIdentity; }
+
+    boolean containsSurfaceColumn(int x, int z) {
+        int rx = x - minX, rz = z - minZ;
+        return rx >= 0 && rz >= 0 && rx <= 16 && rz <= 16;
+    }
+
+    /**
+     * Resolves NoiseChunk's preliminary surface scan from this completed GPU
+     * full-block GPU output. Returns Integer.MIN_VALUE when the exact column
+     * is unavailable, the dispatch is incomplete, or a threshold-ambiguous
+     * sample needs the Java scanner.
+     */
+    int preliminarySurfaceLevelFromBlocks(int x, int z) {
+        if (!supportsRoot(GpuTerrainRoots.INITIAL_DENSITY) || !containsSurfaceColumn(x, z)) {
+            return Integer.MIN_VALUE;
+        }
+        GpuTerrainBlockResult blocks = completedBlocks();
+        if (blocks == null || blocks.isEmpty()
+                || blocks.outputIndexForRoot(GpuTerrainRoots.INITIAL_DENSITY) < 0) {
+            return Integer.MIN_VALUE;
+        }
+        int rx = x - minX, rz = z - minZ;
+        for (int y = minY + maxRelativeY - 1; y >= minY; y--) {
+            int ry = y - minY;
+            if (!blocks.contains(rx, ry, rz)) return Integer.MIN_VALUE;
+            double density = blocks.valueAtUnchecked(rx, ry, rz, GpuTerrainRoots.INITIAL_DENSITY);
+            if (!Float.isFinite(density)
+                    || Math.abs(density - 0.390625) <= GpuTerrainRuntime.GRAPH_PARITY_EPSILON) {
+                return Integer.MIN_VALUE;
+            }
+            if (density > 0.390625) return y + 1;
+        }
+        return minY;
+    }
+
+    private GpuTerrainBlockResult completedBlocks() {
+        if (exact != null || result == null) return null;
+        try {
+            CompletableFuture<GpuTerrainBatchResult> future = result.toCompletableFuture();
+            if (!future.isDone() || future.isCompletedExceptionally() || future.isCancelled()) return null;
+            GpuTerrainBatchResult completedResult = future.getNow(null);
+            return completedResult == null ? null : completedResult.blocks();
+        } catch (CancellationException | CompletionException unavailable) {
+            return null;
+        }
+    }
 
     public static GpuChunkDensityCache takePrefetched(int minX, int minZ) {
         return PREFETCHED.remove(chunkKey(minX >> 4, minZ >> 4));

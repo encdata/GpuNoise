@@ -33,6 +33,33 @@ final class GpuTerrainAreaRegistry {
 
     static int maxConcurrentCacheBuilds() { return MAX_CONCURRENT_CACHE_BUILDS; }
 
+    /** Returns an already-claimed cache that covers a surface column and graph. */
+    static GpuChunkDensityCache findSurfaceCache(int blockX, int blockZ, Object graphIdentity) {
+        if (graphIdentity == null) return null;
+        int chunkMinX = Math.floorDiv(blockX, 16) * 16;
+        int chunkMinZ = Math.floorDiv(blockZ, 16) * 16;
+        int[] candidateMinX = Math.floorMod(blockX, 16) == 0
+                ? new int[]{chunkMinX, chunkMinX - 16} : new int[]{chunkMinX};
+        int[] candidateMinZ = Math.floorMod(blockZ, 16) == 0
+                ? new int[]{chunkMinZ, chunkMinZ - 16} : new int[]{chunkMinZ};
+        Lock lifecycle = CACHE_LIFECYCLE.readLock();
+        lifecycle.lock();
+        try {
+            for (int minX : candidateMinX) {
+                for (int minZ : candidateMinZ) {
+                    GpuChunkDensityCache cache = CLAIMED.get(key(minX >> 4, minZ >> 4));
+                    if (cache != null && cache.terrainGraphIdentity() == graphIdentity
+                            && cache.containsSurfaceColumn(blockX, blockZ)) {
+                        return cache;
+                    }
+                }
+            }
+            return null;
+        } finally {
+            lifecycle.unlock();
+        }
+    }
+
     static GpuChunkDensityCache claim(int minX, int minZ, Supplier<GpuChunkDensityCache> creator) {
         long key = key(minX >> 4, minZ >> 4);
         Lock lifecycle = CACHE_LIFECYCLE.readLock();
