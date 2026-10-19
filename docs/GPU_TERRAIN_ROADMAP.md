@@ -133,10 +133,11 @@ parity checks.
   allowing a large producer burst to accumulate thousands of requests. These
   limits protect full-block output from exhausting the heap under parallel
   chunk generation; tune them against the target server's memory and profiling
-  data. The single Vulkan device slot also has one aquifer decision-table
-  producer at a time, preventing parallel worldgen workers from allocating
-  duplicate chunk-sized decision and candidate buffers while all requests wait
-  for that same slot. Full per-block output's mapped Vulkan buffer now defaults
+  data. The single Vulkan device slot also bounds aquifer decision-table
+  producers to three by default (tunable with `gpunoise.aquiferDecisionConcurrency`,
+  capped at eight). This allows CPU preparation to overlap without letting all
+  worldgen workers allocate chunk-sized decision and candidate buffers while
+  waiting for the same slot. Full per-block output's mapped Vulkan buffer now defaults
   to 32 MiB (tunable from 16–64 MiB with `gpunoise.terrainOutputBufferMiB`),
   raising the dispatch ceiling above the previous three full-height chunks;
   the effective capacity is logged at startup.

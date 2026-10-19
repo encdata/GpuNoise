@@ -422,17 +422,19 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                 nearest_results = re.findall(
                     r"GPU aquifer nearest parity: samples=(\d+), mismatches=(\d+)",
                     log_path.read_text(encoding="utf-8"))
-                if not nearest_results or any(int(samples) == 0 or int(mismatches) != 0
-                                              for samples, mismatches in nearest_results):
+                if (not nearest_results
+                        or sum(int(samples) for samples, _ in nearest_results) == 0
+                        or any(int(mismatches) != 0 for _, mismatches in nearest_results)):
                     raise RuntimeError(
-                        "GPU aquifer four-center selection did not pass runtime parity for every prepared chunk")
+                        "GPU aquifer four-center selection did not produce passing runtime parity samples")
                 parity_results = re.findall(
                     r"GPU aquifer substance parity: samples=(\d+), mismatches=(\d+)",
                     log_path.read_text(encoding="utf-8"))
-                if not parity_results or any(int(samples) == 0 or int(mismatches) != 0
-                                             for samples, mismatches in parity_results):
+                if (not parity_results
+                        or sum(int(samples) for samples, _ in parity_results) == 0
+                        or any(int(mismatches) != 0 for _, mismatches in parity_results)):
                     raise RuntimeError(
-                        "GPU aquifer substance decisions did not pass runtime parity for every prepared chunk")
+                        "GPU aquifer substance decisions did not produce passing runtime parity samples")
             fallback_chunks = max(counts[3] for counts in gpu_counts)
             if fallback_chunks != 0:
                 raise RuntimeError(

@@ -80,7 +80,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private static final AtomicBoolean gpunoise$exactAquiferInputsLogged = new AtomicBoolean();
 
     @org.spongepowered.asm.mixin.Unique
-    private static final Semaphore gpunoise$aquiferDecisionSlot = new Semaphore(1, true);
+    private static final int gpunoise$aquiferDecisionConcurrency = (int) Math.max(1L,
+            Math.min(8L, Long.getLong("gpunoise.aquiferDecisionConcurrency", 3L)));
+
+    @org.spongepowered.asm.mixin.Unique
+    private static final Semaphore gpunoise$aquiferDecisionSlots =
+            new Semaphore(gpunoise$aquiferDecisionConcurrency, true);
 
     @org.spongepowered.asm.mixin.Unique
     private static final boolean gpunoise$verifyAquifer = Boolean.getBoolean("gpunoise.verifyAquiferGpu");
@@ -117,7 +122,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         }
         boolean acquired = false;
         try {
-            gpunoise$aquiferDecisionSlot.acquire();
+            gpunoise$aquiferDecisionSlots.acquire();
             acquired = true;
             gpunoise$buildGpuDecisionTable(cache, noiseAccess, positionalRandomFactory);
         } catch (InterruptedException interrupted) {
@@ -130,7 +135,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         "GPU aquifer decision batch unavailable; using vanilla aquifer decisions.", failure);
             }
         } finally {
-            if (acquired) gpunoise$aquiferDecisionSlot.release();
+            if (acquired) gpunoise$aquiferDecisionSlots.release();
         }
     }
 
