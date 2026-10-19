@@ -5,6 +5,8 @@ import java.nio.ByteOrder;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.levelgen.Aquifer;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQuery;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQueries;
 
@@ -36,6 +38,7 @@ public final class VulkanCiSmoke {
         verifyTerrainParityRules();
         GpuDensityExpressionSmoke.verify();
         verifyTranslatorRegistry();
+        verifyAquiferStatusRegionCache();
         GpuDevice device = null;
         for (GpuDevice candidate : GpuProbe.findPreferredDevices(GpuNoiseConfig.GpuVendorPreference.AUTO)) {
             if (VulkanComputeProbe.verify(candidate)) {
@@ -989,6 +992,33 @@ public final class VulkanCiSmoke {
 
         System.out.println("Vulkan CI smoke passed on " + device.name()
                 + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, shared 12-root terrain lattices, and non-associative Y-X-Z float rounding; aquifer pressure, four-center selection, and vanilla/C2ME substance decisions matched Java reference cases.");
+    }
+
+    private static void verifyAquiferStatusRegionCache() {
+        Object graph = new Object();
+        Object fluidPicker = new Object();
+        Aquifer.FluidStatus expected = new Aquifer.FluidStatus(63, Blocks.WATER.defaultBlockState());
+        long position = net.minecraft.core.BlockPos.asLong(-48, 32, 80);
+        GpuAquiferStatusRegionCache.clear();
+        GpuAquiferStatusRegionCache.put(graph, fluidPicker, position, expected);
+        if (GpuAquiferStatusRegionCache.get(graph, fluidPicker, position) != expected
+                || GpuAquiferStatusRegionCache.get(new Object(), fluidPicker, position) != null
+                || GpuAquiferStatusRegionCache.get(graph, new Object(), position) != null
+                || GpuAquiferStatusRegionCache.get(graph, fluidPicker, position + 1L) != null) {
+            throw new IllegalStateException("aquifer region cache did not preserve world, picker, and position identity");
+        }
+        Object otherGraph = new Object();
+        GpuAquiferStatusRegionCache.put(otherGraph, fluidPicker, position, expected);
+        if (!GpuAquiferStatusRegionCache.disable(graph, fluidPicker)
+                || GpuAquiferStatusRegionCache.get(graph, fluidPicker, position) != null
+                || GpuAquiferStatusRegionCache.get(otherGraph, fluidPicker, position) != expected) {
+            throw new IllegalStateException("aquifer region cache could not isolate a disabled graph/picker pair");
+        }
+        GpuAquiferStatusRegionCache.clear();
+        if (GpuAquiferStatusRegionCache.get(graph, fluidPicker, position) != null) {
+            throw new IllegalStateException("aquifer region cache clear retained a fluid status");
+        }
+        System.out.println("Vulkan CI smoke: shared aquifer region-cache identity checks passed");
     }
 
     private static void verifyTerrainParityRules() {

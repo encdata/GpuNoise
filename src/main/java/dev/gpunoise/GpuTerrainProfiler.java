@@ -31,6 +31,8 @@ public final class GpuTerrainProfiler {
     private static final LongAdder aquiferStatusPrefillSamples = new LongAdder();
     private static final LongAdder aquiferStatusPrefillCenters = new LongAdder();
     private static final LongAdder aquiferStatusPrefillJavaFallbacks = new LongAdder();
+    private static final LongAdder aquiferRegionStatusCacheHits = new LongAdder();
+    private static final LongAdder aquiferRegionStatusCacheMisses = new LongAdder();
     private static final LongAdder[] aquiferPhaseNanos = createCounterArray(AQUIFER_PHASE_NAMES.length);
     private static final LongAdder[] aquiferPhaseSamples = createCounterArray(AQUIFER_PHASE_NAMES.length);
     private static final LongAdder blockWrites = new LongAdder();
@@ -145,6 +147,12 @@ public final class GpuTerrainProfiler {
         aquiferPhaseSamples[phase].increment();
     }
 
+    public static void recordAquiferRegionStatusCache(boolean hit) {
+        if (!ENABLED) return;
+        if (hit) aquiferRegionStatusCacheHits.increment();
+        else aquiferRegionStatusCacheMisses.increment();
+    }
+
     /** Records the C2ME-style batched status kernel and its conservative Java fallbacks. */
     public static void recordAquiferStatusPrefill(long start, int centers, int javaFallbacks) {
         if (!ENABLED) return;
@@ -198,6 +206,8 @@ public final class GpuTerrainProfiler {
                 averageNanos(aquiferStatusPrefillNanos, aquiferStatusPrefillSamples));
         GpuNoise.LOGGER.info("GPU terrain aquifer phase average ns: {}",
                 formatAquiferPhases());
+        GpuNoise.LOGGER.info("GPU terrain aquifer region-status cache: hits={}, misses={}",
+                aquiferRegionStatusCacheHits.sum(), aquiferRegionStatusCacheMisses.sum());
         GpuNoise.LOGGER.info("GPU terrain Java root fallback calls: {}", formatRootFallbacks());
         GpuNoise.LOGGER.info("GPU terrain per-root cache calls: {}", formatRootCalls());
     }

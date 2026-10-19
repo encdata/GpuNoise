@@ -84,6 +84,9 @@ public final class GpuTerrainRuntime {
     }
     public static boolean active() { return device != null; }
 
+    /** Stable identity for bounded caches whose values depend on this terrain router. */
+    public static Object aquiferCacheGraphIdentity() { return terrainRouter; }
+
     /** The biome-stage cache wrapper is only safe with C2ME's staged flow. */
     public static boolean c2meDfcAvailable() {
         return classAvailable("com.ishland.c2me.opts.dfc.common.gen.jvm.AbstractCompiledDensityFunction");
@@ -295,6 +298,7 @@ public final class GpuTerrainRuntime {
         // installed scheduler. Candidate graph inspection can fail for
         // unsupported custom nodes or malformed spline dependencies.
         int skippedBlockNodes = GpuDensityGraphBuffer.blockSkippedNodeCount(graph);
+        if (terrainRouter != router) GpuAquiferStatusRegionCache.clear();
         if (terrainScheduler != null) terrainScheduler.close();
         if (terrainProvider != null) terrainProvider.close();
         if (terrainRootsScheduler != null) terrainRootsScheduler.close();
@@ -954,6 +958,7 @@ public final class GpuTerrainRuntime {
     public static synchronized void stop() {
         samplers.clear();
         GpuTerrainAreaRegistry.clear();
+        GpuAquiferStatusRegionCache.clear();
         if (terrainScheduler != null) terrainScheduler.close();
         if (chunkFillCoordinator != null) chunkFillCoordinator.close();
         if (fusedChunkScheduler != null) fusedChunkScheduler.close();
@@ -962,6 +967,7 @@ public final class GpuTerrainRuntime {
         VulkanSubmissionRing ring = submissionRing;
         terrainRing = null;
         terrainGraph = null;
+        terrainRouter = null;
         submissionRing = null;
         terrainScheduler = null;
         chunkFillCoordinator = null;

@@ -11,6 +11,7 @@ import dev.gpunoise.GpuAquiferRuntimeMode;
 import dev.gpunoise.GpuAquiferSubstance;
 import dev.gpunoise.GpuAquiferFluidStatus;
 import dev.gpunoise.GpuAquiferPrefillResult;
+import dev.gpunoise.GpuAquiferStatusRegionCache;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQueries;
 import dev.gpunoise.GpuAquiferDecisionData.FluidStatusCache;
 import dev.gpunoise.GpuAquiferDecisionData.NeighborhoodCache;
@@ -587,13 +588,20 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         };
         Map<Long, Integer> indexes = new HashMap<>();
         List<int[]> centers = new ArrayList<>();
+        Object graphIdentity = GpuTerrainRuntime.aquiferCacheGraphIdentity();
         for (int query = 0; query < queries.size(); query++) {
             for (int[] center : queries.centers(query)) {
                 long key = BlockPos.asLong(center[0], center[1], center[2]);
-                if (!indexes.containsKey(key)) {
-                    indexes.put(key, centers.size());
-                    centers.add(center);
+                if (indexes.containsKey(key)) continue;
+                Aquifer.FluidStatus cached = gpunoise$getSharedAquiferStatus(graphIdentity, key);
+                GpuTerrainProfiler.recordAquiferRegionStatusCache(cached != null);
+                if (cached != null) {
+                    statusCache.put(key, cached);
+                    indexes.put(key, -1);
+                    continue;
                 }
+                indexes.put(key, centers.size());
+                centers.add(center);
             }
         }
         GpuAquiferFluidStatus.Input[] inputs = new GpuAquiferFluidStatus.Input[centers.size()];
@@ -639,8 +647,10 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     surfaces, globalLevels, globalKinds);
             sampledStatuses[index] = samples;
         }
-        java.nio.ByteBuffer statusRecords = GpuAquiferFluidStatus.pack(inputs);
-        GpuAquiferPrefillResult combined = nearestRecords != null
+        java.nio.ByteBuffer statusRecords = inputs.length == 0
+                ? java.nio.ByteBuffer.allocateDirect(0)
+                : GpuAquiferFluidStatus.pack(inputs);
+        GpuAquiferPrefillResult combined = nearestRecords != null && inputs.length > 0
                 && inputs.length <= GpuAquiferFluidStatus.MAX_PREFILL_CENTERS
                 ? GpuTerrainRuntime.submitAquiferPrefill(nearestRecords, nearestCount,
                         statusRecords, inputs.length).toCompletableFuture().join()
@@ -649,7 +659,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 ? GpuTerrainRuntime.submitAquiferNearestThree(nearestRecords, nearestCount)
                         .toCompletableFuture().join()
                 : combined == null ? null : combined.nearestRows();
-        int[] outputs = combined == null
+        int[] outputs = inputs.length == 0 ? new int[0]
+                : combined == null
                 ? GpuTerrainRuntime.submitAquiferFluidStatus(statusRecords, inputs.length)
                         .toCompletableFuture().join()
                 : combined.fluidStatusRows();
@@ -678,6 +689,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         ((AquiferFluidStatusAccessor) (Object) sampled).gpunoise$fluidType());
             }
             statusCache.put(key, status);
+            GpuAquiferStatusRegionCache.put(graphIdentity, globalFluidPicker, key, status);
         }
         GpuTerrainProfiler.recordAquiferStatusPrefill(prefillStart, centers.size(), javaFallbacks);
         return nearestRows;
@@ -696,10 +708,31 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         long position = BlockPos.asLong(center[0], center[1], center[2]);
         Aquifer.FluidStatus status = cache.get(position);
         if (status == null) {
-            status = gpunoise$getAquiferStatus(position);
+            Object graphIdentity = GpuTerrainRuntime.aquiferCacheGraphIdentity();
+            status = gpunoise$getSharedAquiferStatus(graphIdentity, position);
+            GpuTerrainProfiler.recordAquiferRegionStatusCache(status != null);
+            if (status == null) {
+                status = gpunoise$getAquiferStatus(position);
+                GpuAquiferStatusRegionCache.put(graphIdentity, globalFluidPicker, position, status);
+            }
             cache.put(position, status);
         }
         return status;
+    }
+
+    @org.spongepowered.asm.mixin.Unique
+    private Aquifer.FluidStatus gpunoise$getSharedAquiferStatus(Object graphIdentity, long position) {
+        Aquifer.FluidStatus cached = GpuAquiferStatusRegionCache.get(
+                graphIdentity, globalFluidPicker, position);
+        if (cached == null || !gpunoise$verifyAquifer) return cached;
+        Aquifer.FluidStatus reference = gpunoise$getAquiferStatus(position);
+        if (cached.equals(reference)) return cached;
+        if (GpuAquiferStatusRegionCache.disable(graphIdentity, globalFluidPicker)) {
+            dev.gpunoise.GpuNoise.LOGGER.warn(
+                    "Shared GPU aquifer status cache failed parity at center {}; disabling cache for this terrain graph and fluid picker. Cached={}, Java={}",
+                    BlockPos.of(position), cached, reference);
+        }
+        return reference;
     }
 
     @org.spongepowered.asm.mixin.Unique
