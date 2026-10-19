@@ -309,6 +309,9 @@ public final class GpuChunkDensityCache {
     public double aquiferLava(int x, int y, int z) { return rootDensity(x, y, z, GpuTerrainRoots.LAVA); }
     public double aquiferErosion(int x, int y, int z) { return rootDensity(x, y, z, GpuTerrainRoots.EROSION); }
     public double aquiferDepth(int x, int y, int z) { return rootDensity(x, y, z, GpuTerrainRoots.DEPTH); }
+    public double aquiferPreliminarySurfaceLevel(int x, int z) {
+        return rootDensity(x, 0, z, GpuTerrainRoots.PRELIMINARY_SURFACE_LEVEL);
+    }
     public double climate(int x, int y, int z, int root) { return rootDensity(x, y, z, root); }
 
     /** Uses the exact candidate coordinates already declared by a strict chunk dependency. */

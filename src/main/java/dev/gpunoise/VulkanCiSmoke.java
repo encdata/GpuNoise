@@ -450,9 +450,9 @@ public final class VulkanCiSmoke {
             assertVanillaInterpolationRounding(roundingResults, roundingCorners);
 
             // Production chunks reuse shared lattice corners and interleave
-            // twelve terrain roots at each grid sample. Exercise both strides
+            // thirteen terrain roots at each grid sample. Exercise both strides
             // across multiple cells, including samples on cell boundaries.
-            int rootStride = 12;
+            int rootStride = GpuTerrainRoots.COUNT;
             float[] terrainCorners = new float[3 * 3 * 3 * rootStride];
             for (int cornerY = 0; cornerY < 3; cornerY++) {
                 for (int cornerX = 0; cornerX < 3; cornerX++) {

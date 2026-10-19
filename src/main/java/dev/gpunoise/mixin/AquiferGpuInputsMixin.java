@@ -563,6 +563,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     builder.add(center[0], center[1], center[2]);
                     builder.addSpreadFromBlock(center[0], center[1], center[2]);
                     builder.addLavaFromBlock(center[0], center[1], center[2]);
+                    GpuWorldgenDependency.addAquiferSurfaceCoordinates(builder, center[0], center[2]);
                 }
             }
         }
