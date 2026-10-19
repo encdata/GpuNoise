@@ -429,13 +429,18 @@ void main(){
     for(uint i=0;i<nodeCount;i++){
         Node n=nodes[nodeBase+i];
         uint op=n.ids.x; double v=0.0;
-        if(op==1u)v=double(n.params.x);
-        else if(op==2u)v=normalNoiseTerrain(dvec3(pExact.x*double(n.params.y),pExact.y*double(n.params.z),pExact.z*double(n.params.y)),uint(n.params.x));
-        else if(op==3u){double x=values[n.ids.y],y=values[n.ids.z];if(n.meta.x==1u)v=graphAdd(x,y);else if(n.meta.x==2u)v=x==0.0?0.0:graphMultiply(x,y);else if(n.meta.x==3u)v=min(x,y);else v=max(x,y);}
-        else if(op==4u)v=n.meta.x==2u?graphMultiply(values[n.ids.y],double(n.params.z)):graphAdd(values[n.ids.y],double(n.params.z));
-        else if(op==5u)v=clamp(values[n.ids.y],double(n.params.x),double(n.params.y));
-        else if(op==6u)v=mapValue(values[n.ids.y],n.meta.x);
-        else if(op==7u){
+        switch(op){
+        case 1u: v=double(n.params.x); break;
+        case 2u: v=normalNoiseTerrain(dvec3(pExact.x*double(n.params.y),pExact.y*double(n.params.z),pExact.z*double(n.params.y)),uint(n.params.x)); break;
+        case 3u: {
+            double x=values[n.ids.y],y=values[n.ids.z];
+            if(n.meta.x==1u)v=graphAdd(x,y);else if(n.meta.x==2u)v=x==0.0?0.0:graphMultiply(x,y);else if(n.meta.x==3u)v=min(x,y);else v=max(x,y);
+            break;
+        }
+        case 4u: v=n.meta.x==2u?graphMultiply(values[n.ids.y],double(n.params.z)):graphAdd(values[n.ids.y],double(n.params.z)); break;
+        case 5u: v=clamp(values[n.ids.y],double(n.params.x),double(n.params.y)); break;
+        case 6u: v=mapValue(values[n.ids.y],n.meta.x); break;
+        case 7u: {
 #if !defined(GRID_INPUT)
             uint interpolationCount=reserved & 0x7fffffffu;
             if(blockEvaluation && n.meta.z<interpolationCount)
@@ -443,31 +448,56 @@ void main(){
             else
 #endif
                 v=values[n.ids.y];
+            break;
         }
-        else if(op==8u)v=normalNoiseTerrain(pExact*.25,uint(n.params.x))*4.0;
-        else if(op==9u)v=normalNoiseTerrain(dvec3(pExact.x,0.0,pExact.z)*.25,uint(n.params.x))*4.0;
-        else if(op==10u)v=normalNoiseTerrain(dvec3(pExact.z,pExact.x,0.0)*.25,uint(n.params.x))*4.0;
-        else if(op==11u){dvec3 q=dvec3(pExact.x*double(n.params.x)+values[n.ids.y],pExact.y*double(n.params.y)+values[n.ids.z],pExact.z*double(n.params.x)+values[n.ids.w]);v=normalNoiseTerrain(q,uint(n.params.z));}
-        else if(op==12u){v=splineValue(values[n.ids.y],uint(n.params.x)*64u,uint(n.params.y),values);}
-        else if(op==13u){v=blendedNoise64(pExact,uint(n.params.x));}
-        else if(op==14u){double t=clamp(graphDivide(graphSubtract(pExact.y,double(n.params.x)),graphSubtract(double(n.params.y),double(n.params.x))),0.0,1.0);
+        case 8u: v=normalNoiseTerrain(pExact*.25,uint(n.params.x))*4.0; break;
+        case 9u: v=normalNoiseTerrain(dvec3(pExact.x,0.0,pExact.z)*.25,uint(n.params.x))*4.0; break;
+        case 10u: v=normalNoiseTerrain(dvec3(pExact.z,pExact.x,0.0)*.25,uint(n.params.x))*4.0; break;
+        case 11u: {
+            dvec3 q=dvec3(pExact.x*double(n.params.x)+values[n.ids.y],pExact.y*double(n.params.y)+values[n.ids.z],pExact.z*double(n.params.x)+values[n.ids.w]);
+            v=normalNoiseTerrain(q,uint(n.params.z));
+            break;
+        }
+        case 12u: v=splineValue(values[n.ids.y],uint(n.params.x)*64u,uint(n.params.y),values); break;
+        case 13u: v=blendedNoise64(pExact,uint(n.params.x)); break;
+        case 14u: {
+            double t=clamp(graphDivide(graphSubtract(pExact.y,double(n.params.x)),graphSubtract(double(n.params.y),double(n.params.x))),0.0,1.0);
 #ifdef FAST_MATH
             v=graphAdd(double(n.params.z),graphMultiply(graphSubtract(double(n.params.w),double(n.params.z)),t));
 #else
             v=mix(double(n.params.z),double(n.params.w),t);
 #endif
+            break;
         }
-        else if(op==20u){v=n.meta.x==0u?pExact.x:(n.meta.x==1u?pExact.y:pExact.z);}
-        else if(op==21u){double x=values[n.ids.y],y=values[n.ids.z];if(n.meta.x==1u)v=graphAdd(x,y);else if(n.meta.x==2u)v=graphSubtract(x,y);else if(n.meta.x==3u)v=graphMultiply(x,y);else if(n.meta.x==4u)v=graphDivide(x,y);else if(n.meta.x==5u)v=javaMin(x,y);else if(n.meta.x==7u)v=javaRemainder(x,y);else if(n.meta.x==8u)v=javaAtan2(x,y);else if(n.meta.x==9u)v=javaPow(x,y);else if(n.meta.x==10u)v=javaCopySign(x,y);else v=javaMax(x,y);}
-        else if(op==22u)v=compareValues(values[n.ids.y],values[n.ids.z],n.meta.x)?1.0:0.0;
-        else if(op==23u)v=values[n.ids.y]!=0.0?values[n.ids.z]:values[n.ids.w];
-        else if(op==24u)v=javaIntOperation(n.meta.x,values[n.ids.y],n.meta.x==6u?0.0:values[n.ids.z]);
-        else if(op==25u)v=javaFloatOperation(n.meta.x,values[n.ids.y],n.meta.x==6u?0.0:values[n.ids.z]);
-        else if(op==26u)v=javaNumericCast(n.meta.x,values[n.ids.y]);
-        else if(op==27u){dvec3 q=dvec3(values[n.ids.y],values[n.ids.z],values[n.ids.w]);v=normalNoiseTerrain(q,uint(n.params.x));}
-        else if(op==15u)v=values[n.ids.y]; // Blend inputs are vanilla no-blending (0,1).
-        else if(op==16u){double x=values[n.ids.y];v=(x>=double(n.params.x)&&x<double(n.params.y))?values[n.ids.z]:values[n.ids.w];}
-        else if(op==17u){double rarity=double(spaghettiRarity(float(values[n.ids.y]),n.meta.x==0u?0u:1u));v=rarity*abs(normalNoiseTerrain(pExact/rarity,uint(n.params.x)));}
+        case 15u: v=values[n.ids.y]; break; // Blend inputs are vanilla no-blending (0,1).
+        case 16u: {
+            double x=values[n.ids.y];
+            v=(x>=double(n.params.x)&&x<double(n.params.y))?values[n.ids.z]:values[n.ids.w];
+            break;
+        }
+        case 17u: {
+            double rarity=double(spaghettiRarity(float(values[n.ids.y]),n.meta.x==0u?0u:1u));
+            v=rarity*abs(normalNoiseTerrain(pExact/rarity,uint(n.params.x)));
+            break;
+        }
+        case 20u: v=n.meta.x==0u?pExact.x:(n.meta.x==1u?pExact.y:pExact.z); break;
+        case 21u: {
+            double x=values[n.ids.y],y=values[n.ids.z];
+            if(n.meta.x==1u)v=graphAdd(x,y);else if(n.meta.x==2u)v=graphSubtract(x,y);else if(n.meta.x==3u)v=graphMultiply(x,y);else if(n.meta.x==4u)v=graphDivide(x,y);else if(n.meta.x==5u)v=javaMin(x,y);else if(n.meta.x==7u)v=javaRemainder(x,y);else if(n.meta.x==8u)v=javaAtan2(x,y);else if(n.meta.x==9u)v=javaPow(x,y);else if(n.meta.x==10u)v=javaCopySign(x,y);else v=javaMax(x,y);
+            break;
+        }
+        case 22u: v=compareValues(values[n.ids.y],values[n.ids.z],n.meta.x)?1.0:0.0; break;
+        case 23u: v=values[n.ids.y]!=0.0?values[n.ids.z]:values[n.ids.w]; break;
+        case 24u: v=javaIntOperation(n.meta.x,values[n.ids.y],n.meta.x==6u?0.0:values[n.ids.z]); break;
+        case 25u: v=javaFloatOperation(n.meta.x,values[n.ids.y],n.meta.x==6u?0.0:values[n.ids.z]); break;
+        case 26u: v=javaNumericCast(n.meta.x,values[n.ids.y]); break;
+        case 27u: {
+            dvec3 q=dvec3(values[n.ids.y],values[n.ids.z],values[n.ids.w]);
+            v=normalNoiseTerrain(q,uint(n.params.x));
+            break;
+        }
+        default: break;
+        }
         values[n.meta.w]=v;
     }
 #ifdef GRID_INPUT
