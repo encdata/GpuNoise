@@ -44,6 +44,7 @@ public final class VulkanCiSmoke {
             }
         }
         if (device == null) throw new IllegalStateException("No Vulkan compute device passed initialization");
+        GpuDevice selectedDevice = device;
 
         // Supply an already-lowered one-node IR directly. This smoke test
         // exercises Vulkan shader dispatch without booting NeoForge registries.
@@ -51,7 +52,7 @@ public final class VulkanCiSmoke {
                 List.of(new GpuDensityGraph.Node("Constant", new int[0], new double[]{EXPECTED}, null, 0)),
                 new int[]{0}, List.of(), List.of(), List.of(), List.of(), 1);
         System.out.println("Vulkan CI smoke: creating submission ring");
-        VulkanSubmissionRing ring = VulkanBootstrapThread.call(() -> new VulkanSubmissionRing(device));
+        VulkanSubmissionRing ring = VulkanBootstrapThread.call(() -> new VulkanSubmissionRing(selectedDevice));
         try (ring) {
             assertNumericFixture(ring, registeredTranslator, "registered custom density translator",
                     new float[]{-193.0f, -1.0f, 37.0f, 256.0f},
