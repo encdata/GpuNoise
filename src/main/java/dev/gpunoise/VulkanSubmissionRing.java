@@ -19,11 +19,11 @@ final class VulkanSubmissionRing implements AutoCloseable {
     // normal 6 GB VRAM laptop and could freeze the desktop. Keep one engine
     // until slots share one device allocation with buffer offsets.
     private static final int SLOT_COUNT = 1;
-    // Terrain callers block on their futures after submitting. Polling only
-    // once per millisecond can therefore add nearly a full millisecond to each
-    // completed dispatch, even when the GPU fence is already signalled. Keep
-    // polling frequent enough to limit that handoff delay without busy-spinning.
+    // Terrain callers block on their futures after submitting. Poll more
+    // frequently while a graph dispatch is in flight, then back off while idle
+    // so low handoff latency does not become constant CPU wakeup overhead.
     private static final long COMPLETION_POLL_MICROS = 250L;
+    private static final long IDLE_POLL_MILLIS = 1L;
     private final PersistentVulkanNormalNoiseEngine[] slots;
     private final AtomicInteger next = new AtomicInteger();
     /** Requests wait here, not on a worldgen thread, while the shared slot is busy. */
@@ -50,14 +50,31 @@ final class VulkanSubmissionRing implements AutoCloseable {
             for (int i = 0; i < created; i++) slots[i].close();
             throw failure;
         }
-        // Polling a fence is non-blocking. This executor only completes
-        // futures; it never waits for a terrain submission.
-        completion.scheduleWithFixedDelay(() -> {
-            for (PersistentVulkanNormalNoiseEngine slot : slots) {
-                if (slot != null) slot.pollGraphRootsCompletion();
-            }
-            drainGraphRoots();
-        }, 0, COMPLETION_POLL_MICROS, TimeUnit.MICROSECONDS);
+        // Fence checks are non-blocking. Polling is frequent only while useful;
+        // the executor never waits synchronously for a terrain submission.
+        completion.execute(this::pollAndDrain);
+    }
+
+    private void pollAndDrain() {
+        if (completion.isShutdown()) return;
+        boolean graphInFlight = false;
+        for (PersistentVulkanNormalNoiseEngine slot : slots) {
+            if (slot == null) continue;
+            slot.pollGraphRootsCompletion();
+            graphInFlight |= slot.graphRootsInFlight();
+        }
+        drainGraphRoots();
+        // drainGraphRoots may have started the next queued submission.
+        for (PersistentVulkanNormalNoiseEngine slot : slots) {
+            if (slot != null) graphInFlight |= slot.graphRootsInFlight();
+        }
+        long delay = graphInFlight ? COMPLETION_POLL_MICROS : TimeUnit.MILLISECONDS.toMicros(
+                IDLE_POLL_MILLIS, TimeUnit.MILLISECONDS);
+        try {
+            completion.schedule(this::pollAndDrain, delay, TimeUnit.MICROSECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // Shutdown raced the next scheduled poll.
+        }
     }
 
     PersistentVulkanNormalNoiseEngine primary() { return slots[0]; }
