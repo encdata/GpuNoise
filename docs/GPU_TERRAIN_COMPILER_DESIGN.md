@@ -36,7 +36,7 @@ Stages are independently compilable, but the runtime schedules a dependency-comp
 
 ### 1. Runtime discovery
 
-At world or settings initialization, inspect the concrete configured terrain pipeline and record stable identities for density functions, noises, aquifer configuration, surface rules, biome inputs, and relevant settings. Do not infer compatibility only from class names. Use known vanilla implementations and explicit structural adapters where Minecraft exposes the required fields. Unknown wrappers remain opaque and trigger a named fallback.
+At world or settings initialization, inspect the concrete configured terrain pipeline and record stable identities for density functions, noises, aquifer configuration, surface rules, biome inputs, and relevant settings. Do not infer compatibility only from class names. Translate known vanilla implementations structurally, then inspect custom density bytecode for supported pure behavior. Unknown wrappers that cannot be translated remain on their exact Java path with a named fallback.
 
 Compilation is cached by a content-derived pipeline key. The key includes settings, registry identities, seed-dependent sampler configuration, and compiler/shader ABI version. World seed data must not leak across keys. Cache lifetime follows the world and its datapack/registry configuration.
 
@@ -50,15 +50,9 @@ All constants and intermediate conversions follow the chosen Minecraft-compatibl
 
 ### 3. Java behavior capture
 
-Known vanilla classes are translated using explicit versioned adapters that read their configured fields and construct IR. This is preferable to parsing method bytecode for the supported baseline because vanilla implementations are known and need precise numerical and random-state semantics.
+Known vanilla classes are translated structurally into IR so their random-state and numerical semantics remain explicit. Custom density classes are compiled automatically from `compute(FunctionContext):double` bytecode when the complete method and its bounded pure helpers fit the supported IR. The frontend validates control flow, immutable field reads, noise references, and numerical conversions; it rejects side effects, dynamic loops, and opaque calls with a source location and reason. The original Java function remains the parity reference and exact fallback.
 
-For other installed classes, use a layered approach:
-
-- First, recognize structurally equivalent known operations and lower those to IR.
-- Second, allow a CPU callback at a stage boundary where inputs and outputs are bounded and serializable. Batch callback work; never make a callback per block if it would create a synchronization bottleneck.
-- Otherwise, use the vanilla/mod implementation on CPU for the affected stage or whole chunk.
-
-Do not execute arbitrary mod Java inside a Vulkan shader. A future bytecode-to-IR frontend can be evaluated for pure, bounded methods, but it must validate control flow, memory access, randomness, side effects, and numerical behavior before eligibility. Unsupported constructs must fail closed to CPU behavior.
+No arbitrary mod Java executes inside a Vulkan shader. Optional adapters can describe an equivalent IR expression for behavior outside the frontend. Other mods do not need to register one: if neither automatic compilation nor an available adapter can represent the function, the affected GPU root stays on the Java path.
 
 ### 4. Lowering and shader ABI
 

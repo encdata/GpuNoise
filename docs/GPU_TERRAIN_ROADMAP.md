@@ -5,8 +5,9 @@
 Move the complete noise terrain chunk path onto Vulkan: evaluate density and
 aquifer inputs, interpolate cell values, choose solid/air/fluid results, and
 apply terrain surface rules. Keep Minecraft's chunk objects, palettes, and
-heightmaps coherent when the GPU results are committed. Support custom terrain
-functions from other mods through explicit, checked adapters.
+heightmaps coherent when the GPU results are committed. Discover and compile
+supported custom terrain functions automatically; an explicit adapter remains
+an optional escape hatch for behavior outside the automatic compiler.
 
 The target is semantic equivalence first, then throughput. A claimed target of
 1,000 chunks per second is a benchmark goal, not a promise for every GPU,
@@ -29,12 +30,13 @@ contract:
 6. The chunk writer commits the resulting states and updates the same counters,
    heightmaps, and fluid data that vanilla expects.
 
-An adapter must describe behavior and data, not pass arbitrary Java bytecode
-to the GPU. Java functions may call arbitrary methods, access mutable objects,
-or have side effects, so there is no safe general conversion of every Java
-method into a Vulkan shader. The supported extension surface should let mods
-describe their custom math in the IR and provide a reference evaluator for
-parity checks.
+The automatic bytecode frontend accepts only complete, bounded, side-effect
+free Java behavior that it can represent in the GPU IR. Java functions may
+call opaque methods, access mutable objects, or have side effects, so there is
+no safe general conversion of every Java method into a Vulkan shader. Those
+functions retain vanilla CPU behavior and a precise compiler diagnostic.
+Explicit IR adapters can extend coverage, but other mods are not required to
+register with GPU Noise.
 
 ## Passes
 
@@ -52,18 +54,15 @@ parity checks.
   differing world coordinate and states. Keep this as correctness evidence,
   not a throughput measurement.
 
-### 2. Versioned graph compiler and custom density API
+### 2. Versioned graph compiler and automatic custom density translation
 
 - Treat the current graph serializer as an initial IR version, then make node
   types and their parameters explicit instead of relying on class names and
   positional float arrays.
-- Add per-function translator registration, a built-in operation catalog,
-  compile diagnostics, and capability checks. The first adapter API can lower
-  custom functions to supported Minecraft density operations. Registration is
-  now frozen when graph compilation begins so worldgen workers see a stable
-  adapter set. Translator
-  registration now supports exact classes and mod API supertypes; exact matches
-  win, the closest supertype wins, and equally specific conflicts fail loudly.
+- Compile supported custom `compute(FunctionContext):double` bytecode directly
+  into the built-in operation catalog, with source-level diagnostics and
+  per-backend capability checks. Optional adapters may lower opaque mod
+  behavior to an equivalent graph when bytecode analysis cannot prove it.
 - Add a typed expression builder for custom noise algorithms that cannot be
   represented by vanilla `DensityFunctions`, including explicit sampler
   inputs and coordinate transforms. Minecraft `NormalNoise` samplers are now
@@ -92,7 +91,7 @@ parity checks.
   divisor. Differential checks against each
   adapter's original Java function remain necessary for each newly supported
   operation before broad modpack terrain graphs can be enabled by default.
-- Custom density compilation now also inspects `compute(FunctionContext)` JVM
+- Custom density compilation inspects `compute(FunctionContext)` JVM
   bytecode after explicit translators. It recursively inlines bounded pure
   same-class helpers and static helpers in dependency classes, carries final
   `DensityFunction` fields as graph dependencies, snapshots final instance
