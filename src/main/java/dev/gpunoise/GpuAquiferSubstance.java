@@ -75,7 +75,7 @@ public final class GpuAquiferSubstance {
         }
 
         if (similarity12 > 0.0) {
-            double contribution12 = (input.c2meAquifer ? similarity01 * similarity12 : similarity12)
+            double contribution12 = similarity01 * similarity12
                     * pressure(input.y, input.level1, input.level2,
                             input.kind1, input.kind2, input.barrier);
             double thirdResult = input.density + contribution12;

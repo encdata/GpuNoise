@@ -592,6 +592,14 @@ public final class VulkanCiSmoke {
                             30, 30, 30, 1, 2, 3,
                             GpuAquiferSubstance.WATER, GpuAquiferSubstance.OTHER,
                             GpuAquiferSubstance.LAVA, 0, false, false, 408),
+                    // Vanilla weights the second/third pressure pair by both
+                    // nearest similarities. Omitting similarity01 incorrectly
+                    // turns this retained water result into air/default.
+                    new GpuAquiferSubstance.Input(-0.02, -0.3748834, 22,
+                            23, 23, 63, 23, 90, 113, 137, 150,
+                            GpuAquiferSubstance.WATER, GpuAquiferSubstance.WATER,
+                            GpuAquiferSubstance.WATER, GpuAquiferSubstance.WATER,
+                            0, 0, false, false, false, 417),
                     // Second/third is the deciding pressure pair.
                     new GpuAquiferSubstance.Input(-0.5, 0.0, 30,
                             30, 30, 30, 1, 2, 3,
@@ -624,6 +632,12 @@ public final class VulkanCiSmoke {
                                 + ", field " + field + ": expected " + expected[field] + ", got " + actual);
                     }
                 }
+            }
+            int[] weightedThirdPressure = GpuAquiferSubstance.evaluate(
+                    substanceCases[substanceCases.length - 2]);
+            if (weightedThirdPressure[0] != GpuAquiferSubstance.RETURN_STATE
+                    || weightedThirdPressure[1] != 417 || weightedThirdPressure[2] != 1) {
+                throw new IllegalStateException("Vanilla second/third pressure contribution lost its nearest-similarity weight");
             }
         }
 
