@@ -270,6 +270,7 @@ final class GpuDensityExpressionSmoke {
         verifyTerrainDecisionFallback();
         verifyTransparentMarkerElimination();
         verifyConstantBranchPruning();
+        verifyConstantArithmeticFolding();
         requireOpcode("EXPR_ADD", 1);
         requireOpcode("EXPR_SUBTRACT", 2);
         requireOpcode("EXPR_MULTIPLY", 3);
@@ -474,6 +475,34 @@ final class GpuDensityExpressionSmoke {
         GpuDensityGraph sharedLowered = GpuDensityGraphLowerer.lower(sharedMarkerValue);
         if (sharedLowered.nodes().get(0).register() == sharedLowered.nodes().get(1).register()) {
             throw new AssertionError("an interpolated marker must not alias a child also exported as a router root");
+        }
+    }
+
+    private static void verifyConstantArithmeticFolding() {
+        DensityFunction source = DensityFunctions.constant(0.0);
+        GpuDensityGraph exactAddition = new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{1.25}, null),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{2.5}, null),
+                        new GpuDensityGraph.Node("Ap2", new int[]{0, 1}, new double[0], "ADD")),
+                new int[]{2}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(source, source, source));
+        GpuDensityGraph folded = GpuDensityGraphLowerer.lower(exactAddition);
+        if (folded.nodes().size() != 1 || !folded.nodes().get(0).opcode().equals("Constant")
+                || folded.nodes().get(0).constants()[0] != 3.75) {
+            throw new AssertionError("exact constant terrain addition should fold before shader dispatch");
+        }
+
+        GpuDensityGraph roundedAddition = new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{0.1}, null),
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{0.2}, null),
+                        new GpuDensityGraph.Node("Ap2", new int[]{0, 1}, new double[0], "ADD")),
+                new int[]{2}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(source, source, source));
+        GpuDensityGraph retained = GpuDensityGraphLowerer.lower(roundedAddition);
+        if (!retained.nodes().get(retained.routerRoots()[0]).opcode().equals("Ap2")) {
+            throw new AssertionError("constant addition must stay executable when folding changes float-ABI precision");
         }
     }
 

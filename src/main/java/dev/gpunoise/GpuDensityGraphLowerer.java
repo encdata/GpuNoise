@@ -59,6 +59,12 @@ final class GpuDensityGraphLowerer {
             int[] children = node.children();
             for (int i = 0; i < children.length; i++) if (children[i] >= 0) children[i] = remap[children[i]];
             double[] constants = node.constants();
+            GpuDensityGraph.Node folded = foldConstantNode(nodes, node, children, constants);
+            if (folded != null) {
+                node = folded;
+                children = node.children();
+                constants = node.constants();
+            }
             // Marker identity carries Java delegation and interpolated-corner
             // semantics. BlendedNoise entries also retain their source object
             // for independent CPU/GPU parity checks, so only merge pure IR ops.
@@ -138,6 +144,64 @@ final class GpuDensityGraphLowerer {
         return new GpuDensityGraph(registerNodes, roots, graph.noises(), registerSplines, graph.blended(),
                 sourceFunctions, registerCount, graph.supportedRouterRootMask(),
                 graph.unsupportedRouterRootReasons());
+    }
+
+    /**
+     * Folds only operations whose shader fast-math and precise paths produce
+     * the same exactly float-representable result. This keeps the folded
+     * constant identical to the value serialized through the float ABI.
+     */
+    private static GpuDensityGraph.Node foldConstantNode(List<GpuDensityGraph.Node> nodes,
+                                                          GpuDensityGraph.Node node,
+                                                          int[] children, double[] constants) {
+        if (node.opcode().equals("Ap2") && children.length == 2) {
+            Double left = constantNodeValue(nodes, children[0]);
+            Double right = constantNodeValue(nodes, children[1]);
+            if (left == null || right == null) return null;
+            double precise;
+            double fast;
+            switch (node.payload() == null ? "" : node.payload()) {
+                case "ADD" -> {
+                    precise = left + right;
+                    fast = (double) ((float) left + (float) right);
+                }
+                case "MUL" -> {
+                    precise = left == 0.0 ? 0.0 : left * right;
+                    fast = left == 0.0 ? 0.0 : (double) ((float) left * (float) right);
+                }
+                default -> { return null; }
+            }
+            if (sameFloatResult(precise, fast)) {
+                return new GpuDensityGraph.Node("Constant", new int[0], new double[]{precise}, null);
+            }
+        }
+        if (node.opcode().equals("Clamp") && children.length == 1 && constants.length >= 2) {
+            Double input = constantNodeValue(nodes, children[0]);
+            if (input == null) return null;
+            double minimum = (double) (float) constants[0];
+            double maximum = (double) (float) constants[1];
+            // Avoid undefined/reversed bounds and signed-zero corner cases in
+            // GLSL clamp implementations. Strict comparisons select one input
+            // value exactly, so both shader precision variants agree.
+            if (!Double.isFinite(input) || !Double.isFinite(minimum) || !Double.isFinite(maximum)
+                    || !(minimum < maximum) || input == 0.0 || minimum == 0.0 || maximum == 0.0) return null;
+            double result = input < minimum ? minimum : input > maximum ? maximum : input;
+            return new GpuDensityGraph.Node("Constant", new int[0], new double[]{result}, null);
+        }
+        return null;
+    }
+
+    private static Double constantNodeValue(List<GpuDensityGraph.Node> nodes, int index) {
+        GpuDensityGraph.Node node = nodes.get(index);
+        if (!node.opcode().equals("Constant")) return null;
+        double[] constants = node.constants();
+        return constants.length == 1 ? (double) (float) constants[0] : null;
+    }
+
+    private static boolean sameFloatResult(double precise, double fast) {
+        return Double.isFinite(precise) && Double.isFinite(fast)
+                && (double) (float) precise == precise
+                && Double.doubleToRawLongBits(precise) == Double.doubleToRawLongBits(fast);
     }
 
     private static NodeKey nodeKey(String opcode, int[] children, double[] constants, String payload) {
