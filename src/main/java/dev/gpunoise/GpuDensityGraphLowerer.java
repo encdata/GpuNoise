@@ -74,15 +74,37 @@ final class GpuDensityGraphLowerer {
             // per-sample instruction stream.
             roots[i] = graph.supportsRouterRoot(i) ? remap[roots[i]] : 0;
         }
+        int[] splineRemap = new int[graph.splines().size()];
+        Arrays.fill(splineRemap, -1);
         List<GpuDensityGraph.Spline> splines = new ArrayList<>(graph.splines().size());
-        for (GpuDensityGraph.Spline spline : graph.splines()) {
+        for (int splineIndex = 0; splineIndex < graph.splines().size(); splineIndex++) {
+            GpuDensityGraph.Spline spline = graph.splines().get(splineIndex);
             if (state[spline.coordinateNode()] != 2) continue;
             boolean valuesVisited = true;
             for (int value : spline.valueNodes()) if (state[value] != 2) valuesVisited = false;
             if (!valuesVisited) continue;
             int[] values = spline.valueNodes();
             for (int i = 0; i < values.length; i++) values[i] = remap[values[i]];
+            splineRemap[splineIndex] = splines.size();
             splines.add(new GpuDensityGraph.Spline(remap[spline.coordinateNode()], spline.locations(), spline.derivatives(), values));
+        }
+        // Root pruning can remove spline tables that appeared earlier in the
+        // source graph. Rewrite each surviving Spline instruction's table ID
+        // alongside the compacted spline-point array.
+        for (int index = 0; index < nodes.size(); index++) {
+            GpuDensityGraph.Node node = nodes.get(index);
+            if (!node.opcode().equals("Spline")) continue;
+            double[] constants = node.constants();
+            if (constants.length == 0) {
+                throw new IllegalArgumentException("GPU spline instruction " + index + " has no table ID");
+            }
+            int oldSplineId = (int) constants[0];
+            if (oldSplineId < 0 || oldSplineId >= splineRemap.length || splineRemap[oldSplineId] < 0) {
+                throw new IllegalArgumentException("GPU spline instruction " + index
+                        + " references an unreachable spline table " + oldSplineId);
+            }
+            constants[0] = splineRemap[oldSplineId];
+            nodes.set(index, new GpuDensityGraph.Node(node.opcode(), node.children(), constants, node.payload()));
         }
         // The generic compute evaluator used a values[1024] array indexed by
         // graph-node number. On consumer GPUs that array spills into local
