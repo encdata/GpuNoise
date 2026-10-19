@@ -370,15 +370,21 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                     raise RuntimeError("GPU benchmark completed without any GPU terrain cache being consumed")
                 print("CI_WORLDGEN_C2ME_EXACT_JAVA_FALLBACK cache_reads=0; continuing to saved-world parity",
                       flush=True)
-            has_aquifer_batch = "GPU aquifer substance batch:" in run_log
-            if not has_aquifer_batch and not c2me_java_fallback:
+            material_batches = re.findall(
+                r"GPU terrain material decisions: queries=(\d+), positiveDensityQueries=(\d+), "
+                r"aquiferQueries=(\d+), acceptedDecisions=(\d+), cpuFallback=(\d+)", run_log)
+            if not material_batches and not c2me_java_fallback:
                 skip_reasons = re.findall(r"GPU aquifer decision preflight skipped: ([^\r\n]+)", run_log)
                 reason_detail = "; ".join(dict.fromkeys(skip_reasons)) or "no preflight skip reason was logged"
                 raise RuntimeError(
-                    "GPU benchmark did not execute the chunk-batched aquifer substance shader: "
+                    "GPU benchmark did not execute the chunk-batched terrain material decision shader: "
                     + reason_detail
                 )
-            if VERIFY_AQUIFER_GPU and has_aquifer_batch:
+            if material_batches and any(int(queries) == 0 or int(positive) == 0
+                                        for queries, positive, _aquifer, _accepted, _fallback in material_batches):
+                raise RuntimeError(
+                    "GPU terrain material dispatch did not classify positive-density solid/air decisions")
+            if VERIFY_AQUIFER_GPU and material_batches:
                 nearest_results = re.findall(
                     r"GPU aquifer nearest parity: samples=(\d+), mismatches=(\d+)",
                     log_path.read_text(encoding="utf-8"))

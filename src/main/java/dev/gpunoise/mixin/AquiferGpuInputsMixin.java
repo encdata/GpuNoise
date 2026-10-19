@@ -70,7 +70,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private static final AtomicBoolean gpunoise$aquiferBatchWarning = new AtomicBoolean();
 
     @org.spongepowered.asm.mixin.Unique
-    private static final AtomicBoolean gpunoise$aquiferBatchLogged = new AtomicBoolean();
+    private static final AtomicBoolean gpunoise$terrainDecisionBatchLogged = new AtomicBoolean();
 
     @org.spongepowered.asm.mixin.Unique
     private static final AtomicBoolean gpunoise$aquiferPreflightLogged = new AtomicBoolean();
@@ -164,14 +164,32 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         List<PendingDecision> pending = new ArrayList<>();
         Map<GridNeighborhood, int[][]> neighborhoods = new HashMap<>();
         int directLavaDecisions = 0;
+        int positiveDensityDecisions = 0;
 
         for (int y = minY; y < minY + height; y++) {
             for (int z = minZ; z < minZ + 16; z++) {
                 for (int x = minX; x < minX + 16; x++) {
                     double cachedDensity = cache.finalDensity(x, y, z);
                     double density = noiseAccess.gpunoise$withBeardifier(cachedDensity, x, y, z);
-                    if (!Double.isFinite(density) || density > 0.0) continue;
+                    if (!Double.isFinite(density)) continue;
                     int index = (y - minY) * 256 + (z - minZ) * 16 + (x - minX);
+                    DensityFunction.FunctionContext context = new DensityFunction.SinglePointContext(x, y, z);
+                    if (density > 0.0) {
+                        // Vanilla's positive-density decision is the base
+                        // solid/air material choice. Batch it through the same
+                        // Vulkan decision kernel as aquifer results so the
+                        // complete per-block material classification has one
+                        // parity gate and one result table.
+                        GpuAquiferSubstance.Input gpuInput = new GpuAquiferSubstance.Input(
+                                density, 0.0, y, 0, 0, 0, 0, 0, 0, 0, 0,
+                                GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                                GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                                0, 0, false, false, c2meAquifer, 0);
+                        inputs.add(gpuInput);
+                        pending.add(new PendingDecision(index, null, context, density, gpuInput));
+                        positiveDensityDecisions++;
+                        continue;
+                    }
                     Aquifer.FluidStatus global = globalFluidPicker.computeFluid(x, y, z);
                     BlockState globalState = global.at(y);
                     if (globalState.is(Blocks.LAVA)) {
@@ -181,7 +199,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                 GpuAquiferSubstance.OTHER, 0, true, false, 0);
                         inputs.add(gpuInput);
                         pending.add(new PendingDecision(index, globalState,
-                                new DensityFunction.SinglePointContext(x, y, z), density, gpuInput));
+                                context, density, gpuInput));
                         directLavaDecisions++;
                         continue;
                     }
@@ -361,12 +379,14 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     vanillaParitySamples, vanillaParityMismatches,
                     substanceFirstMismatch == null ? "none" : substanceFirstMismatch);
         }
-        if (!inputs.isEmpty() && gpunoise$aquiferBatchLogged.compareAndSet(false, true)) {
+        if (!inputs.isEmpty() && gpunoise$terrainDecisionBatchLogged.compareAndSet(false, true)) {
             dev.gpunoise.GpuNoise.LOGGER.info(
-                    "GPU aquifer substance batch: queries={}, acceptedDecisions={}, cpuFallback={}, "
+                    "GPU terrain material decisions: queries={}, positiveDensityQueries={}, "
+                            + "aquiferQueries={}, acceptedDecisions={}, cpuFallback={}, "
                             + "globalLavaQueries={}, vanillaParitySamples={}, vanillaParityMismatches={}",
-                    inputs.size(), acceptedDecisions, inputs.size() - acceptedDecisions,
-                    directLavaDecisions, vanillaParitySamples, vanillaParityMismatches);
+                    inputs.size(), positiveDensityDecisions, inputs.size() - positiveDensityDecisions,
+                    acceptedDecisions, inputs.size() - acceptedDecisions, directLavaDecisions,
+                    vanillaParitySamples, vanillaParityMismatches);
         }
     }
 

@@ -537,6 +537,12 @@ public final class VulkanCiSmoke {
                             GpuAquiferSubstance.WATER, GpuAquiferSubstance.WATER,
                             GpuAquiferSubstance.WATER, GpuAquiferSubstance.WATER,
                             0, 0, false, false, false, 418);
+            GpuAquiferSubstance.Input positiveDensityMaterialCase =
+                    new GpuAquiferSubstance.Input(0.2, 0.0, 22,
+                            0, 0, 0, 0, 0, 0, 0, 0,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                            0, 0, false, false, false, 0);
             GpuAquiferSubstance.Input[] substanceCases = {
                     new GpuAquiferSubstance.Input(0.2, 0.25, 50,
                             40, 24, 12, 1, 10, 20,
@@ -608,6 +614,7 @@ public final class VulkanCiSmoke {
                     // nearest similarities. Omitting similarity01 incorrectly
                     // turns this retained water result into air/default.
                     weightedThirdPressureCase,
+                    positiveDensityMaterialCase,
                     positiveDensityThresholdCase,
                     // Second/third is the deciding pressure pair.
                     new GpuAquiferSubstance.Input(-0.5, 0.0, 30,
@@ -650,6 +657,11 @@ public final class VulkanCiSmoke {
             if (GpuAquiferSubstance.evaluate(positiveDensityThresholdCase)[0]
                     != GpuAquiferSubstance.CPU_FALLBACK) {
                 throw new IllegalStateException("Positive density near zero must use exact Java evaluation");
+            }
+            int[] positiveDensityMaterial = GpuAquiferSubstance.evaluate(positiveDensityMaterialCase);
+            if (positiveDensityMaterial[0] != GpuAquiferSubstance.RETURN_DEFAULT
+                    || positiveDensityMaterial[1] != 0 || positiveDensityMaterial[2] != 0) {
+                throw new IllegalStateException("Positive-density terrain must select vanilla's default material result");
             }
         }
 
