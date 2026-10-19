@@ -108,7 +108,10 @@ GPU_SHADER_VARIANT = re.compile(r"GPU density shader variant: registers=(\d+), f
 VALUE_NOISE_PARITY = re.compile(
     r"Vulkan value-noise parity: samples=65536, mismatches=0, maxError=0\.0, .*matches=true"
 )
-C2ME_AQUIFER_OVERRIDE = "Setting vanillaWorldGenOptimizations.optimizeAquifer to false (defined in system property)"
+C2ME_AQUIFER_OVERRIDE = {
+    False: "Setting vanillaWorldGenOptimizations.optimizeAquifer to false (defined in system property)",
+    True: "Setting vanillaWorldGenOptimizations.optimizeAquifer to true (defined in system property)",
+}
 
 
 def fetch_mods(destination: Path) -> None:
@@ -205,16 +208,14 @@ def prepare_run_directory(run_dir: Path, downloaded_mods: Path,
     for filename in selected_mods:
         shutil.copy2(downloaded_mods / filename, mods_dir / filename)
     (run_dir / "eula.txt").write_text("eula=true\n", encoding="utf-8")
-    # C2ME's aquifer rewrite has a different nearest-center and fluid-tick
-    # contract from vanilla. GPU Noise's aquifer kernel implements the vanilla
-    # contract, so pin C2ME to its vanilla-compatible mode in both CPU and GPU
-    # runs. This keeps the CPU world as the reference while actually exercising
-    # GPU density and aquifer decisions instead of silently benchmarking the
-    # exact-Java C2ME fallback.
+    c2me_aquifer_rewrite = terrain_profile == "c2me-aquifer-rewrite"
+    # Exercise both C2ME's native aquifer path and the vanilla-compatible
+    # profile. Both CPU and GPU worlds receive the same explicit setting.
     config_dir = run_dir / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     (config_dir / "c2me.toml").write_text(
-        "version = 3\n\n[vanillaWorldGenOptimizations]\noptimizeAquifer = false\n",
+        "version = 3\n\n[vanillaWorldGenOptimizations]\n"
+        f"optimizeAquifer = {str(c2me_aquifer_rewrite).lower()}\n",
         encoding="utf-8",
     )
     properties = {
@@ -233,7 +234,7 @@ def prepare_run_directory(run_dir: Path, downloaded_mods: Path,
     )
     mod_names = ", ".join(sorted(path.name for path in mods_dir.glob("*.jar")))
     print(f"Prepared benchmark mods: {mod_names}", flush=True)
-    print("CI_C2ME_CONFIG optimizeAquifer=false (vanilla aquifer parity mode)", flush=True)
+    print(f"CI_C2ME_CONFIG optimizeAquifer={str(c2me_aquifer_rewrite).lower()}", flush=True)
 
 
 def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
@@ -272,8 +273,10 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
         command.append(f"-Dgpunoise.terrainBatchRegionRadius={BATCH_REGION_RADIUS}")
     print(f"Starting {mode} dedicated Chunky worldgen check (full_block_output={FULL_BLOCK_OUTPUT})", flush=True)
     process_env = os.environ.copy()
+    c2me_aquifer_rewrite = terrain_profile == "c2me-aquifer-rewrite"
     jvm_overrides = [
-        "-Dc2me.base.config.override.vanillaWorldGenOptimizations.optimizeAquifer=false"
+        "-Dc2me.base.config.override.vanillaWorldGenOptimizations.optimizeAquifer="
+        + str(c2me_aquifer_rewrite).lower()
     ]
     if not force_cpu:
         jvm_overrides.append("-Dgpunoise.exactAquiferInputs=true")
@@ -336,9 +339,9 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
             line, observed_at = event
             if not server_ready_seen and SERVER_READY.search(line):
                 server_log = log_path.read_text(encoding="utf-8", errors="replace")
-                if C2ME_AQUIFER_OVERRIDE not in server_log:
+                if C2ME_AQUIFER_OVERRIDE[c2me_aquifer_rewrite] not in server_log:
                     raise RuntimeError(
-                        f"{mode} server did not confirm C2ME's vanilla aquifer override; "
+                        f"{mode} server did not confirm C2ME optimizeAquifer={c2me_aquifer_rewrite}; "
                         "GPU and CPU worldgen would use an unverified aquifer contract"
                     )
                 if not GPU_NOISE_MOD_LIST.search(server_log):
@@ -405,10 +408,6 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
 
         if not force_cpu:
             run_log = log_path.read_text(encoding="utf-8")
-            c2me_java_fallback = (
-                "GPU aquifer decision preflight skipped: C2ME aquifer rewrite is active; "
-                "keeping its fluid decisions on the exact Java path" in run_log
-            )
             if not gpu_counts:
                 raise RuntimeError("GPU server completed without reporting terrain cache state")
             if ("GPU aquifer inputs use exact Java roots; Vulkan center selection and substance decisions "
@@ -432,14 +431,11 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                     "GPU final-density sign parity failed outside the Java fallback threshold in the "
                     f"configured chunk ({DENSITY_PARITY_CHUNK_X},{DENSITY_PARITY_CHUNK_Z})")
             if max(counts[2] for counts in gpu_counts) <= 0:
-                if not c2me_java_fallback:
-                    raise RuntimeError("GPU benchmark completed without any GPU terrain cache being consumed")
-                print("CI_WORLDGEN_C2ME_EXACT_JAVA_FALLBACK cache_reads=0; continuing to saved-world parity",
-                      flush=True)
+                raise RuntimeError("GPU benchmark completed without any GPU terrain cache being consumed")
             material_batches = re.findall(
                 r"GPU terrain material decisions: queries=(\d+), positiveDensityQueries=(\d+), "
                 r"aquiferQueries=(\d+), .*?acceptedDecisions=(\d+), cpuFallback=(\d+)", run_log)
-            if not material_batches and not c2me_java_fallback:
+            if not material_batches:
                 skip_reasons = re.findall(r"GPU aquifer decision preflight skipped: ([^\r\n]+)", run_log)
                 reason_detail = "; ".join(dict.fromkeys(skip_reasons)) or "no preflight skip reason was logged"
                 raise RuntimeError(
@@ -450,6 +446,11 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                                      or sum(int(row[1]) for row in material_batches) == 0):
                 raise RuntimeError(
                     "GPU terrain material dispatch did not classify any positive-density solid/air rows")
+            if (c2me_aquifer_rewrite
+                    and sum(int(row[3]) for row in material_batches) == 0):
+                raise RuntimeError(
+                    "C2ME aquifer rewrite completed without applying a GPU decision row; "
+                    "the optimized C2ME path is still running entirely on Java")
             if VERIFY_AQUIFER_GPU and material_batches:
                 nearest_results = re.findall(
                     r"GPU aquifer nearest parity: samples=(\d+), mismatches=(\d+)",
@@ -591,10 +592,10 @@ def main() -> int:
     profile = None
     if sys.argv[1:] and not prepare_only:
         if len(sys.argv) != 3 or sys.argv[1] != "--profile":
-            choices = ", ".join(("without-terrain-mods", *TERRAIN_TEST_PROFILES))
+            choices = ", ".join(("without-terrain-mods", "c2me-aquifer-rewrite", *TERRAIN_TEST_PROFILES))
             raise ValueError(f"usage: runserver_benchmark.py [--prepare-mods | --profile PROFILE]; profiles: {choices}")
         profile = sys.argv[2]
-        if profile not in ("without-terrain-mods", *TERRAIN_TEST_PROFILES):
+        if profile not in ("without-terrain-mods", "c2me-aquifer-rewrite", *TERRAIN_TEST_PROFILES):
             raise ValueError(f"unknown worldgen profile {profile!r}")
     downloaded_mods = ROOT / "build" / "ci-mods"
     fetch_mods(downloaded_mods)
@@ -605,7 +606,7 @@ def main() -> int:
         return 0
     print(
         f"CI_WORLDGEN_CONFIG radius_blocks={CHUNKY_RADIUS_BLOCKS} "
-        f"test_cases={1 + len(TERRAIN_TEST_PROFILES)} selected_profile={profile or 'all'} "
+        f"test_cases={2 + len(TERRAIN_TEST_PROFILES)} selected_profile={profile or 'all'} "
         f"repetitions={WORLDGEN_CHECK_REPETITIONS} "
         f"terrain_mods={len(TERRAIN_MODS)} modded_profiles={len(TERRAIN_TEST_PROFILES)} "
         f"batch_window_ms={BATCH_WINDOW_MS} "
@@ -616,6 +617,7 @@ def main() -> int:
     completed_cases: list[str] = []
     all_cases: tuple[tuple[str, str | None], ...] = (
         (("without-terrain-mods", None),)
+        + (("c2me-aquifer-rewrite", "c2me-aquifer-rewrite"),)
         + tuple((profile, profile) for profile in TERRAIN_TEST_PROFILES)
     )
     cases = tuple(case for case in all_cases if profile is None or case[0] == profile)

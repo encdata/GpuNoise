@@ -92,13 +92,15 @@ GitHub Actions builds and validates the single mod jar, compiles GLSL with
 same-seed NeoForge dedicated servers with C2ME and Chunky. It checks server
 startup, terrain graph parity, GPU cache consumption, CPU fallback behavior,
 clean Chunky completion, and saved CPU/GPU block-state and fluid-tick parity.
-The paired runs keep C2ME installed but set
-`vanillaWorldGenOptimizations.optimizeAquifer = false`, so both sides use the
-vanilla aquifer contract and the GPU aquifer path can be checked directly.
-CI passes C2ME's JVM config override and requires its startup log to confirm
-the value before generating either world. GPU runs prepare aquifer fluid inputs
-from exact Java roots while dispatching center selection and substance
-decisions to Vulkan.
+The paired terrain-mod runs keep C2ME installed but set
+`vanillaWorldGenOptimizations.optimizeAquifer = false`, so the vanilla aquifer
+contract is checked across the mod stacks. A separate paired run enables
+C2ME's aquifer rewrite and checks the optimized center order, low-pass cutoff,
+fluid status, and block decisions against its CPU result. CI passes C2ME's JVM
+config override and requires the startup log to confirm the selected value
+before generating either world. GPU runs prepare aquifer inputs from exact Java
+barrier values while dispatching center selection and substance decisions to
+Vulkan.
 CI does not collect or compare CPS; Lavapipe is
 used for correctness checks, not as a speed measurement. Actions uploads the
 mod jar and pinned C2ME/Chunky jars before the worldgen checks start.

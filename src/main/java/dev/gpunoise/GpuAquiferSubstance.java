@@ -80,7 +80,7 @@ public final class GpuAquiferSubstance {
     }
 
     private static void putInput(ByteBuffer packed, Input input) {
-        int flags = (input.globalIsLava ? 1 : 0) | (input.belowIsLava ? 2 : 0)
+        int flags = (input.directGlobalFluid ? 1 : 0) | (input.belowIsLava ? 2 : 0)
                 | (input.c2meAquifer ? 4 : 0);
         packed.putFloat((float) input.density).putFloat((float) input.barrier).putInt(input.y)
                 .putInt(input.level0).putInt(input.level1).putInt(input.level2).putInt(input.level3)
@@ -110,7 +110,7 @@ public final class GpuAquiferSubstance {
                     input.level2, input.level3, input.distance0, input.distance1,
                     input.distance2, input.distance3, input.kind0, input.kind1,
                     input.kind2, input.kind3, input.statusEqualityMask,
-                    input.globalIsLava, input.belowIsLava, input.c2meAquifer);
+                    input.directGlobalFluid, input.belowIsLava, input.c2meAquifer);
         }
 
         public void addPositiveDensity(double density, int y, boolean c2meAquifer) {
@@ -118,7 +118,7 @@ public final class GpuAquiferSubstance {
                     OTHER, OTHER, OTHER, OTHER, 0, false, false, c2meAquifer);
         }
 
-        public void addGlobalLava(double density, int y, boolean c2meAquifer) {
+        public void addDirectGlobalFluid(double density, int y, boolean c2meAquifer) {
             write(density, 0.0, y, 0, 0, 0, 0, 0, 0, 0, 0,
                     OTHER, OTHER, OTHER, OTHER, 0, true, false, c2meAquifer);
         }
@@ -148,7 +148,7 @@ public final class GpuAquiferSubstance {
                            int level0, int level1, int level2, int level3,
                            int distance0, int distance1, int distance2, int distance3,
                            int kind0, int kind1, int kind2, int kind3,
-                           int statusEqualityMask, boolean globalIsLava,
+                           int statusEqualityMask, boolean directGlobalFluid,
                            boolean belowIsLava, boolean c2meAquifer) {
             if (finished) throw new IllegalStateException("aquifer batch writer is already finished");
             if (size >= expectedRows) throw new IllegalStateException("aquifer batch exceeded its chunk capacity");
@@ -159,7 +159,7 @@ public final class GpuAquiferSubstance {
                 }
                 current = allocateBatch(Math.min(expectedRows - size, MAX_QUERIES));
             }
-            int flags = (globalIsLava ? 1 : 0) | (belowIsLava ? 2 : 0)
+            int flags = (directGlobalFluid ? 1 : 0) | (belowIsLava ? 2 : 0)
                     | (c2meAquifer ? 4 : 0);
             current.putFloat((float) density).putFloat((float) barrier).putInt(y)
                     .putInt(level0).putInt(level1).putInt(level2).putInt(level3)
@@ -175,7 +175,7 @@ public final class GpuAquiferSubstance {
         if (!Double.isFinite(input.density)) return output(CPU_FALLBACK, 0, false);
         if (nearDensityDecisionThreshold(input.density)) return output(CPU_FALLBACK, 0, false);
         if (input.density > 0.0) return output(RETURN_DEFAULT, 0, false);
-        if (input.globalIsLava) return output(RETURN_STATE, input.globalStateId, false);
+        if (input.directGlobalFluid) return output(RETURN_STATE, input.globalStateId, false);
         if (!Double.isFinite(input.barrier))
             return output(CPU_FALLBACK, 0, false);
 
@@ -206,10 +206,7 @@ public final class GpuAquiferSubstance {
         }
 
         if (similarity12 > 0.0) {
-            // C2ME OCL's extractedCheckFG receives the center-1/center-2
-            // similarity directly. Vanilla's implementation weights this
-            // pair by similarity01 as well; keep the two contracts distinct.
-            double contribution12 = (input.c2meAquifer ? similarity12 : similarity01 * similarity12)
+            double contribution12 = similarity01 * similarity12
                     * pressure(input.y, input.level1, input.level2,
                             input.kind1, input.kind2, input.barrier);
             double thirdResult = input.density + contribution12;
@@ -218,10 +215,10 @@ public final class GpuAquiferSubstance {
         }
         if (!input.c2meAquifer) return output(RETURN_STATE, input.nearestStateId, true);
 
-        // Match C2ME OCL __aquifer_getFinalBlockState's center-status pairs.
-        boolean schedule = !sameStatus(input, 0, 1)
-                || (similarity12 >= FLOWING_UPDATE_SIMILARITY && !sameStatus(input, 1, 2))
-                || (similarity02 >= FLOWING_UPDATE_SIMILARITY && !sameStatus(input, 0, 2))
+        boolean mayFlow01 = !sameStatus(input, 0, 1);
+        boolean mayFlow12 = similarity12 >= FLOWING_UPDATE_SIMILARITY && !sameStatus(input, 1, 2);
+        boolean mayFlow02 = similarity02 >= FLOWING_UPDATE_SIMILARITY && !sameStatus(input, 0, 2);
+        boolean schedule = mayFlow01 || mayFlow12 || mayFlow02
                 || (similarity02 >= FLOWING_UPDATE_SIMILARITY
                 && similarity(input.distance0, input.distance3) >= FLOWING_UPDATE_SIMILARITY
                 && !sameStatus(input, 0, 3));
@@ -273,18 +270,18 @@ public final class GpuAquiferSubstance {
                  int level0, int level1, int level2, int level3,
                  int distance0, int distance1, int distance2, int distance3,
                  int kind0, int kind1, int kind2, int kind3,
-                 int statusEqualityMask, int globalStateId, boolean globalIsLava,
+                 int statusEqualityMask, int globalStateId, boolean directGlobalFluid,
                  boolean belowIsLava, boolean c2meAquifer, int nearestStateId) {
         public Input(double density, double barrier, int y,
                      int level0, int level1, int level2,
                      int distance0, int distance1, int distance2,
                      int kind0, int kind1, int kind2,
-                     int globalStateId, boolean globalIsLava, boolean belowIsLava,
+                     int globalStateId, boolean directGlobalFluid, boolean belowIsLava,
                      int nearestStateId) {
             this(density, barrier, y, level0, level1, level2, 0,
                     distance0, distance1, distance2, 0,
                     kind0, kind1, kind2, OTHER, 0, globalStateId,
-                    globalIsLava, belowIsLava, false, nearestStateId);
+                    directGlobalFluid, belowIsLava, false, nearestStateId);
         }
     }
 }

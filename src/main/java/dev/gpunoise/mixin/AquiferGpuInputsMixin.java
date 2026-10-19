@@ -83,6 +83,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private static final AtomicBoolean gpunoise$exactAquiferInputsLogged = new AtomicBoolean();
 
     @org.spongepowered.asm.mixin.Unique
+    private static final AtomicBoolean gpunoise$c2meCutoffWarning = new AtomicBoolean();
+
+    @org.spongepowered.asm.mixin.Unique
     private static final int gpunoise$aquiferDecisionConcurrency = (int) Math.max(1L,
             Math.min(8L, Long.getLong("gpunoise.aquiferDecisionConcurrency", 3L)));
 
@@ -163,6 +166,25 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         }
     }
 
+    @org.spongepowered.asm.mixin.Unique
+    private Integer gpunoise$c2meSamplingCutoff() {
+        try {
+            ClassLoader loader = getClass().getClassLoader();
+            Class<?> accessor = Class.forName(
+                    "com.ishland.c2me.base.mixin.access.IAquiferSamplerImpl", false, loader);
+            if (!accessor.isInstance(this)) return null;
+            Object value = accessor.getMethod("getSamplingYLowPassCutoff").invoke(this);
+            return value instanceof Integer cutoff ? cutoff : null;
+        } catch (ReflectiveOperationException | LinkageError unavailable) {
+            if (gpunoise$c2meCutoffWarning.compareAndSet(false, true)) {
+                dev.gpunoise.GpuNoise.LOGGER.warn(
+                        "C2ME aquifer cutoff accessor is unavailable; its GPU fluid-decision batch will stay disabled",
+                        unavailable);
+            }
+            return null;
+        }
+    }
+
     @Inject(method = "computeSubstance", at = @At("HEAD"), cancellable = true)
     private void gpunoise$usePreparedGpuAquiferDecision(
             DensityFunction.FunctionContext context, double density,
@@ -200,10 +222,15 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                                  dev.gpunoise.GpuNoiseChunkAccess noiseAccess,
                                                  PositionalRandomFactory randomFactory) {
         boolean c2meAquifer = GpuAquiferRuntimeMode.c2meAquiferRewriteEnabled();
+        int c2meSamplingCutoff = Integer.MAX_VALUE;
         if (c2meAquifer) {
-            gpunoise$logAquiferPreflightSkip(
-                    "C2ME aquifer rewrite is active; keeping its fluid decisions on the exact Java path");
-            return;
+            Integer cutoff = gpunoise$c2meSamplingCutoff();
+            if (cutoff == null) {
+                gpunoise$logAquiferPreflightSkip(
+                        "C2ME aquifer cutoff accessor is unavailable; keeping its fluid decisions on Java");
+                return;
+            }
+            c2meSamplingCutoff = cutoff;
         }
         final int minX = cache.minX(), minY = cache.minY(), minZ = cache.minZ();
         final int height = cache.height();
@@ -215,8 +242,11 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         PendingDecisions pending = new PendingDecisions(decisionCapacity, gpunoise$verifyAquifer);
         NeighborhoodCache neighborhoods = new NeighborhoodCache(Math.max(16, (height + 11) / 12 * 4));
         FluidStatusCache fluidStatuses = new FluidStatusCache(Math.max(16, (height + 11) / 12 * 4));
-        boolean exactAquiferInputs = GpuAquiferRuntimeMode.exactAquiferInputsEnabled();
-        int directLavaDecisions = 0;
+        // C2ME's aquifer pressure decisions consume the Java barrier value.
+        // Keep the continuous terrain roots on GPU while supplying this
+        // discrete decision boundary from the same Java function as OCL.
+        boolean exactAquiferInputs = c2meAquifer || GpuAquiferRuntimeMode.exactAquiferInputsEnabled();
+        int directGlobalFluidDecisions = 0;
         int positiveDensityDecisions = 0;
 
         for (int y = minY; y < minY + height; y++) {
@@ -250,15 +280,23 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     }
                     Aquifer.FluidStatus global = globalFluidPicker.computeFluid(x, y, z);
                     BlockState globalState = global.at(y);
+                    if (c2meAquifer && y > c2meSamplingCutoff) {
+                        // C2ME OCL bypasses local aquifer pressure above its
+                        // low-pass cutoff and returns the global picker state.
+                        substanceWriter.addDirectGlobalFluid(density, y, true);
+                        pending.add(index, globalState, context, density, null);
+                        directGlobalFluidDecisions++;
+                        continue;
+                    }
                     if (globalState.is(Blocks.LAVA)) {
                         GpuAquiferSubstance.Input diagnosticInput = gpunoise$verifyAquifer
                                 ? new GpuAquiferSubstance.Input(density, 0.0, y,
                                 0, 0, 0, 0, 0, 0,
                                 GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
                                 GpuAquiferSubstance.OTHER, 0, true, false, 0) : null;
-                        substanceWriter.addGlobalLava(density, y, c2meAquifer);
+                        substanceWriter.addDirectGlobalFluid(density, y, c2meAquifer);
                         pending.add(index, globalState, context, density, diagnosticInput);
-                        directLavaDecisions++;
+                        directGlobalFluidDecisions++;
                         continue;
                     }
 
@@ -458,11 +496,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     "GPU terrain material decisions: queries={}, positiveDensityQueries={}, "
                             + "aquiferQueries={}, centerStatusLookups={}, centerStatusEvaluations={}, "
                             + "centerStatusCacheHits={}, acceptedDecisions={}, cpuFallback={}, "
-                            + "globalLavaQueries={}, vanillaParitySamples={}, vanillaParityMismatches={}",
+                            + "directGlobalFluidQueries={}, vanillaParitySamples={}, vanillaParityMismatches={}",
                     cumulativeQueries, cumulativePositive, cumulativeQueries - cumulativePositive,
                     queries.size() * 4L, fluidStatuses.size(),
                     Math.max(0L, queries.size() * 4L - fluidStatuses.size()),
-                    acceptedDecisions, substanceWriter.size() - acceptedDecisions, directLavaDecisions,
+                    acceptedDecisions, substanceWriter.size() - acceptedDecisions,
+                    directGlobalFluidDecisions,
                     vanillaParitySamples, vanillaParityMismatches);
         }
     }

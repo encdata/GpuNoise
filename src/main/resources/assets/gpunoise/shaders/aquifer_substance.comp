@@ -30,7 +30,7 @@ const uint LAVA = 2u;
 const uint RETURN_DEFAULT = 0u;
 const uint RETURN_STATE = 1u;
 const uint CPU_FALLBACK = 2u;
-const uint FLAG_GLOBAL_LAVA = 1u;
+const uint FLAG_DIRECT_GLOBAL_FLUID = 1u;
 const uint FLAG_BELOW_LAVA = 2u;
 const uint FLAG_C2ME_AQUIFER = 4u;
 const float PRECISION_EPSILON = 5.0e-3;
@@ -80,7 +80,7 @@ void main() {
         emit(i, RETURN_DEFAULT, 0u);
         return;
     }
-    if ((r.flags & FLAG_GLOBAL_LAVA) != 0u) {
+    if ((r.flags & FLAG_DIRECT_GLOBAL_FLUID) != 0u) {
         emit(i, RETURN_STATE, 0u);
         return;
     }
@@ -130,8 +130,7 @@ void main() {
     }
 
     if (similarity12 > 0.0) {
-        float pairWeight = c2meAquifer ? similarity12 : similarity01 * similarity12;
-        float contribution12 = pairWeight * pressure(r.y,
+        float contribution12 = similarity01 * similarity12 * pressure(r.y,
                 r.level1, r.level2, r.kind1, r.kind2, r.barrier);
         float thirdResult = r.density + contribution12;
         if (abs(thirdResult) <= PRECISION_EPSILON) {

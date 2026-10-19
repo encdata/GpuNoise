@@ -114,6 +114,7 @@ jobs:
       matrix:
         profile:
           - without-terrain-mods
+          - c2me-aquifer-rewrite
           - tectonic-overworld-stack
           - expanded-biome-stacks
           - biomes-weve-gone
