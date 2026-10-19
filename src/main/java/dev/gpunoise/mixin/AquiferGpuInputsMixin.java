@@ -263,6 +263,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         int directGlobalFluidDecisions = 0;
         int positiveDensityDecisions = 0;
 
+        long inputScanStart = GpuTerrainProfiler.beginAquiferPhase();
         for (int y = minY; y < minY + height; y++) {
             for (int z = minZ; z < minZ + 16; z++) {
                 for (int x = minX; x < minX + 16; x++) {
@@ -355,12 +356,14 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 }
             }
         }
+        GpuTerrainProfiler.recordAquiferPhase(GpuTerrainProfiler.AQUIFER_SCAN, inputScanStart);
 
         // C2ME OCL precomputes each random aquifer center's FluidStatus before
         // resolving block decisions. Mirror that bulk prefill: evaluate the
         // 13 surface probes, global fluid samples, and terrain roots together
         // on Vulkan, then retain the original Java statuses for custom fluids.
         List<CompletableFuture<int[]>> nearestBatches = new ArrayList<>();
+        long nearestStatusStart = GpuTerrainProfiler.beginAquiferPhase();
         boolean combineAquiferPasses = c2meAquifer && queries.size() > 0
                 && queries.size() <= GpuAquiferNearestThree.MAX_QUERIES;
         if (combineAquiferPasses) {
@@ -464,22 +467,28 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         + ", sampled=" + nearestParitySamples;
             }
         }
+        GpuTerrainProfiler.recordAquiferPhase(GpuTerrainProfiler.AQUIFER_NEAREST_STATUS,
+                nearestStatusStart);
         if (substanceWriter.size() != pending.size()) {
             throw new IllegalStateException("aquifer GPU rows lost their ordered chunk metadata");
         }
 
         List<CompletableFuture<int[]>> substanceBatches = new ArrayList<>();
+        long decisionDispatchStart = GpuTerrainProfiler.beginAquiferPhase();
         for (java.nio.ByteBuffer records : substanceWriter.finish()) {
             int count = records.remaining() / GpuAquiferSubstance.RECORD_BYTES;
             substanceBatches.add(GpuTerrainRuntime.submitAquiferSubstance(records, count).toCompletableFuture());
         }
         CompletableFuture.allOf(substanceBatches.toArray(CompletableFuture[]::new)).join();
+        GpuTerrainProfiler.recordAquiferPhase(GpuTerrainProfiler.AQUIFER_DECISION_DISPATCH,
+                decisionDispatchStart);
 
         int outputOffset = 0;
         int acceptedDecisions = 0;
         int vanillaParitySamples = 0;
         int vanillaParityMismatches = 0;
         String substanceFirstMismatch = null;
+        long tableResolveStart = GpuTerrainProfiler.beginAquiferPhase();
         for (CompletableFuture<int[]> batch : substanceBatches) {
             int[] outputs = batch.join();
             for (int row = 0; row < outputs.length / GpuAquiferSubstance.OUTPUT_INTS; row++) {
@@ -530,6 +539,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 acceptedDecisions++;
             }
         }
+        GpuTerrainProfiler.recordAquiferPhase(GpuTerrainProfiler.AQUIFER_TABLE_RESOLVE,
+                tableResolveStart);
         gpunoise$decisions = decisions;
         if (gpunoise$verifyAquifer) {
             dev.gpunoise.GpuNoise.LOGGER.info(

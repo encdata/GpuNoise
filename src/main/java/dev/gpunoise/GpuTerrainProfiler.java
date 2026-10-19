@@ -9,6 +9,13 @@ public final class GpuTerrainProfiler {
     private static final int REPORT_EVERY_FILLS = 128;
     private static final int LATENCY_BUCKETS = 63;
     private static final int HOT_PATH_SAMPLE_MASK = 63;
+    public static final int AQUIFER_SCAN = 0;
+    public static final int AQUIFER_NEAREST_STATUS = 1;
+    public static final int AQUIFER_DECISION_DISPATCH = 2;
+    public static final int AQUIFER_TABLE_RESOLVE = 3;
+    private static final String[] AQUIFER_PHASE_NAMES = {
+            "scanAndPack", "nearestAndStatus", "decisionDispatch", "tableResolve"
+    };
     private static final ThreadLocal<Integer> hotPathSampleSequence = ThreadLocal.withInitial(() -> 0);
     private static final LongAdder fills = new LongAdder();
     private static final LongAdder fillNanos = new LongAdder();
@@ -24,6 +31,8 @@ public final class GpuTerrainProfiler {
     private static final LongAdder aquiferStatusPrefillSamples = new LongAdder();
     private static final LongAdder aquiferStatusPrefillCenters = new LongAdder();
     private static final LongAdder aquiferStatusPrefillJavaFallbacks = new LongAdder();
+    private static final LongAdder[] aquiferPhaseNanos = createCounterArray(AQUIFER_PHASE_NAMES.length);
+    private static final LongAdder[] aquiferPhaseSamples = createCounterArray(AQUIFER_PHASE_NAMES.length);
     private static final LongAdder blockWrites = new LongAdder();
     private static final LongAdder finalDensityNanos = new LongAdder();
     private static final LongAdder initialDensityNanos = new LongAdder();
@@ -125,6 +134,17 @@ public final class GpuTerrainProfiler {
         }
     }
 
+    /** Starts an unsampled timer for a once-per-chunk aquifer preparation phase. */
+    public static long beginAquiferPhase() {
+        return ENABLED ? System.nanoTime() : 0L;
+    }
+
+    public static void recordAquiferPhase(int phase, long start) {
+        if (!ENABLED || start == 0L || phase < 0 || phase >= AQUIFER_PHASE_NAMES.length) return;
+        aquiferPhaseNanos[phase].add(Math.max(0L, System.nanoTime() - start));
+        aquiferPhaseSamples[phase].increment();
+    }
+
     /** Records the C2ME-style batched status kernel and its conservative Java fallbacks. */
     public static void recordAquiferStatusPrefill(long start, int centers, int javaFallbacks) {
         if (!ENABLED) return;
@@ -176,12 +196,18 @@ public final class GpuTerrainProfiler {
                 aquiferStatusPrefillCalls.sum(), aquiferStatusPrefillCenters.sum(),
                 aquiferStatusPrefillJavaFallbacks.sum(), aquiferStatusPrefillSamples.sum(),
                 averageNanos(aquiferStatusPrefillNanos, aquiferStatusPrefillSamples));
+        GpuNoise.LOGGER.info("GPU terrain aquifer phase average ns: {}",
+                formatAquiferPhases());
         GpuNoise.LOGGER.info("GPU terrain Java root fallback calls: {}", formatRootFallbacks());
         GpuNoise.LOGGER.info("GPU terrain per-root cache calls: {}", formatRootCalls());
     }
 
     private static LongAdder[] createRootFallbackCounters() {
-        LongAdder[] counters = new LongAdder[GpuTerrainRoots.COUNT];
+        return createCounterArray(GpuTerrainRoots.COUNT);
+    }
+
+    private static LongAdder[] createCounterArray(int count) {
+        LongAdder[] counters = new LongAdder[count];
         for (int root = 0; root < counters.length; root++) counters[root] = new LongAdder();
         return counters;
     }
@@ -204,6 +230,17 @@ public final class GpuTerrainProfiler {
                     .append(javaRootFallbackCalls[root].sum());
         }
         return counts.toString();
+    }
+
+    private static String formatAquiferPhases() {
+        StringBuilder values = new StringBuilder();
+        for (int phase = 0; phase < AQUIFER_PHASE_NAMES.length; phase++) {
+            if (phase > 0) values.append(',');
+            values.append(AQUIFER_PHASE_NAMES[phase]).append('=')
+                    .append(averageNanos(aquiferPhaseNanos[phase], aquiferPhaseSamples[phase]))
+                    .append("ns/").append(aquiferPhaseSamples[phase].sum());
+        }
+        return values.toString();
     }
 
     private static double averageNanos(LongAdder nanos, LongAdder samples) {
