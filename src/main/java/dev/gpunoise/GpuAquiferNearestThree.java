@@ -8,7 +8,7 @@ import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 /** Input contract and vanilla-order reference for aquifer center selection. */
 public final class GpuAquiferNearestThree {
     // Vanilla visits grid X offsets 0..1, Y offsets -1..1, Z offsets 0..1.
-    static final int CANDIDATES = 12;
+    public static final int CANDIDATES = 12;
     static final int RECORD_BYTES = 16 * (CANDIDATES + 1);
     static final int OUTPUT_INTS = 8;
     static final int MAX_QUERIES = 16_384;
@@ -40,7 +40,7 @@ public final class GpuAquiferNearestThree {
     }
 
     /** Recreates the 2x3x2 positional-random neighborhood used by vanilla. */
-    static int[][] centersForQuery(PositionalRandomFactory factory, int[] query) {
+    public static int[][] centersForQuery(PositionalRandomFactory factory, int[] query) {
         if (query.length != 3) throw new IllegalArgumentException("aquifer query must be xyz");
         int baseX = Math.floorDiv(query[0] - 5, 16);
         int baseY = Math.floorDiv(query[1] + 1, 12);
@@ -65,7 +65,7 @@ public final class GpuAquiferNearestThree {
     }
 
     /** Returns nearest indices followed by their squared distances. */
-    static int[] select(int[] query, int[][] centers) {
+    public static int[] select(int[] query, int[][] centers) {
         if (query.length != 3 || centers.length != CANDIDATES)
             throw new IllegalArgumentException("aquifer query must contain one point and 12 centers");
         int[] indices = {-1, -1, -1};

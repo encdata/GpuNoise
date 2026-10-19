@@ -4,16 +4,16 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 /** Packed contract and double-precision reference for vanilla aquifer results. */
-final class GpuAquiferSubstance {
-    static final int RECORD_BYTES = 64;
-    static final int OUTPUT_INTS = 4;
-    static final int MAX_QUERIES = GpuAquiferNearestThree.MAX_QUERIES;
-    static final int OTHER = 0;
-    static final int WATER = GpuAquiferPressure.WATER;
-    static final int LAVA = GpuAquiferPressure.LAVA;
-    static final int RETURN_DEFAULT = 0;
-    static final int RETURN_STATE = 1;
-    static final int CPU_FALLBACK = 2;
+public final class GpuAquiferSubstance {
+    public static final int RECORD_BYTES = 64;
+    public static final int OUTPUT_INTS = 4;
+    public static final int MAX_QUERIES = GpuAquiferNearestThree.MAX_QUERIES;
+    public static final int OTHER = 0;
+    public static final int WATER = GpuAquiferPressure.WATER;
+    public static final int LAVA = GpuAquiferPressure.LAVA;
+    public static final int RETURN_DEFAULT = 0;
+    public static final int RETURN_STATE = 1;
+    public static final int CPU_FALLBACK = 2;
     // Matches the router parity gate while float64 classification is not yet
     // selected as a device capability variant.
     static final float PRECISION_EPSILON = 5.0e-3f;
@@ -21,7 +21,7 @@ final class GpuAquiferSubstance {
 
     private GpuAquiferSubstance() {}
 
-    static ByteBuffer pack(Input[] inputs) {
+    public static ByteBuffer pack(Input[] inputs) {
         if (inputs.length == 0 || inputs.length > MAX_QUERIES)
             throw new IllegalArgumentException("invalid aquifer substance batch");
         ByteBuffer packed = ByteBuffer.allocateDirect(inputs.length * RECORD_BYTES)
@@ -38,7 +38,7 @@ final class GpuAquiferSubstance {
     }
 
     /** Output words are action, state ID, schedule-fluid-update, reserved. */
-    static int[] evaluate(Input input) {
+    public static int[] evaluate(Input input) {
         if (!Double.isFinite(input.density)) return output(CPU_FALLBACK, 0, false);
         if (input.density > 0.0) return output(RETURN_DEFAULT, 0, false);
         if (!Double.isFinite(input.barrier) || Math.abs(input.density) <= PRECISION_EPSILON)
@@ -109,7 +109,7 @@ final class GpuAquiferSubstance {
         return new int[]{action, stateId, schedule ? 1 : 0, 0};
     }
 
-    record Input(double density, double barrier, int y,
+    public record Input(double density, double barrier, int y,
                  int level0, int level1, int level2,
                  int distance0, int distance1, int distance2,
                  int kind0, int kind1, int kind2,

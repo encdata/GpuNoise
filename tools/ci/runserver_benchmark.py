@@ -65,6 +65,10 @@ FULL_BLOCK_OUTPUT = os.environ.get("GPUNOISE_CI_FULL_BLOCK_OUTPUT", "true").lowe
 if FULL_BLOCK_OUTPUT not in {"true", "false"}:
     raise ValueError("GPUNOISE_BENCHMARK_FULL_BLOCK_OUTPUT must be true or false")
 FULL_BLOCK_OUTPUT = FULL_BLOCK_OUTPUT == "true"
+VERIFY_AQUIFER_GPU = os.environ.get("GPUNOISE_CI_VERIFY_AQUIFER", "false").lower()
+if VERIFY_AQUIFER_GPU not in {"true", "false"}:
+    raise ValueError("GPUNOISE_CI_VERIFY_AQUIFER must be true or false")
+VERIFY_AQUIFER_GPU = VERIFY_AQUIFER_GPU == "true"
 TASK_DONE = re.compile(
     r"Task finished for .*?Processed:\s*([\d,]+) chunks \(([^)]+)%\),"
 )
@@ -217,6 +221,8 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
         # transfer work that the normal runtime configuration does not use.
         if FULL_BLOCK_OUTPUT:
             command.append("-Dgpunoise.fullBlockOutput=true")
+        if VERIFY_AQUIFER_GPU:
+            command.append("-Dgpunoise.verifyAquiferGpu=true")
         command.append(f"-Dgpunoise.terrainBatchWindowMs={BATCH_WINDOW_MS}")
         command.append(f"-Dgpunoise.terrainBatchTargetChunks={BATCH_TARGET_CHUNKS}")
         command.append(f"-Dgpunoise.terrainBatchRegionRadius={BATCH_REGION_RADIUS}")
@@ -322,6 +328,16 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
         if not force_cpu:
             if not gpu_counts or max(counts[2] for counts in gpu_counts) <= 0:
                 raise RuntimeError("GPU benchmark completed without any GPU terrain cache being consumed")
+            if "GPU aquifer substance batch:" not in log_path.read_text(encoding="utf-8"):
+                raise RuntimeError("GPU benchmark did not execute the chunk-batched aquifer substance shader")
+            if VERIFY_AQUIFER_GPU:
+                parity_results = re.findall(
+                    r"GPU aquifer substance parity: samples=(\d+), mismatches=(\d+)",
+                    log_path.read_text(encoding="utf-8"))
+                if not parity_results or any(int(samples) == 0 or int(mismatches) != 0
+                                             for samples, mismatches in parity_results):
+                    raise RuntimeError(
+                        "GPU aquifer substance decisions did not pass vanilla parity for every prepared chunk")
             fallback_chunks = max(counts[3] for counts in gpu_counts)
             if fallback_chunks != 0:
                 raise RuntimeError(

@@ -126,7 +126,7 @@ jobs:
       - name: Install Mesa Lavapipe and Vulkan tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes mesa-vulkan-drivers vulkan-tools
+          sudo apt-get install --yes glslc mesa-vulkan-drivers vulkan-tools
 
       - name: Verify Mesa Lavapipe is available
         run: |
@@ -162,6 +162,7 @@ jobs:
           GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS: ${{ inputs.terrain_batch_target_chunks || '96' }}
           GPUNOISE_TERRAIN_BATCH_REGION_RADIUS: ${{ inputs.terrain_batch_region_radius || '2' }}
           GPUNOISE_CI_FULL_BLOCK_OUTPUT: true
+          GPUNOISE_CI_VERIFY_AQUIFER: true
         run: python3 tools/ci/runserver_benchmark.py --profile '${{ matrix.profile }}'
 
       - name: Upload worldgen test logs

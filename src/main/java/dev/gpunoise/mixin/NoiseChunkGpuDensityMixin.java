@@ -2,6 +2,7 @@ package dev.gpunoise.mixin;
 
 import dev.gpunoise.GpuChunkDensityCache;
 import dev.gpunoise.GpuNoiseChunkAccess;
+import dev.gpunoise.GpuAquiferDecisionAccess;
 import dev.gpunoise.GpuNoiseInterpolatorAccess;
 import dev.gpunoise.GpuNoiseConfig;
 import dev.gpunoise.GpuTerrainRuntime;
@@ -12,6 +13,7 @@ import net.minecraft.world.level.levelgen.DensityFunctions;
 import net.minecraft.world.level.levelgen.NoiseChunk;
 import net.minecraft.world.level.levelgen.NoiseRouter;
 import net.minecraft.world.level.levelgen.NoiseSettings;
+import net.minecraft.world.level.levelgen.Aquifer;
 import net.minecraft.world.level.biome.Climate;
 import java.util.List;
 import org.spongepowered.asm.mixin.Final;
@@ -30,6 +32,7 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     @Shadow @Final private NoiseSettings noiseSettings;
     @Shadow @Final private DensityFunctions.BeardifierOrMarker beardifier;
     @Shadow @Final private List<NoiseChunk.NoiseInterpolator> interpolators;
+    @Shadow @Final private Aquifer aquifer;
     @Shadow private int cellStartBlockX;
     @Shadow int cellStartBlockY;
     @Shadow private int cellStartBlockZ;
@@ -53,6 +56,14 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
         GpuChunkDensityCache cache = GpuTerrainRuntime.activeFillCache();
         if (cache != null && cache.matchesChunk(firstNoiseX << 2, firstNoiseZ << 2)) {
             gpunoise$cache = cache;
+        }
+    }
+
+    @Inject(method = "initializeForFirstCellX", at = @At("TAIL"))
+    private void gpunoise$prepareAquiferBatch(CallbackInfo callback) {
+        GpuChunkDensityCache cache = gpunoise$getActiveCache();
+        if (cache != null && aquifer instanceof GpuAquiferDecisionAccess access) {
+            access.gpunoise$prepareGpuDecisions(cache, (NoiseChunk) (Object) this);
         }
     }
 
@@ -83,6 +94,11 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     @Override
     public boolean gpunoise$matchesGpuCache(GpuChunkDensityCache cache) {
         return cache != null && cache.matchesChunk(firstNoiseX << 2, firstNoiseZ << 2);
+    }
+
+    @Override
+    public boolean gpunoise$hasZeroBeardifier() {
+        return gpunoise$zeroBeardifier;
     }
 
     @Unique

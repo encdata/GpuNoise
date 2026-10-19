@@ -16,6 +16,7 @@
       "BlockStateFluidAccessMixin",
     "LevelChunkSectionGpuWriteMixin",
     "HeightmapGpuWriteMixin",
+    "AquiferFluidStatusAccessor",
     "AquiferGpuInputsMixin",
     "NoiseChunkGeneratorWriteMixin",
     "C2meCompiledDensityFunctionMixin"

@@ -134,8 +134,10 @@ public final class GpuChunkDensityCache {
         prefetch5x5(centerChunkX << 4, centerChunkZ << 4, settings);
     }
 
-    int minX() { return minX; }
-    int minZ() { return minZ; }
+    public int minX() { return minX; }
+    public int minZ() { return minZ; }
+    public int minY() { return minY; }
+    public int height() { return maxRelativeY; }
 
     public static GpuChunkDensityCache takePrefetched(int minX, int minZ) {
         return PREFETCHED.remove(chunkKey(minX >> 4, minZ >> 4));
@@ -281,6 +283,10 @@ public final class GpuChunkDensityCache {
     }
     public boolean supportsRoot(int root) {
         return root >= 0 && root < ROOTS && (supportedRootMask & (1 << root)) != 0;
+    }
+    public boolean hasFullBlockOutput() {
+        GpuTerrainBlockResult blocks = readyBlocks;
+        return FULL_BLOCK_OUTPUT && blocks != null && !blocks.isEmpty();
     }
     public double aquiferFloodedness(int x, int y, int z) {
         return rootDensity(x, y, z, GpuTerrainRoots.FLOODEDNESS);
