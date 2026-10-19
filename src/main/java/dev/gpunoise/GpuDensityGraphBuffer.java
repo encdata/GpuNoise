@@ -82,6 +82,12 @@ final class GpuDensityGraphBuffer {
             GpuDensityGraph.Node node = graph.nodes().get(nodeIndex);
             Integer opcode = OPCODES.get(node.opcode());
             if (opcode == null) throw new IllegalArgumentException("No GPU opcode for " + node.opcode());
+            // A lowered interpolation marker may share the child's register.
+            // Its corner-pass identity instruction is then redundant; keep
+            // its metadata/index for exports and retain opcode 7 in the block
+            // stream, where the interpolated input is actually loaded.
+            if (node.opcode().equals("Marker") && "Interpolated".equals(node.payload())
+                    && node.children().length == 1 && node.register() == node.children()[0]) opcode = 0;
             int[] children = node.children();
             double[] constants = node.constants();
             output.putInt(opcode).putInt(children.length > 0 ? children[0] : -1)

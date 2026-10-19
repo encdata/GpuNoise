@@ -212,13 +212,24 @@ final class GpuDensityGraphLowerer {
         // must survive the rest of the program.
         for (int root : roots) lastUse[root] = count;
         // NoiseChunk's interpolated markers are exported at cell corners and
-        // consumed by a second GPU evaluation at every block. Preserve their
-        // registers through the complete corner program.
+        // consumed by a second GPU evaluation at every block. Their value
+        // aliases the child only when no other graph edge or router root needs
+        // the child's distinct lifetime. Otherwise keep separate registers.
+        boolean[] rootValue = new boolean[count];
+        for (int root : roots) rootValue[root] = true;
+        boolean[] aliasMarker = new boolean[count];
         for (int index = 0; index < count; index++) {
             GpuDensityGraph.Node node = nodes.get(index);
-            if (node.opcode().equals("Marker") && "Interpolated".equals(node.payload())) {
-                lastUse[index] = count;
+            if (!node.opcode().equals("Marker") || !"Interpolated".equals(node.payload())) continue;
+            int[] children = node.children();
+            if (children.length != 1) {
+                throw new IllegalArgumentException("interpolated marker " + index
+                        + " must have exactly one source node");
             }
+            int child = children[0];
+            aliasMarker[index] = lastUse[child] == index && !rootValue[child];
+            lastUse[index] = count;
+            if (aliasMarker[index]) lastUse[child] = count;
         }
         List<List<Integer>> releases = new ArrayList<>(count + 1);
         for (int index = 0; index <= count; index++) releases.add(new ArrayList<>());
@@ -227,6 +238,11 @@ final class GpuDensityGraphLowerer {
         ArrayDeque<Integer> free = new ArrayDeque<>();
         int next = 0;
         for (int index = 0; index < count; index++) {
+            GpuDensityGraph.Node node = nodes.get(index);
+            if (aliasMarker[index]) {
+                slots[index] = slots[node.children()[0]];
+                continue;
+            }
             // Inputs whose final use is this instruction can safely be reused:
             // GLSL evaluates the right hand side before assigning the output.
             for (int released : releases.get(index)) free.addLast(slots[released]);

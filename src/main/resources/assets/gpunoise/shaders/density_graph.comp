@@ -429,6 +429,9 @@ void main(){
     for(uint i=0;i<nodeCount;i++){
         Node n=nodes[nodeBase+i];
         uint op=n.ids.x; double v=0.0;
+        // Lowering uses opcode zero only for an interpolation marker whose
+        // output aliases its child register. The value is already available.
+        if(op==0u) continue;
         switch(op){
         case 1u: v=double(n.params.x); break;
         case 2u: v=normalNoiseTerrain(dvec3(pExact.x*double(n.params.y),pExact.y*double(n.params.z),pExact.z*double(n.params.y)),uint(n.params.x)); break;

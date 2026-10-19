@@ -460,8 +460,20 @@ final class GpuDensityExpressionSmoke {
         GpuDensityGraph interpolationLowered = GpuDensityGraphLowerer.lower(interpolated);
         if (interpolationLowered.nodes().size() != 2
                 || interpolationLowered.interpolatedMarkerCount() != 1
-                || interpolationLowered.interpolatedMarkerRegisters().length != 1) {
-            throw new AssertionError("interpolation markers must survive lowering with a live register");
+                || interpolationLowered.interpolatedMarkerRegisters().length != 1
+                || interpolationLowered.nodes().get(1).register() != interpolationLowered.nodes().get(0).register()
+                || interpolationLowered.interpolatedMarkerRegisters()[0] != interpolationLowered.nodes().get(0).register()) {
+            throw new AssertionError("exclusive interpolation markers should export their child's live register");
+        }
+        GpuDensityGraph sharedMarkerValue = new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("Constant", new int[0], new double[]{7.0}, null),
+                        new GpuDensityGraph.Node("Marker", new int[]{0}, new double[0], "Interpolated")),
+                new int[]{0, 1}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(source, source));
+        GpuDensityGraph sharedLowered = GpuDensityGraphLowerer.lower(sharedMarkerValue);
+        if (sharedLowered.nodes().get(0).register() == sharedLowered.nodes().get(1).register()) {
+            throw new AssertionError("an interpolated marker must not alias a child also exported as a router root");
         }
     }
 
