@@ -86,6 +86,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private static final AtomicBoolean gpunoise$exactAquiferInputsLogged = new AtomicBoolean();
 
     @org.spongepowered.asm.mixin.Unique
+    private static final AtomicBoolean gpunoise$gpuAquiferInputsLogged = new AtomicBoolean();
+
+    @org.spongepowered.asm.mixin.Unique
+    private static final ThreadLocal<Boolean> gpunoise$javaAquiferReference = new ThreadLocal<>();
+
+    @org.spongepowered.asm.mixin.Unique
     private static final AtomicBoolean gpunoise$c2meCutoffWarning = new AtomicBoolean();
 
     @org.spongepowered.asm.mixin.Unique
@@ -245,10 +251,10 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         PendingDecisions pending = new PendingDecisions(decisionCapacity, gpunoise$verifyAquifer);
         NeighborhoodCache neighborhoods = new NeighborhoodCache(Math.max(16, (height + 11) / 12 * 4));
         FluidStatusCache fluidStatuses = new FluidStatusCache(Math.max(16, (height + 11) / 12 * 4));
-        // C2ME's aquifer pressure decisions consume the Java barrier value.
-        // Keep the continuous terrain roots on GPU while supplying this
-        // discrete decision boundary from the same Java function as OCL.
-        boolean exactAquiferInputs = c2meAquifer || GpuAquiferRuntimeMode.exactAquiferInputsEnabled();
+        // C2ME OCL evaluates these density roots on its device. Use the same
+        // strict GPU root cache here; exact Java evaluation remains an explicit
+        // diagnostic mode and the fallback for missing cache coordinates.
+        boolean exactAquiferInputs = GpuAquiferRuntimeMode.exactAquiferInputsEnabled();
         int directGlobalFluidDecisions = 0;
         int positiveDensityDecisions = 0;
 
@@ -316,9 +322,23 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     if (context == null && exactAquiferInputs) {
                         context = new DensityFunction.SinglePointContext(x, y, z);
                     }
-                    double barrier = exactAquiferInputs
-                            ? barrierNoise.compute(context)
+                    long barrierStart = GpuTerrainProfiler.beginPhase();
+                    double barrier = exactAquiferInputs ? barrierNoise.compute(context)
                             : cache.aquiferBarrier(x, y, z);
+                    if (!exactAquiferInputs && Double.isFinite(barrier)) {
+                        GpuTerrainProfiler.recordAquifer(GpuTerrainRoots.BARRIER, barrierStart);
+                        GpuTerrainRuntime.markGpuCacheUsed(cache);
+                        if (gpunoise$gpuAquiferInputsLogged.compareAndSet(false, true)) {
+                            dev.gpunoise.GpuNoise.LOGGER.info(
+                                    "GPU aquifer inputs use Vulkan cache roots; parity verifier compares decisions against Java");
+                        }
+                    }
+                    if (!Double.isFinite(barrier)) {
+                        if (context == null) context = new DensityFunction.SinglePointContext(x, y, z);
+                        barrier = barrierNoise.compute(context);
+                        if (!exactAquiferInputs)
+                            GpuTerrainProfiler.recordJavaRootFallback(GpuTerrainRoots.BARRIER);
+                    }
                     if (!Double.isFinite(barrier)) continue;
                     boolean belowIsLava = globalFluidPicker.computeFluid(x, y - 1, z)
                             .at(y - 1).is(Blocks.LAVA);
@@ -459,7 +479,13 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 if (gpunoise$verifyAquifer) {
                     DensityFunction.FunctionContext context = pending.context(query);
                     double density = pending.density(query);
-                    BlockState vanilla = gpunoise$invokeVanillaComputeSubstance(context, density);
+                    BlockState vanilla;
+                    gpunoise$javaAquiferReference.set(Boolean.TRUE);
+                    try {
+                        vanilla = gpunoise$invokeVanillaComputeSubstance(context, density);
+                    } finally {
+                        gpunoise$javaAquiferReference.remove();
+                    }
                     boolean vanillaSchedule = shouldScheduleFluidUpdate;
                     vanillaParitySamples++;
                     if (gpunoise$isTraceAquiferBlock(context.blockX(), context.blockY(), context.blockZ())) {
@@ -686,11 +712,11 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     @Redirect(method = {"computeSurfaceLevel", "computeRandomizedFluidSurfaceLevel", "calculatePressure"}, at = @At(value = "INVOKE",
             target = "Lnet/minecraft/world/level/levelgen/DensityFunction;compute(Lnet/minecraft/world/level/levelgen/DensityFunction$FunctionContext;)D"))
     private double gpunoise$useGpuAquiferInputs(DensityFunction vanillaFunction, DensityFunction.FunctionContext context) {
-        // FluidStatus preparation is part of C2ME's rewritten aquifer
-        // algorithm. Feed it the same Java values as the CPU reference until
-        // the GPU roots can satisfy exact decision parity at this boundary.
-        if (GpuAquiferRuntimeMode.c2meAquiferRewriteEnabled()
-                || GpuAquiferRuntimeMode.exactAquiferInputsEnabled()) {
+        // Exact mode and the verifier's Java reference must bypass cached GPU
+        // roots; production decisions otherwise read the same roots used by
+        // the terrain shader.
+        if (GpuAquiferRuntimeMode.exactAquiferInputsEnabled()
+                || Boolean.TRUE.equals(gpunoise$javaAquiferReference.get())) {
             if (GpuAquiferRuntimeMode.exactAquiferInputsEnabled()
                     && gpunoise$exactAquiferInputsLogged.compareAndSet(false, true)) {
                 dev.gpunoise.GpuNoise.LOGGER.info(

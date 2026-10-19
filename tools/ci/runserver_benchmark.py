@@ -279,7 +279,6 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
         + str(c2me_aquifer_rewrite).lower()
     ]
     if not force_cpu:
-        jvm_overrides.append("-Dgpunoise.exactAquiferInputs=true")
         if TRACE_AQUIFER_BLOCK_COORDS:
             trace_x, trace_y, trace_z = TRACE_AQUIFER_BLOCK_COORDS
             jvm_overrides.extend((
@@ -410,9 +409,8 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
             run_log = log_path.read_text(encoding="utf-8")
             if not gpu_counts:
                 raise RuntimeError("GPU server completed without reporting terrain cache state")
-            if ("GPU aquifer inputs use exact Java roots; Vulkan center selection and substance decisions "
-                    "remain enabled" not in run_log):
-                raise RuntimeError("GPU aquifer decisions did not use the exact Java input roots required for world parity")
+            if "GPU aquifer inputs use Vulkan cache roots; parity verifier compares decisions against Java" not in run_log:
+                raise RuntimeError("GPU aquifer decisions did not use the Vulkan terrain roots required for the C2ME path")
             density_differentials = re.findall(
                 r"GPU terrain density differential: chunks=(\d+), lastChunk=\((-?\d+),(-?\d+)\), "
                 r"samples=(\d+), exactMismatches=(\d+), signMismatches=(\d+), "
