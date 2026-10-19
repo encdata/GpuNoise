@@ -4,7 +4,9 @@ import java.util.Set;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /** Validates the graph IR before a Vulkan evaluator is allowed to consume it. */
 final class GpuDensityGraphLowerer {
@@ -14,6 +16,8 @@ final class GpuDensityGraphLowerer {
     );
 
     private GpuDensityGraphLowerer() {}
+
+    private record NodeKey(String opcode, List<Integer> children, List<Long> constants, String payload) {}
 
     static GpuDensityGraph lower(GpuDensityGraph graph) {
         validateGraphShape(graph);
@@ -39,12 +43,27 @@ final class GpuDensityGraphLowerer {
         for (int i = 0; i < count; i++) remap[order[i]] = i;
         List<GpuDensityGraph.Node> nodes = new ArrayList<>(count);
         List<net.minecraft.world.level.levelgen.DensityFunction> sourceFunctions = new ArrayList<>(count);
+        Map<NodeKey, Integer> commonNodes = new HashMap<>(count * 2);
         for (int ordered = 0; ordered < count; ordered++) {
             int old = order[ordered];
             GpuDensityGraph.Node node = graph.nodes().get(old);
             int[] children = node.children();
             for (int i = 0; i < children.length; i++) if (children[i] >= 0) children[i] = remap[children[i]];
-            nodes.add(new GpuDensityGraph.Node(node.opcode(), children, node.constants(), node.payload()));
+            double[] constants = node.constants();
+            // Marker identity carries Java delegation and interpolated-corner
+            // semantics. BlendedNoise entries also retain their source object
+            // for independent CPU/GPU parity checks, so only merge pure IR ops.
+            if (!node.opcode().equals("Marker") && !node.opcode().equals("BlendedNoise")) {
+                NodeKey key = nodeKey(node.opcode(), children, constants, node.payload());
+                Integer shared = commonNodes.get(key);
+                if (shared != null) {
+                    remap[old] = shared;
+                    continue;
+                }
+                commonNodes.put(key, nodes.size());
+            }
+            remap[old] = nodes.size();
+            nodes.add(new GpuDensityGraph.Node(node.opcode(), children, constants, node.payload()));
             sourceFunctions.add(graph.sourceFunctions().get(old));
         }
         int[] roots = graph.routerRoots();
@@ -88,6 +107,14 @@ final class GpuDensityGraphLowerer {
         return new GpuDensityGraph(registerNodes, roots, graph.noises(), registerSplines, graph.blended(),
                 sourceFunctions, registerCount, graph.supportedRouterRootMask(),
                 graph.unsupportedRouterRootReasons());
+    }
+
+    private static NodeKey nodeKey(String opcode, int[] children, double[] constants, String payload) {
+        List<Integer> childKey = new ArrayList<>(children.length);
+        for (int child : children) childKey.add(child);
+        List<Long> constantKey = new ArrayList<>(constants.length);
+        for (double constant : constants) constantKey.add(Double.doubleToRawLongBits(constant));
+        return new NodeKey(opcode, List.copyOf(childKey), List.copyOf(constantKey), payload);
     }
 
     /** Re-lowers the source graph after parity removes one or more GPU roots. */
