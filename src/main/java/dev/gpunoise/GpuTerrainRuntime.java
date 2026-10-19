@@ -544,7 +544,9 @@ public final class GpuTerrainRuntime {
                 for (int i = 0; i < count; i++) {
                     double expected = cpu[root].compute(new DensityFunction.SinglePointContext(
                             (int) x[i], (int) y[i], (int) z[i]));
-                    float error = GpuTerrainParity.error(gpu[i * cpu.length + root], (float) expected);
+                    float error = root == 11
+                            ? GpuTerrainParity.decisionError(gpu[i * cpu.length + root], (float) expected)
+                            : GpuTerrainParity.error(gpu[i * cpu.length + root], (float) expected);
                     if (error > rootWorst) {
                         rootWorst = error;
                         worstIndex = i;
@@ -589,8 +591,10 @@ public final class GpuTerrainRuntime {
                 float rootWorst = 0.0f;
                 for (int i = 0; i < count; i++) {
                     double expected = cpu[root].compute(new DensityFunction.SinglePointContext((int) x[i], (int) y[i], (int) z[i]));
-                    rootWorst = Math.max(rootWorst, GpuTerrainParity.error(
-                            gpu[i * cpu.length + root], (float) expected));
+                    float error = root == GpuTerrainRoots.FINAL_DENSITY
+                            ? GpuTerrainParity.decisionError(gpu[i * cpu.length + root], (float) expected)
+                            : GpuTerrainParity.error(gpu[i * cpu.length + root], (float) expected);
+                    rootWorst = Math.max(rootWorst, error);
                 }
                 if (rootWorst < GRAPH_PARITY_EPSILON) verifiedRoots |= 1 << root;
                 GpuNoise.LOGGER.info("GPU compact terrain root '{}' parity: maxError={}, parity={}",
@@ -640,8 +644,12 @@ public final class GpuTerrainRuntime {
                         int z = grid.minZ() + gz * cellWidth;
                         for (int root = 0; root < cpu.length; root++) {
                             if (!graph.supportsRouterRoot(root)) continue;
-                            float error = GpuTerrainParity.error(values.valueAt(sample, root),
-                                    (float) cpu[root].compute(new DensityFunction.SinglePointContext(x, y, z)));
+                            float actual = values.valueAt(sample, root);
+                            float expected = (float) cpu[root].compute(
+                                    new DensityFunction.SinglePointContext(x, y, z));
+                            float error = root == GpuTerrainRoots.FINAL_DENSITY
+                                    ? GpuTerrainParity.decisionError(actual, expected)
+                                    : GpuTerrainParity.error(actual, expected);
                             if (error > rootWorst[root]) {
                                 rootWorst[root] = error;
                                 worstX[root] = x;
@@ -702,7 +710,9 @@ public final class GpuTerrainRuntime {
                     double expected = cpuRoots[root].compute(new DensityFunction.SinglePointContext(
                             (int) x[i], (int) y[i], (int) z[i]));
                     float gpu = allRoots[i * graph.routerRootCount() + root];
-                    float error = GpuTerrainParity.error(gpu, (float) expected);
+                    float error = root == 11
+                            ? GpuTerrainParity.decisionError(gpu, (float) expected)
+                            : GpuTerrainParity.error(gpu, (float) expected);
                     if (error > maxError) {
                         maxError = error;
                         maxIndex = i;

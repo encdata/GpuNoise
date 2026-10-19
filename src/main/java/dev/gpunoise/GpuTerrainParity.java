@@ -18,6 +18,12 @@ final class GpuTerrainParity {
         return Math.abs(actual - expected);
     }
 
+    /** Final density controls the solid/air boundary, so tolerance cannot hide a sign flip. */
+    static float decisionError(float actual, float expected) {
+        if ((actual > 0.0f) != (expected > 0.0f)) return Float.POSITIVE_INFINITY;
+        return error(actual, expected);
+    }
+
     /** Fills a deterministic 8x8x8 set spanning negative, boundary and positive coordinates. */
     static void fillStartupSamples(float[] x, float[] y, float[] z) {
         if (x.length != 512 || y.length != 512 || z.length != 512) {

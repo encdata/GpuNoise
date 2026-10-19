@@ -953,6 +953,8 @@ public final class VulkanCiSmoke {
                 || !Float.isInfinite(GpuTerrainParity.error(Float.NaN, 0.0f))
                 || !Float.isInfinite(GpuTerrainParity.error(Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY))
                 || !Float.isInfinite(GpuTerrainParity.error(Float.POSITIVE_INFINITY, Float.MAX_VALUE))
+                || !Float.isInfinite(GpuTerrainParity.decisionError(-1.0e-4f, 1.0e-4f))
+                || GpuTerrainParity.decisionError(1.0e-4f, 1.0e-4f + 1.0e-6f) > 2.0e-6f
                 || GpuTerrainParity.error(-0.0f, 0.0f) != 0.0f
                 || GpuTerrainParity.error(1.0f, 1.0f + 1.0e-6f) > 2.0e-6f) {
             throw new IllegalStateException("Terrain parity comparison mishandled finite or non-finite values");
