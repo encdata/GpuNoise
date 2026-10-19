@@ -85,8 +85,8 @@ final class GpuDensityGraphShaderGenerator {
                     if (operation == 1) out.append("graphAdd(").append(a).append(',').append(b).append(')');
                     else if (operation == 2) out.append('(').append(a).append("==0.0?0.0:graphMultiply(")
                             .append(a).append(',').append(b).append("))");
-                    else if (operation == 3) out.append("min(").append(a).append(',').append(b).append(')');
-                    else if (operation == 4) out.append("max(").append(a).append(',').append(b).append(')');
+                    else if (operation == 3) out.append("javaMin(").append(a).append(',').append(b).append(')');
+                    else if (operation == 4) out.append("javaMax(").append(a).append(',').append(b).append(')');
                     else throw invalid(index, "unknown binary density operation " + operation);
                 }
                 case 4 -> {
