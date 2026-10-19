@@ -5,6 +5,7 @@ import java.nio.ByteOrder;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import net.minecraft.util.RandomSource;
+import dev.gpunoise.GpuAquiferDecisionData.AquiferQuery;
 
 /** Headless Vulkan smoke test for CI's Mesa Lavapipe device. */
 public final class VulkanCiSmoke {
@@ -587,6 +588,14 @@ public final class VulkanCiSmoke {
                     GpuAquiferNearestThree.select(queries[0], centers[0])))
                 throw new IllegalStateException("Aquifer equal-distance center order differs from vanilla");
             ByteBuffer nearestInput = GpuAquiferNearestThree.pack(queries, centers);
+            List<AquiferQuery> queuedAquiferQueries = new java.util.ArrayList<>(queryCount);
+            for (int query = 0; query < queryCount; query++) {
+                queuedAquiferQueries.add(new AquiferQuery(query, queries[query][0], queries[query][1],
+                        queries[query][2], 0.0, 0.0, false, centers[query]));
+            }
+            if (!nearestInput.equals(GpuAquiferNearestThree.pack(queuedAquiferQueries, 0, queryCount))) {
+                throw new IllegalStateException("queued aquifer queries changed nearest-center packing");
+            }
             ByteBuffer queuedGridMetadata = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder());
             queuedGridMetadata.putInt(-16).putInt(-8).putInt(32)
                     .putInt(2).putInt(2).putInt(2).putInt(1).putInt(1).flip();

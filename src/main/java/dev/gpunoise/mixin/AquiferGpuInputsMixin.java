@@ -256,17 +256,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         List<CompletableFuture<int[]>> nearestBatches = new ArrayList<>();
         for (int offset = 0; offset < queries.size(); offset += GpuAquiferNearestThree.MAX_QUERIES) {
             int count = Math.min(GpuAquiferNearestThree.MAX_QUERIES, queries.size() - offset);
-            int[][] points = new int[count][3];
-            int[][][] candidates = new int[count][][];
-            for (int i = 0; i < count; i++) {
-                AquiferQuery query = queries.get(offset + i);
-                points[i][0] = query.x;
-                points[i][1] = query.y;
-                points[i][2] = query.z;
-                candidates[i] = query.centers;
-            }
             nearestBatches.add(GpuTerrainRuntime.submitAquiferNearestThree(
-                    GpuAquiferNearestThree.pack(points, candidates), count).toCompletableFuture());
+                    GpuAquiferNearestThree.pack(queries, offset, count), count).toCompletableFuture());
         }
         CompletableFuture.allOf(nearestBatches.toArray(CompletableFuture[]::new)).join();
 

@@ -7,6 +7,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.levelgen.PositionalRandomFactory;
+import dev.gpunoise.GpuAquiferDecisionData.AquiferQuery;
 
 /** Input contract and reference selection for vanilla and optimized aquifer kernels. */
 public final class GpuAquiferNearestThree {
@@ -60,6 +61,45 @@ public final class GpuAquiferNearestThree {
         for (int i = 0; i < queries.length; i++) {
             packed.putInt(queries[i][0]).putInt(queries[i][1]).putInt(queries[i][2])
                     .putInt(queryCenterIndices[i]);
+        }
+        for (int[][] neighborhood : uniqueCenters) {
+            for (int[] center : neighborhood) {
+                packed.putInt(center[0]).putInt(center[1]).putInt(center[2]).putInt(0);
+            }
+        }
+        return packed.flip();
+    }
+
+    /** Packs queued chunk queries without constructing per-query coordinate and candidate arrays. */
+    public static ByteBuffer pack(List<AquiferQuery> queries, int offset, int count) {
+        if (queries == null || count <= 0 || count > MAX_QUERIES
+                || offset < 0 || offset > queries.size() - count)
+            throw new IllegalArgumentException("invalid aquifer nearest-four batch range");
+        IdentityHashMap<int[][], Integer> centerIndices = new IdentityHashMap<>();
+        List<int[][]> uniqueCenters = new ArrayList<>();
+        for (int index = offset; index < offset + count; index++) {
+            AquiferQuery query = queries.get(index);
+            if (query == null || query.centers == null || query.centers.length != CANDIDATES)
+                throw new IllegalArgumentException("aquifer query must contain xyz and 12 centers");
+            for (int[] center : query.centers) {
+                if (center == null || center.length != 3)
+                    throw new IllegalArgumentException("aquifer center must be xyz");
+            }
+            if (!centerIndices.containsKey(query.centers)) {
+                centerIndices.put(query.centers, uniqueCenters.size());
+                uniqueCenters.add(query.centers);
+            }
+        }
+        long byteCount = HEADER_BYTES + (long) count * QUERY_RECORD_BYTES
+                + (long) uniqueCenters.size() * CENTER_RECORD_BYTES;
+        if (byteCount > MAX_PACKED_BYTES || byteCount > Integer.MAX_VALUE)
+            throw new IllegalArgumentException("aquifer nearest-center payload exceeds GPU capacity");
+        ByteBuffer packed = ByteBuffer.allocateDirect((int) byteCount).order(ByteOrder.nativeOrder());
+        packed.putInt(count).putInt(uniqueCenters.size());
+        for (int index = offset; index < offset + count; index++) {
+            AquiferQuery query = queries.get(index);
+            packed.putInt(query.x).putInt(query.y).putInt(query.z)
+                    .putInt(centerIndices.get(query.centers));
         }
         for (int[][] neighborhood : uniqueCenters) {
             for (int[] center : neighborhood) {
