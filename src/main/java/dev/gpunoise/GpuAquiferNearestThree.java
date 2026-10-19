@@ -81,11 +81,11 @@ public final class GpuAquiferNearestThree {
             AquiferQuery query = queries.get(index);
             if (query == null || query.centers == null || query.centers.length != CANDIDATES)
                 throw new IllegalArgumentException("aquifer query must contain xyz and 12 centers");
-            for (int[] center : query.centers) {
-                if (center == null || center.length != 3)
-                    throw new IllegalArgumentException("aquifer center must be xyz");
-            }
-            if (!centerIndices.containsKey(query.centers)) {
+            if (centerIndices.get(query.centers) == null) {
+                for (int[] center : query.centers) {
+                    if (center == null || center.length != 3)
+                        throw new IllegalArgumentException("aquifer center must be xyz");
+                }
                 centerIndices.put(query.centers, uniqueCenters.size());
                 uniqueCenters.add(query.centers);
             }
