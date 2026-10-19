@@ -82,6 +82,12 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long totalGraphReadbackNanos;
     private long totalGraphGpuCommandNanos;
     private long graphGpuTimestampSamples;
+    private long completedTerrainBatchSamples;
+    private long totalTerrainPreparationNanos;
+    private long totalTerrainFenceNanos;
+    private long totalTerrainReadbackNanos;
+    private long totalTerrainGpuCommandNanos;
+    private long terrainGpuTimestampSamples;
     private long timestampQueryPool;
     private int timestampValidBits;
     private double timestampPeriodNanos;
@@ -462,6 +468,27 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         }
     }
 
+    private void recordTerrainBatchDuration(long preparationNanos, long fenceNanos,
+                                            long gpuCommandNanos, long readbackNanos) {
+        totalTerrainPreparationNanos += preparationNanos;
+        totalTerrainFenceNanos += fenceNanos;
+        totalTerrainReadbackNanos += readbackNanos;
+        if (gpuCommandNanos >= 0L) {
+            totalTerrainGpuCommandNanos += gpuCommandNanos;
+            terrainGpuTimestampSamples++;
+        }
+        long completed = ++completedTerrainBatchSamples;
+        if ((completed & 7L) == 0L) {
+            double averageGpuCommandMs = terrainGpuTimestampSamples == 0 ? -1.0
+                    : totalTerrainGpuCommandNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
+            GpuNoise.LOGGER.info("GPU full terrain profile: batches={}, avgCpuPrepareMs={}, avgSubmitToFenceMs={}, avgReadbackMs={}, avgGpuCommandMs={}, gpuTimingSamples={}",
+                    completed, totalTerrainPreparationNanos / (double) completed / 1_000_000.0,
+                    totalTerrainFenceNanos / (double) completed / 1_000_000.0,
+                    totalTerrainReadbackNanos / (double) completed / 1_000_000.0,
+                    averageGpuCommandMs, terrainGpuTimestampSamples);
+        }
+    }
+
     synchronized boolean graphRootsInFlight() { return inFlightGraphRoots != null; }
 
     private float[] submit(GpuGlobalNoiseBatch.Packed packed, MemoryStack stack) throws Exception {
@@ -616,7 +643,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             blockValues.limit(blockCount * outputRoots);
             float[] blocks = new float[blockCount * outputRoots];
             blockValues.get(blocks);
-            recordGraphFenceDuration(submittedAt - preparationStarted, submitToFenceNanos,
+            recordTerrainBatchDuration(submittedAt - preparationStarted, submitToFenceNanos,
                     gpuCommandNanos, System.nanoTime() - readbackStarted);
             return new GpuTerrainBatchResult(new GpuTerrainRootsResult(corners, 0, corners.length,
                     rootCount),
