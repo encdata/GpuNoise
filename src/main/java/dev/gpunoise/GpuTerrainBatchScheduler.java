@@ -55,9 +55,16 @@ final class GpuTerrainBatchScheduler implements AutoCloseable {
     }
 
     private void runLoop() {
+        Pending deferred = null;
         try {
             while (!Thread.currentThread().isInterrupted()) {
-                Pending first = pending.take();
+                Pending first;
+                if (deferred != null) {
+                    first = deferred;
+                    deferred = null;
+                } else {
+                    first = pending.take();
+                }
                 List<Pending> batch = new ArrayList<>();
                 batch.add(first);
                 int chunkCount = first.request.chunks().size();
@@ -70,7 +77,7 @@ final class GpuTerrainBatchScheduler implements AutoCloseable {
                     long nextSamples = (long) nextCount * next.request.samplesPerChunk();
                     if (chunkCount + nextCount > TerrainNoiseApi.MAX_CHUNKS_PER_BATCH
                             || sampleCount + nextSamples > MAX_TERRAIN_DISPATCH_SAMPLES) {
-                        pending.offer(next);
+                        deferred = next;
                         break;
                     }
                     batch.add(next);
@@ -81,7 +88,10 @@ final class GpuTerrainBatchScheduler implements AutoCloseable {
             }
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
+            if (deferred != null) deferred.future.completeExceptionally(
+                    new IllegalStateException("GPU terrain scheduler stopped before dispatch", interrupted));
         } catch (Throwable failure) {
+            if (deferred != null) deferred.future.completeExceptionally(failure);
             Pending item;
             while ((item = pending.poll()) != null) item.future.completeExceptionally(failure);
         }
