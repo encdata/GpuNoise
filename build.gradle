@@ -244,22 +244,9 @@ def serverLwjglCoreJarTask = tasks.register('serverLwjglCoreJar', Jar) {
         attributes('FMLModType': 'LIBRARY')
     }
 }
-def serverLwjglNativesJarTask = tasks.register('serverLwjglNativesJar', Jar) {
-    archiveFileName = 'lwjgl-natives-gpunoise-server.jar'
-    from(lwjglNativeTrees) {
-        include 'windows/**', 'linux/**', 'macos/**'
-        exclude 'META-INF/MANIFEST.MF', 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA'
-    }
-    manifest {
-        attributes('FMLModType': 'LIBRARY')
-    }
-}
 tasks.named('jar', Jar).configure {
-    dependsOn serverLwjglCoreJarTask, serverLwjglNativesJarTask
+    dependsOn serverLwjglCoreJarTask
     from(serverLwjglCoreJarTask.flatMap { it.archiveFile }) {
-        into 'META-INF/gpunoise/server-libraries'
-    }
-    from(serverLwjglNativesJarTask.flatMap { it.archiveFile }) {
         into 'META-INF/gpunoise/server-libraries'
     }
 }
@@ -293,7 +280,7 @@ tasks.register('generateEmbeddedJarJarMetadata') {
 
 tasks.register('embeddedModJar', Jar) {
     dependsOn tasks.named('classes'), tasks.named('generateEmbeddedJarJarMetadata'),
-            serverLwjglCoreJarTask, serverLwjglNativesJarTask
+            serverLwjglCoreJarTask
     archiveFileName = 'gpunoise-mod.jar'
     destinationDirectory = layout.buildDirectory.dir('intermediates/gpunoise')
 
@@ -332,7 +319,6 @@ tasks.named('jar', Jar).configure {
     // into() prefix. Include their source basenames as well so the final
     // archive paths under META-INF/gpunoise are retained.
     include 'lwjgl-core-gpunoise-server.jar'
-    include 'lwjgl-natives-gpunoise-server.jar'
     include 'gpunoise-mod.jar'
     from(embeddedModJar) {
         into 'META-INF/gpunoise'

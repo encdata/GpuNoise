@@ -1,5 +1,6 @@
 package dev.gpunoise.loader;
 
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.URL;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -9,7 +10,11 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.util.Locale;
+import java.util.jar.Attributes;
+import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.jar.JarOutputStream;
+import java.util.jar.Manifest;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.fml.loading.FMLLoader;
 import net.neoforged.neoforgespi.ILaunchContext;
@@ -25,8 +30,7 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
     private static final String SERVER_LIBRARY_DIRECTORY = "META-INF/gpunoise/server-libraries/";
     private static final String MOD_PAYLOAD = "META-INF/gpunoise/gpunoise-mod.jar";
     private static final String[] SERVER_LIBRARIES = {
-            "lwjgl-core-gpunoise-server.jar",
-            "lwjgl-natives-gpunoise-server.jar"
+            "lwjgl-core-gpunoise-server.jar"
     };
     private static final Logger LOGGER = LoggerFactory.getLogger("GpuNoiseLwjglLocator");
 
@@ -95,6 +99,106 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
                 LOGGER.error("Failed to register dedicated-server library {}", libraryName, failure);
             }
         }
+
+        Path nativeLibrary = extractPlatformNatives(modDiscoveryJar, sourceJar);
+        if (nativeLibrary == null || !Files.isRegularFile(nativeLibrary)) {
+            LOGGER.error("Could not prepare the dedicated-server LWJGL native library for this platform");
+            return;
+        }
+        if (context.isLocated(nativeLibrary)) {
+            LOGGER.debug("Dedicated-server native library is already registered: {}", nativeLibrary);
+            return;
+        }
+        try {
+            var added = pipeline.addPath(nativeLibrary,
+                    ModFileDiscoveryAttributes.DEFAULT.withLocator(this),
+                    IncompatibleFileReporting.ERROR);
+            if (added.isPresent()) {
+                LOGGER.info("Added platform-specific LWJGL natives to dedicated server runtime: {}", nativeLibrary);
+            } else {
+                LOGGER.error("NeoForge did not accept dedicated-server native library {}", nativeLibrary);
+            }
+        } catch (Exception failure) {
+            LOGGER.error("Failed to register platform-specific dedicated-server LWJGL natives", failure);
+        }
+    }
+
+    /** Builds the FML library from the already bundled mod natives for this runtime platform. */
+    private static Path extractPlatformNatives(Path modPayload, Path sourceJar) {
+        String nativePrefix = nativeResourcePrefix();
+        if (nativePrefix == null) {
+            LOGGER.error("No LWJGL natives are bundled for os.name={} os.arch={}",
+                    System.getProperty("os.name"), System.getProperty("os.arch"));
+            return null;
+        }
+        try (JarFile mod = new JarFile(modPayload.toFile()); ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+            Manifest manifest = new Manifest();
+            Attributes attributes = manifest.getMainAttributes();
+            attributes.putValue("Manifest-Version", "1.0");
+            attributes.putValue("FMLModType", "LIBRARY");
+            int copied = 0;
+            try (JarOutputStream output = new JarOutputStream(bytes, manifest)) {
+                var entries = mod.entries();
+                while (entries.hasMoreElements()) {
+                    JarEntry entry = entries.nextElement();
+                    if (entry.isDirectory() || !entry.getName().startsWith(nativePrefix)) continue;
+                    output.putNextEntry(new JarEntry(entry.getName()));
+                    try (InputStream input = mod.getInputStream(entry)) {
+                        input.transferTo(output);
+                    }
+                    output.closeEntry();
+                    copied++;
+                }
+            }
+            if (copied == 0) {
+                LOGGER.error("Embedded mod {} contains no LWJGL resources under {}", modPayload, nativePrefix);
+                return null;
+            }
+
+            byte[] libraryBytes = bytes.toByteArray();
+            String digest = sha256(libraryBytes);
+            Path modsDirectory = sourceJar.getParent();
+            Path gameDirectory = modsDirectory != null && modsDirectory.getParent() != null
+                    ? modsDirectory.getParent()
+                    : Paths.get(".").toAbsolutePath().normalize();
+            Path cacheDirectory = gameDirectory.resolve(".gpunoise/bootstrap");
+            Files.createDirectories(cacheDirectory);
+            String platform = nativePrefix.substring(0, nativePrefix.length() - 1).replace('/', '-');
+            Path destination = cacheDirectory.resolve("lwjgl-natives-gpunoise-server-" + platform + "-"
+                    + digest.substring(0, 16) + ".jar");
+            if (Files.isRegularFile(destination) && Files.size(destination) == libraryBytes.length) {
+                return destination;
+            }
+
+            Path temporary = Files.createTempFile(cacheDirectory, "lwjgl-natives-", ".jar.tmp");
+            try {
+                Files.write(temporary, libraryBytes);
+                try {
+                    Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING,
+                            StandardCopyOption.ATOMIC_MOVE);
+                } catch (AtomicMoveNotSupportedException ignored) {
+                    Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING);
+                }
+            } finally {
+                Files.deleteIfExists(temporary);
+            }
+            return destination;
+        } catch (Exception failure) {
+            LOGGER.error("Failed to prepare platform-specific LWJGL native library", failure);
+            return null;
+        }
+    }
+
+    private static String nativeResourcePrefix() {
+        String osName = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        String platform = osName.contains("win") ? "windows"
+                : osName.contains("mac") || osName.contains("darwin") ? "macos"
+                : osName.contains("linux") ? "linux" : null;
+        String architecture = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
+        String lwjglArchitecture = architecture.equals("amd64") || architecture.equals("x86_64") ? "x64"
+                : architecture.equals("aarch64") || architecture.equals("arm64") ? "arm64"
+                : architecture.matches("i[3-6]86") || architecture.equals("x86") ? "x86" : null;
+        return platform == null || lwjglArchitecture == null ? null : platform + "/" + lwjglArchitecture + "/";
     }
 
     private static boolean lwjglCoreAvailable() {

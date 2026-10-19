@@ -15,11 +15,11 @@ LWJGL_VERSION = "3.3.3"
 VULKAN_LIBRARY = f"META-INF/jarjar/lwjgl-vulkan-{LWJGL_VERSION}.jar"
 SHADERC_LIBRARY = f"META-INF/jarjar/lwjgl-shaderc-{LWJGL_VERSION}.jar"
 SERVER_CORE_LIBRARY = "META-INF/gpunoise/server-libraries/lwjgl-core-gpunoise-server.jar"
-SERVER_NATIVES_LIBRARY = "META-INF/gpunoise/server-libraries/lwjgl-natives-gpunoise-server.jar"
 MOD_PAYLOAD = "META-INF/gpunoise/gpunoise-mod.jar"
 METADATA = "META-INF/jarjar/metadata.json"
 LOCATOR_SERVICE = "META-INF/services/net.neoforged.neoforgespi.locating.IModFileCandidateLocator"
 LOCATOR_CLASS = "dev/gpunoise/loader/GpuNoiseDedicatedLwjglLocator.class"
+MAX_ARTIFACT_BYTES = 30 * 1024 * 1024
 
 
 def library_entry(artifact: str) -> dict[str, object]:
@@ -37,14 +37,21 @@ def library_entry(artifact: str) -> dict[str, object]:
 def verify(path: Path) -> None:
     if not path.is_file():
         raise FileNotFoundError(f"Vulkan artifact does not exist: {path}")
+    if path.stat().st_size > MAX_ARTIFACT_BYTES:
+        raise ValueError(
+            f"Universal loader artifact is {path.stat().st_size} bytes; duplicated cross-platform native payloads "
+            f"must stay below {MAX_ARTIFACT_BYTES} bytes"
+        )
     with zipfile.ZipFile(path) as artifact:
         entries = set(artifact.namelist())
         required = {
-            SERVER_CORE_LIBRARY, SERVER_NATIVES_LIBRARY, LOCATOR_SERVICE, LOCATOR_CLASS, MOD_PAYLOAD,
+            SERVER_CORE_LIBRARY, LOCATOR_SERVICE, LOCATOR_CLASS, MOD_PAYLOAD,
         }
         missing = sorted(required - entries)
         if missing:
             raise ValueError(f"Universal loader artifact is missing required entries: {missing}")
+        if any(name.startswith("META-INF/gpunoise/server-libraries/lwjgl-natives-") for name in entries):
+            raise ValueError("Platform natives are duplicated in the loader shell instead of derived from the mod payload")
 
         duplicate_packages = sorted(
             name for name in entries
@@ -108,19 +115,6 @@ def verify(path: Path) -> None:
                 raise ValueError("Embedded dedicated-server library is missing LWJGL core classes")
             if "FMLModType: LIBRARY" not in manifest:
                 raise ValueError("Embedded dedicated-server LWJGL jar is not marked as an FML library")
-
-        with zipfile.ZipFile(io.BytesIO(artifact.read(SERVER_NATIVES_LIBRARY))) as server_natives:
-            native_entries = set(server_natives.namelist())
-            native_manifest = server_natives.read("META-INF/MANIFEST.MF").decode("utf-8", errors="replace")
-            required_server_natives = {
-                "linux/x64/org/lwjgl/liblwjgl.so",
-                "windows/x64/org/lwjgl/lwjgl.dll",
-                "macos/x64/org/lwjgl/liblwjgl.dylib",
-            }
-            if missing_natives := sorted(required_server_natives - native_entries):
-                raise ValueError(f"Embedded dedicated-server library is missing native payloads: {missing_natives}")
-            if "FMLModType: LIBRARY" not in native_manifest:
-                raise ValueError("Embedded dedicated-server native jar is not marked as an FML library")
 
         locator = artifact.read(LOCATOR_SERVICE).decode("utf-8", errors="replace").strip()
         if locator != "dev.gpunoise.loader.GpuNoiseDedicatedLwjglLocator":
