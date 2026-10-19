@@ -1,6 +1,6 @@
 package dev.gpunoise;
 
-/** Deterministic integer value noise used by the first CPU/GPU benchmark. */
+/** Deterministic integer value noise used by the Vulkan parity probe. */
 final class NoiseMath {
     private NoiseMath() {}
 

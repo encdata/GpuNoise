@@ -95,6 +95,9 @@ GPU_BATCH_WINDOW = re.compile(
     r"searchRadiusRegions=(\d+)"
 )
 GPU_SHADER_VARIANT = re.compile(r"GPU density shader variant: registers=(\d+), fastMath=(true|false)")
+VALUE_NOISE_PARITY = re.compile(
+    r"Vulkan value-noise parity: samples=65536, mismatches=0, maxError=0\.0, .*matches=true"
+)
 C2ME_AQUIFER_OVERRIDE = "Setting vanillaWorldGenOptimizations.optimizeAquifer to false (defined in system property)"
 
 
@@ -479,8 +482,19 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                 observed = "missing" if not shader_variants else shader_variants[-1][1]
                 raise RuntimeError(f"GPU shader fastMath mode was {observed}; expected {expected_fast_math}")
 
-        if run_vulkan_smoke and "GPU_NOISE_VULKAN_SMOKE_PASSED" not in log_path.read_text(encoding="utf-8"):
-            raise RuntimeError("Vulkan server lifecycle smoke did not report success")
+        if run_vulkan_smoke:
+            startup_log = log_path.read_text(encoding="utf-8")
+            if "GPU_NOISE_VULKAN_SMOKE_PASSED" not in startup_log:
+                raise RuntimeError("Vulkan server lifecycle smoke did not report success")
+            if not VALUE_NOISE_PARITY.search(startup_log):
+                raise RuntimeError("Vulkan deterministic value-noise parity probe did not pass")
+            for parity_marker in (
+                    "ImprovedNoise parity: 65536 samples;",
+                    "Minecraft parameter parity: 65536 samples;"):
+                parity_line = next((line for line in startup_log.splitlines()
+                                    if parity_marker in line), "")
+                if "matches=true" not in parity_line:
+                    raise RuntimeError(f"Vulkan startup parity check did not pass: {parity_marker}")
 
         try:
             stop_server_with_rcon()

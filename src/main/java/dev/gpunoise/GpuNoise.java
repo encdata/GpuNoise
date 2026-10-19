@@ -202,7 +202,7 @@ public final class GpuNoise {
             LOGGER.warn("GPU density graph batch is not enabled yet", unsupported);
         }
         VulkanBootstrapThread.callUnchecked(() -> {
-            VulkanNoiseBenchmark.run(device);
+            VulkanNoiseParityProbe.run(device);
             return null;
         });
 

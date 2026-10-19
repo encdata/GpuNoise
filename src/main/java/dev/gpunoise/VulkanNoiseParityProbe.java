@@ -16,38 +16,39 @@ import net.minecraft.world.level.levelgen.LegacyRandomSource;
 import static org.lwjgl.vulkan.VK10.*;
 import static org.lwjgl.vulkan.EXTDebugUtils.*;
 
-/** Phase 1 benchmark: identical deterministic noise on CPU and Vulkan GPU. */
-final class VulkanNoiseBenchmark {
+/** Startup correctness probe for deterministic noise and Minecraft sampler parity. */
+final class VulkanNoiseParityProbe {
     private static final int SAMPLE_COUNT = 65_536;
-    private static final int ITERATIONS = 100;
     private static final int SEED = 0x4A3B2C1D;
     private static VkDebugUtilsMessengerCallbackEXT validationCallback;
 
-    private VulkanNoiseBenchmark() {}
+    private VulkanNoiseParityProbe() {}
 
     static void run(GpuDevice expected) {
         Configuration.STACK_SIZE.set(64 * 1_048_576);
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            CpuNoiseBenchmark.Result cpu = CpuNoiseBenchmark.run(SAMPLE_COUNT, ITERATIONS);
-            GpuNoise.LOGGER.info("CPU noise: {} samples x {} in {} ms; checksum/pass={}", SAMPLE_COUNT, ITERATIONS,
-                    cpu.elapsedNanos() / 1_000_000.0, cpu.checksum() / ITERATIONS);
-
-            long gpuStart = System.nanoTime();
             float[] gpuResults = dispatch(expected, stack);
-            long gpuNanos = System.nanoTime() - gpuStart;
             float gpuChecksum = 0.0f;
             boolean matches = true;
+            float maxError = 0.0f;
+            int mismatches = 0;
             for (int i = 0; i < SAMPLE_COUNT; i++) {
                 gpuChecksum += gpuResults[i];
                 float expectedValue = NoiseMath.valueNoise(i & 1023, i >>> 10, SEED);
-                if (Math.abs(expectedValue - gpuResults[i]) > 0.000001f) matches = false;
+                float error = Math.abs(expectedValue - gpuResults[i]);
+                maxError = Math.max(maxError, error);
+                if (error > 0.000001f) {
+                    matches = false;
+                    mismatches++;
+                }
             }
-            GpuNoise.LOGGER.info("GPU noise: {} samples x {} in {} ms (setup + dispatch); checksum/pass={}; outputsMatch={}",
-                    SAMPLE_COUNT, ITERATIONS, gpuNanos / 1_000_000.0, gpuChecksum, matches);
+            GpuNoise.LOGGER.info("Vulkan value-noise parity: samples={}, mismatches={}, maxError={}, checksum={}, matches={}",
+                    SAMPLE_COUNT, mismatches, maxError, gpuChecksum, matches);
+            if (!matches) throw new IllegalStateException("GPU value-noise parity failed");
             runImprovedNoiseParity(expected, stack);
             runMinecraftParameterParity(expected, stack);
         } catch (Throwable failure) {
-            GpuNoise.LOGGER.warn("Noise benchmark failed; vanilla terrain remains enabled.", failure);
+            GpuNoise.LOGGER.warn("Vulkan noise parity probe failed; vanilla terrain remains enabled.", failure);
         }
     }
 
@@ -281,9 +282,7 @@ final class VulkanNoiseBenchmark {
         ByteBuffer pushData = stack.malloc(8).order(ByteOrder.nativeOrder())
                 .putInt(SEED).putInt(SAMPLE_COUNT).flip();
         vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, pushData);
-        for (int iteration = 0; iteration < ITERATIONS; iteration++) {
-            vkCmdDispatch(commandBuffer, (SAMPLE_COUNT + 63) / 64, 1, 1);
-        }
+        vkCmdDispatch(commandBuffer, (SAMPLE_COUNT + 63) / 64, 1, 1);
         VkBufferMemoryBarrier.Buffer readbackBarrier = VkBufferMemoryBarrier.calloc(1, stack)
                 .sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
                 .buffer(results.buffer).offset(0).size(results.size);
@@ -372,7 +371,7 @@ final class VulkanNoiseBenchmark {
 
     private static long createShader(VkDevice device, MemoryStack stack, String resource) throws Exception {
         byte[] bytes;
-        try (var input = VulkanNoiseBenchmark.class.getResourceAsStream(resource)) {
+        try (var input = VulkanNoiseParityProbe.class.getResourceAsStream(resource)) {
             if (input == null) throw new IllegalStateException("Missing benchmark shader");
             bytes = input.readAllBytes();
         }
