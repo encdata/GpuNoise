@@ -31,9 +31,8 @@ permissions:
 
 concurrency:
   group: gpunoise-${{ github.workflow }}-${{ github.ref }}
-  # A newer commit supersedes older build/runtime checks, including a slow
-  # worldgen profile queued for up to three hours.
-  cancel-in-progress: true
+  # Keep an in-progress worldgen parity matrix alive while newer changes queue.
+  cancel-in-progress: false
 
 jobs:
   build:

@@ -33,6 +33,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
     /** Bound retained request payloads across every queue class, including in-flight work. */
     private static final int MAX_PENDING_SUBMISSIONS = (int) Math.max(8L,
             Math.min(256L, Long.getLong("gpunoise.submissionQueueCapacity", 32L)));
+    /** Bound the extra copy slab used to merge sparse/short aquifer batches. */
+    private static final long MAX_COALESCED_NEAREST_BYTES = 24L * 1024L * 1024L;
     private static final QueueClass[] QUEUE_CLASSES = QueueClass.values();
     // Terrain callers block on their futures after submitting. Poll more
     // frequently while a graph dispatch is in flight, then back off while idle
@@ -561,20 +563,385 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     private void executeAquiferReserved(PersistentVulkanNormalNoiseEngine slot, DispatchRequest request) {
         if (request instanceof AquiferPrefillRequest value) {
-            dispatchAquiferAsync(slot, "combined aquifer prefill", value.future,
-                    engine -> engine.submitAquiferPrefillAsync(value.nearestRecords, value.nearestCount,
-                            value.statusRecords, value.statusCount));
+            executeAquiferPrefillBatch(slot, value);
         } else if (request instanceof AquiferNearestRequest value) {
-            dispatchAquiferAsync(slot, "aquifer nearest-three", value.future,
-                    engine -> engine.submitAquiferNearestThreeAsync(value.records, value.count));
+            executeAquiferNearestBatch(slot, value);
         } else if (request instanceof AquiferSubstanceRequest value) {
-            dispatchAquiferAsync(slot, "aquifer substance", value.future,
-                    engine -> engine.submitAquiferSubstanceAsync(value.records, value.count));
+            executeAquiferSubstanceBatch(slot, value);
         } else if (request instanceof AquiferFluidStatusRequest value) {
             dispatchAquiferAsync(slot, "aquifer fluid-status", value.future,
                     engine -> engine.submitAquiferFluidStatusAsync(value.records, value.count));
         } else {
             throw new IllegalArgumentException("unknown aquifer request type " + request.getClass().getName());
+        }
+    }
+
+    /** Merges compatible nearest-center payloads while preserving each query's neighborhood index. */
+    private void executeAquiferNearestBatch(PersistentVulkanNormalNoiseEngine slot,
+                                             AquiferNearestRequest first) {
+        List<AquiferNearestRequest> requests = new ArrayList<>();
+        requests.add(first);
+        int totalRows = first.count;
+        int totalGroups = GpuAquiferNearestThree.isValidPacked(first.records, first.count)
+                ? first.records.duplicate().order(java.nio.ByteOrder.nativeOrder())
+                        .getInt(first.records.position() + Integer.BYTES)
+                : -1;
+        long totalBytes = first.records.remaining();
+        if (totalGroups > 0 && totalBytes <= MAX_COALESCED_NEAREST_BYTES) {
+            synchronized (this) {
+                while (totalRows < GpuAquiferNearestThree.MAX_QUERIES) {
+                    AquiferNearestRequest next = pendingAquiferNearest.peek();
+                    if (next == null || next.future.isDone()
+                            || !GpuAquiferNearestThree.isValidPacked(next.records, next.count)
+                            || next.count > GpuAquiferNearestThree.MAX_QUERIES - totalRows) break;
+                    ByteBuffer nextRecords = next.records.duplicate().order(java.nio.ByteOrder.nativeOrder());
+                    int nextGroups = nextRecords.getInt(next.records.position() + Integer.BYTES);
+                    long nextRows = (long) totalRows + next.count;
+                    long nextGroupCount = (long) totalGroups + nextGroups;
+                    long nextBytes = GpuAquiferNearestThree.HEADER_BYTES
+                            + nextRows * GpuAquiferNearestThree.QUERY_RECORD_BYTES
+                            + nextGroupCount * GpuAquiferNearestThree.CENTER_RECORD_BYTES;
+                    if (nextBytes > MAX_COALESCED_NEAREST_BYTES) break;
+                    next = pendingAquiferNearest.poll();
+                    if (next == null) break;
+                    requests.add(next);
+                    totalRows += next.count;
+                    totalGroups += nextGroups;
+                    recordQueueWait(next.enqueuedNanos, QueueClass.AQUIFER);
+                }
+            }
+        }
+        if (requests.size() == 1) {
+            try {
+                slot.submitAquiferNearestThreeAsync(first.records, first.count).whenComplete((rows, failure) -> {
+                    if (failure == null) GpuTerrainProfiler.recordAquiferNearestBatch(first.count);
+                    completeOnDispatchWorker(first.future, rows, failure);
+                });
+            } catch (Throwable failure) {
+                first.future.completeExceptionally(new IllegalStateException(
+                        "GPU ring aquifer nearest-three submission failed", failure));
+            }
+            return;
+        }
+
+        int batchRowCount = totalRows;
+        List<NearestPayload> payloads = new ArrayList<>(requests.size());
+        for (AquiferNearestRequest request : requests)
+            payloads.add(new NearestPayload(request.records, request.count));
+        ByteBuffer combined;
+        try {
+            combined = combineNearestPayloads(payloads);
+        } catch (Throwable failure) {
+            for (AquiferNearestRequest request : requests)
+                completeOnDispatchWorker(request.future, null, new IllegalStateException(
+                        "GPU ring nearest-center batch packing failed", failure));
+            return;
+        }
+        try {
+            slot.submitAquiferNearestThreeAsync(combined, batchRowCount).whenComplete((rows, failure) -> {
+                GpuAquiferInputBufferPool.release(combined);
+                if (failure != null) {
+                    for (AquiferNearestRequest request : requests)
+                        completeOnDispatchWorker(request.future, null, failure);
+                    return;
+                }
+                if (rows == null || rows.length != batchRowCount * GpuAquiferNearestThree.OUTPUT_INTS) {
+                    IllegalStateException invalid = new IllegalStateException(
+                            "Vulkan nearest-center batch returned "
+                                    + (rows == null ? "null" : rows.length)
+                                    + " values for " + batchRowCount + " queries");
+                    for (AquiferNearestRequest request : requests)
+                        completeOnDispatchWorker(request.future, null, invalid);
+                    return;
+                }
+                GpuTerrainProfiler.recordAquiferNearestBatch(batchRowCount);
+                GpuTerrainProfiler.recordAquiferNearestCoalesced(requests.size());
+                int offset = 0;
+                for (AquiferNearestRequest request : requests) {
+                    int valueCount = request.count * GpuAquiferNearestThree.OUTPUT_INTS;
+                    int[] chunkRows = java.util.Arrays.copyOfRange(rows, offset, offset + valueCount);
+                    completeOnDispatchWorker(request.future, chunkRows, null);
+                    offset += valueCount;
+                }
+            });
+        } catch (Throwable failure) {
+            GpuAquiferInputBufferPool.release(combined);
+            for (AquiferNearestRequest request : requests)
+                completeOnDispatchWorker(request.future, null, new IllegalStateException(
+                        "GPU ring nearest-center batch submission failed", failure));
+        }
+    }
+
+    private static ByteBuffer combineNearestPayloads(List<NearestPayload> payloads) {
+        long rowCount = 0;
+        long groupCount = 0;
+        for (NearestPayload payload : payloads) {
+            if (!GpuAquiferNearestThree.isValidPacked(payload.records, payload.count))
+                throw new IllegalArgumentException("invalid nearest-center payload in coalesced batch");
+            ByteBuffer source = payload.records.duplicate().order(java.nio.ByteOrder.nativeOrder());
+            int groups = source.getInt(payload.records.position() + Integer.BYTES);
+            rowCount += payload.count;
+            groupCount += groups;
+        }
+        if (rowCount <= 0 || rowCount > GpuAquiferNearestThree.MAX_QUERIES
+                || groupCount <= 0 || groupCount > rowCount)
+            throw new IllegalArgumentException("combined nearest-center rows exceed GPU limits");
+        long bytes = GpuAquiferNearestThree.HEADER_BYTES
+                + rowCount * GpuAquiferNearestThree.QUERY_RECORD_BYTES
+                + groupCount * GpuAquiferNearestThree.CENTER_RECORD_BYTES;
+        if (bytes > MAX_COALESCED_NEAREST_BYTES || bytes > Integer.MAX_VALUE)
+            throw new IllegalArgumentException("combined nearest-center input exceeds bounded staging budget");
+
+        ByteBuffer combined = GpuAquiferInputBufferPool.acquire((int) bytes);
+        try {
+            combined.putInt((int) rowCount).putInt((int) groupCount);
+            int groupOffset = 0;
+            for (NearestPayload payload : payloads) {
+                ByteBuffer source = payload.records.duplicate().order(java.nio.ByteOrder.nativeOrder());
+                int sourcePosition = source.position();
+                int groups = source.getInt(sourcePosition + Integer.BYTES);
+                for (int row = 0; row < payload.count; row++) {
+                    int queryOffset = sourcePosition + GpuAquiferNearestThree.HEADER_BYTES
+                            + row * GpuAquiferNearestThree.QUERY_RECORD_BYTES;
+                    combined.putInt(source.getInt(queryOffset))
+                            .putInt(source.getInt(queryOffset + Integer.BYTES))
+                            .putInt(source.getInt(queryOffset + Integer.BYTES * 2))
+                            .putInt(source.getInt(queryOffset + Integer.BYTES * 3) + groupOffset);
+                }
+                int centersOffset = sourcePosition + GpuAquiferNearestThree.HEADER_BYTES
+                        + payload.count * GpuAquiferNearestThree.QUERY_RECORD_BYTES;
+                source.position(centersOffset);
+                source.limit(centersOffset + groups * GpuAquiferNearestThree.CENTER_RECORD_BYTES);
+                combined.put(source);
+                groupOffset += groups;
+            }
+            return combined.flip();
+        } catch (RuntimeException | Error failure) {
+            GpuAquiferInputBufferPool.release(combined);
+            throw failure;
+        }
+    }
+
+    /** Coalesces C2ME-style nearest-center and status-prefill work across chunks. */
+    private void executeAquiferPrefillBatch(PersistentVulkanNormalNoiseEngine slot,
+                                             AquiferPrefillRequest first) {
+        List<AquiferPrefillRequest> requests = new ArrayList<>();
+        requests.add(first);
+        int nearestRows = first.nearestCount;
+        int statusRows = first.statusCount;
+        long nearestGroups = validPrefill(first)
+                ? nearestGroupCount(first.nearestRecords, first.nearestCount) : -1;
+        if (nearestGroups > 0 && coalescedPrefillBytes(nearestRows, nearestGroups, statusRows)
+                <= MAX_COALESCED_NEAREST_BYTES) {
+            synchronized (this) {
+                while (nearestRows < GpuAquiferNearestThree.MAX_QUERIES
+                        && statusRows < GpuAquiferFluidStatus.MAX_PREFILL_CENTERS) {
+                    AquiferPrefillRequest next = pendingAquiferPrefill.peek();
+                    if (next == null || next.future.isDone() || !validPrefill(next)
+                            || next.nearestCount > GpuAquiferNearestThree.MAX_QUERIES - nearestRows
+                            || next.statusCount > GpuAquiferFluidStatus.MAX_PREFILL_CENTERS - statusRows)
+                        break;
+                    long nextGroups = nearestGroups
+                            + nearestGroupCount(next.nearestRecords, next.nearestCount);
+                    long bytes = coalescedPrefillBytes(nearestRows + next.nearestCount,
+                            nextGroups, statusRows + next.statusCount);
+                    if (bytes > MAX_COALESCED_NEAREST_BYTES) break;
+                    next = pendingAquiferPrefill.poll();
+                    if (next == null) break;
+                    requests.add(next);
+                    nearestRows += next.nearestCount;
+                    statusRows += next.statusCount;
+                    nearestGroups = nextGroups;
+                    recordQueueWait(next.enqueuedNanos, QueueClass.AQUIFER);
+                }
+            }
+        }
+        if (requests.size() == 1) {
+            try {
+                slot.submitAquiferPrefillAsync(first.nearestRecords, first.nearestCount,
+                        first.statusRecords, first.statusCount).whenComplete((rows, failure) -> {
+                    if (failure == null) GpuTerrainProfiler.recordAquiferNearestBatch(first.nearestCount);
+                    completeOnDispatchWorker(first.future, rows, failure);
+                });
+            } catch (Throwable failure) {
+                first.future.completeExceptionally(new IllegalStateException(
+                        "GPU ring combined aquifer prefill submission failed", failure));
+            }
+            return;
+        }
+
+        int batchNearestRows = nearestRows;
+        int batchStatusRows = statusRows;
+        List<NearestPayload> nearestPayloads = new ArrayList<>(requests.size());
+        for (AquiferPrefillRequest request : requests)
+            nearestPayloads.add(new NearestPayload(request.nearestRecords, request.nearestCount));
+        ByteBuffer mergedNearest;
+        try {
+            mergedNearest = combineNearestPayloads(nearestPayloads);
+        } catch (Throwable failure) {
+            for (AquiferPrefillRequest request : requests)
+                completeOnDispatchWorker(request.future, null, new IllegalStateException(
+                        "GPU ring combined aquifer prefill packing failed", failure));
+            return;
+        }
+        ByteBuffer mergedStatus;
+        try {
+            mergedStatus = GpuAquiferInputBufferPool.acquire(
+                    Math.multiplyExact(batchStatusRows, GpuAquiferFluidStatus.RECORD_BYTES));
+        } catch (Throwable failure) {
+            GpuAquiferInputBufferPool.release(mergedNearest);
+            for (AquiferPrefillRequest request : requests)
+                completeOnDispatchWorker(request.future, null, new IllegalStateException(
+                        "GPU ring combined aquifer status packing failed", failure));
+            return;
+        }
+        try {
+            for (AquiferPrefillRequest request : requests)
+                mergedStatus.put(request.statusRecords.duplicate());
+            mergedStatus.flip();
+            slot.submitAquiferPrefillAsync(mergedNearest, batchNearestRows,
+                    mergedStatus, batchStatusRows).whenComplete((rows, failure) -> {
+                GpuAquiferInputBufferPool.release(mergedNearest);
+                GpuAquiferInputBufferPool.release(mergedStatus);
+                if (failure != null) {
+                    for (AquiferPrefillRequest request : requests)
+                        completeOnDispatchWorker(request.future, null, failure);
+                    return;
+                }
+                if (rows == null || rows.nearestRows().length
+                        != batchNearestRows * GpuAquiferNearestThree.OUTPUT_INTS
+                        || rows.fluidStatusRows().length
+                        != batchStatusRows * GpuAquiferFluidStatus.OUTPUT_INTS) {
+                    IllegalStateException invalid = new IllegalStateException(
+                            "Vulkan combined aquifer prefill returned a mismatched row count");
+                    for (AquiferPrefillRequest request : requests)
+                        completeOnDispatchWorker(request.future, null, invalid);
+                    return;
+                }
+                GpuTerrainProfiler.recordAquiferNearestBatch(batchNearestRows);
+                GpuTerrainProfiler.recordAquiferNearestCoalesced(requests.size());
+                int nearestOffset = 0;
+                int statusOffset = 0;
+                for (AquiferPrefillRequest request : requests) {
+                    int nearestEnd = nearestOffset + request.nearestCount
+                            * GpuAquiferNearestThree.OUTPUT_INTS;
+                    int statusEnd = statusOffset + request.statusCount
+                            * GpuAquiferFluidStatus.OUTPUT_INTS;
+                    GpuAquiferPrefillResult chunkResult = new GpuAquiferPrefillResult(
+                            java.util.Arrays.copyOfRange(rows.nearestRows(), nearestOffset, nearestEnd),
+                            java.util.Arrays.copyOfRange(rows.fluidStatusRows(), statusOffset, statusEnd));
+                    completeOnDispatchWorker(request.future, chunkResult, null);
+                    nearestOffset = nearestEnd;
+                    statusOffset = statusEnd;
+                }
+            });
+        } catch (Throwable failure) {
+            GpuAquiferInputBufferPool.release(mergedNearest);
+            GpuAquiferInputBufferPool.release(mergedStatus);
+            for (AquiferPrefillRequest request : requests)
+                completeOnDispatchWorker(request.future, null, new IllegalStateException(
+                        "GPU ring combined aquifer prefill submission failed", failure));
+        }
+    }
+
+    private static boolean validPrefill(AquiferPrefillRequest request) {
+        return GpuAquiferNearestThree.isValidPacked(request.nearestRecords, request.nearestCount)
+                && request.statusCount > 0
+                && request.statusCount <= GpuAquiferFluidStatus.MAX_PREFILL_CENTERS
+                && request.statusRecords.remaining()
+                == request.statusCount * GpuAquiferFluidStatus.RECORD_BYTES;
+    }
+
+    private static int nearestGroupCount(ByteBuffer records, int count) {
+        return records.duplicate().order(java.nio.ByteOrder.nativeOrder())
+                .getInt(records.position() + Integer.BYTES);
+    }
+
+    private static long coalescedPrefillBytes(long nearestRows, long nearestGroups, long statusRows) {
+        long nearestBytes = GpuAquiferNearestThree.HEADER_BYTES
+                + nearestRows * GpuAquiferNearestThree.QUERY_RECORD_BYTES
+                + nearestGroups * GpuAquiferNearestThree.CENTER_RECORD_BYTES;
+        long statusOffset = (nearestBytes + GpuAquiferFluidStatus.RECORD_BYTES - 1)
+                / GpuAquiferFluidStatus.RECORD_BYTES * GpuAquiferFluidStatus.RECORD_BYTES;
+        return statusOffset + statusRows * GpuAquiferFluidStatus.RECORD_BYTES;
+    }
+
+    /** Coalesces already-queued chunk decisions into one OCL-style area dispatch. */
+    private void executeAquiferSubstanceBatch(PersistentVulkanNormalNoiseEngine slot,
+                                               AquiferSubstanceRequest first) {
+        List<AquiferSubstanceRequest> requests = new ArrayList<>();
+        requests.add(first);
+        int totalRows = first.count;
+        if (totalRows > 0 && totalRows <= GpuAquiferSubstance.MAX_QUERIES
+                && first.records.remaining() == totalRows * GpuAquiferSubstance.RECORD_BYTES) {
+            synchronized (this) {
+                while (totalRows < GpuAquiferSubstance.MAX_QUERIES) {
+                    AquiferSubstanceRequest next = pendingAquiferSubstance.peek();
+                    if (next == null || next.future.isDone()
+                            || next.count <= 0
+                            || next.count > GpuAquiferSubstance.MAX_QUERIES - totalRows
+                            || next.records.remaining() != next.count * GpuAquiferSubstance.RECORD_BYTES) break;
+                    next = pendingAquiferSubstance.poll();
+                    if (next == null) break;
+                    requests.add(next);
+                    totalRows += next.count;
+                    recordQueueWait(next.enqueuedNanos, QueueClass.AQUIFER);
+                }
+            }
+        }
+        if (requests.size() == 1) {
+            try {
+                slot.submitAquiferSubstanceAsync(first.records, first.count).whenComplete((rows, failure) -> {
+                    if (failure == null) GpuTerrainProfiler.recordAquiferSubstanceBatch(first.count);
+                    completeOnDispatchWorker(first.future, rows, failure);
+                });
+            } catch (Throwable failure) {
+                first.future.completeExceptionally(new IllegalStateException(
+                        "GPU ring aquifer substance submission failed", failure));
+            }
+            return;
+        }
+        int batchRowCount = totalRows;
+
+        ByteBuffer combined = GpuAquiferInputBufferPool.acquire(
+                Math.multiplyExact(batchRowCount, GpuAquiferSubstance.RECORD_BYTES));
+        try {
+            for (AquiferSubstanceRequest request : requests) {
+                ByteBuffer records = request.records.duplicate();
+                combined.put(records);
+            }
+            combined.flip();
+            slot.submitAquiferSubstanceAsync(combined, batchRowCount).whenComplete((rows, failure) -> {
+                GpuAquiferInputBufferPool.release(combined);
+                if (failure != null) {
+                    for (AquiferSubstanceRequest request : requests)
+                        completeOnDispatchWorker(request.future, null, failure);
+                    return;
+                }
+                if (rows == null || rows.length != batchRowCount) {
+                    IllegalStateException invalid = new IllegalStateException(
+                            "Vulkan aquifer substance batch returned "
+                                    + (rows == null ? "null" : rows.length)
+                                    + " rows for " + batchRowCount + " inputs");
+                    for (AquiferSubstanceRequest request : requests)
+                        completeOnDispatchWorker(request.future, null, invalid);
+                    return;
+                }
+                GpuTerrainProfiler.recordAquiferSubstanceBatch(batchRowCount);
+                GpuTerrainProfiler.recordAquiferSubstanceCoalesced(requests.size());
+                int offset = 0;
+                for (AquiferSubstanceRequest request : requests) {
+                    int end = offset + request.count;
+                    int[] chunkRows = java.util.Arrays.copyOfRange(rows, offset, end);
+                    completeOnDispatchWorker(request.future, chunkRows, null);
+                    offset = end;
+                }
+            });
+        } catch (Throwable failure) {
+            GpuAquiferInputBufferPool.release(combined);
+            for (AquiferSubstanceRequest request : requests)
+                completeOnDispatchWorker(request.future, null, new IllegalStateException(
+                        "GPU ring aquifer substance batch submission failed", failure));
         }
     }
 
@@ -955,6 +1322,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                          ByteBuffer statusRecords, int statusCount,
                                          CompletableFuture<GpuAquiferPrefillResult> future, long enqueuedNanos)
             implements DispatchRequest {}
+    private record NearestPayload(ByteBuffer records, int count) {}
     @FunctionalInterface
     private interface SlotOperation<T> {
         T call(PersistentVulkanNormalNoiseEngine slot) throws Exception;

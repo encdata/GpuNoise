@@ -716,7 +716,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         CompletableFuture<int[]> future = GpuTerrainRuntime.submitAquiferNearestThree(records, count)
                 .toCompletableFuture();
         future.whenComplete((rows, failure) -> {
-            if (failure == null) GpuTerrainProfiler.recordAquiferNearestBatch(count);
             GpuAquiferInputBufferPool.release(records);
         });
         return future;
@@ -728,7 +727,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         CompletableFuture<int[]> future = GpuTerrainRuntime.submitAquiferSubstance(records, count)
                 .toCompletableFuture();
         future.whenComplete((rows, failure) -> {
-            if (failure == null) GpuTerrainProfiler.recordAquiferSubstanceBatch(count);
             GpuAquiferInputBufferPool.release(records);
         });
         return future;
@@ -843,7 +841,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     ? GpuTerrainRuntime.submitAquiferPrefill(nearestRecords, nearestCount,
                             statusRecords, centers.size()).toCompletableFuture().join()
                     : null;
-            if (combined != null) GpuTerrainProfiler.recordAquiferNearestBatch(nearestCount);
             nearestRows = combined == null && nearestRecords != null
                     ? gpunoise$submitNearestBatch(nearestRecords, nearestCount).join()
                     : combined == null ? null : combined.nearestRows();

@@ -1029,6 +1029,22 @@ public final class VulkanCiSmoke {
                     throw new IllegalStateException("combined C2ME aquifer prefill changed status output at int " + index);
                 }
             }
+            var combinedAquiferFutureA = ring.submitAquiferPrefill(
+                    combinedNearest, 1, GpuAquiferFluidStatus.pack(fluidStatusCases),
+                    fluidStatusCases.length);
+            var combinedAquiferFutureB = ring.submitAquiferPrefill(
+                    combinedNearest, 1, GpuAquiferFluidStatus.pack(fluidStatusCases),
+                    fluidStatusCases.length);
+            CompletableFuture.allOf(combinedAquiferFutureA, combinedAquiferFutureB)
+                    .get(60, TimeUnit.SECONDS);
+            for (var combinedBatch : List.of(combinedAquiferFutureA.join(), combinedAquiferFutureB.join())) {
+                if (!java.util.Arrays.equals(expectedNearest, combinedBatch.nearestRows())
+                        || !java.util.Arrays.equals(combinedAquifer.fluidStatusRows(),
+                                combinedBatch.fluidStatusRows())) {
+                    throw new IllegalStateException("multi-chunk combined aquifer prefill changed row order");
+                }
+            }
+            System.out.println("Vulkan CI smoke: multi-chunk nearest/status prefill fanout passed");
             System.out.println("Vulkan CI smoke: co-submitted C2ME OCL aquifer prefill parity completed");
             System.out.println("Vulkan CI smoke: C2ME OCL aquifer fluid-status prefill parity completed");
             // The Tectonic integration profile can produce 576-block-high
@@ -1154,6 +1170,39 @@ public final class VulkanCiSmoke {
                 throw new IllegalStateException("Aquifer palette overflow did not mark only the unmapped row for CPU fallback");
             }
             System.out.println("Vulkan CI smoke: compact aquifer palette and overflow fallback passed");
+            GpuAquiferSubstance.Input[] coalescedChunkA =
+                    new GpuAquiferSubstance.Input[37];
+            GpuAquiferSubstance.Input[] coalescedChunkB =
+                    new GpuAquiferSubstance.Input[41];
+            java.util.Arrays.fill(coalescedChunkA, positiveDensityMaterialCase);
+            GpuAquiferSubstance.Input chunkBStateCase = new GpuAquiferSubstance.Input(-0.25, 0.0, 32,
+                    32, 32, 32, 32, 0, 0, 0, 0,
+                    GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                    GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                    0, 0, false, false, false, 917);
+            java.util.Arrays.fill(coalescedChunkB, chunkBStateCase);
+            GpuAquiferSubstance.PackedBatch packedCoalescedChunkA =
+                    GpuAquiferSubstance.packBatch(coalescedChunkA);
+            GpuAquiferSubstance.PackedBatch packedCoalescedChunkB =
+                    GpuAquiferSubstance.packBatch(coalescedChunkB);
+            var coalescedChunkFutureA = ring.submitAquiferSubstance(
+                    packedCoalescedChunkA.records(), coalescedChunkA.length);
+            var coalescedChunkFutureB = ring.submitAquiferSubstance(
+                    packedCoalescedChunkB.records(), coalescedChunkB.length);
+            CompletableFuture.allOf(coalescedChunkFutureA, coalescedChunkFutureB)
+                    .get(60, TimeUnit.SECONDS);
+            for (int value : coalescedChunkFutureA.join()) {
+                if (GpuAquiferSubstance.outputAction(value) != GpuAquiferSubstance.RETURN_DEFAULT)
+                    throw new IllegalStateException("First coalesced aquifer chunk lost its row ordering");
+            }
+            for (int value : coalescedChunkFutureB.join()) {
+                if (GpuAquiferSubstance.outputAction(value) != GpuAquiferSubstance.RETURN_STATE
+                        || packedCoalescedChunkB.stateIdForSlot(
+                                GpuAquiferSubstance.outputStateId(value)) != 917) {
+                    throw new IllegalStateException("Second coalesced aquifer chunk lost its palette or row ordering");
+                }
+            }
+            System.out.println("Vulkan CI smoke: multi-chunk aquifer batch fanout passed");
             if (GpuAquiferSubstance.evaluate(positiveDensityThresholdCase)[0]
                     != GpuAquiferSubstance.CPU_FALLBACK) {
                 throw new IllegalStateException("Positive density near zero must use exact Java evaluation");

@@ -354,6 +354,15 @@ output states, only rows whose state cannot be mapped request exact Java
 evaluation. This ports OCL's compact device/host state boundary while
 preserving the Minecraft-owned chunk writer and an explicit overflow path.
 
+The submission ring also coalesces compatible, already-queued aquifer
+nearest-center, combined nearest/status prefill, and substance batches from
+multiple chunks into capacity-bounded Vulkan dispatches. Nearest query indices
+are rebased when payloads merge; output is sliced back to each chunk, and
+substance palettes stay chunk-local. Combined staging slabs return to the pool
+only after readback. The profiler reports actual dispatch sizes and how many
+chunk requests were joined, so dedicated-server traces can show whether region
+concurrency is feeding the device often enough to make this useful.
+
 The terrain roots batcher now reuses a bounded pool of direct metadata buffers
 until each asynchronous Vulkan submission completes. The scheduler uses the
 same 4x4 aligned chunk regions as C2ME-OCL, with a 2x2 mode and bounded

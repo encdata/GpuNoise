@@ -41,8 +41,12 @@ public final class GpuTerrainProfiler {
     private static final LongAdder aquiferStatusPrefillJavaFallbacks = new LongAdder();
     private static final LongAdder aquiferNearestDispatches = new LongAdder();
     private static final LongAdder aquiferNearestRows = new LongAdder();
+    private static final LongAdder aquiferNearestCoalescedDispatches = new LongAdder();
+    private static final LongAdder aquiferNearestCoalescedRequests = new LongAdder();
     private static final LongAdder aquiferSubstanceDispatches = new LongAdder();
     private static final LongAdder aquiferSubstanceRows = new LongAdder();
+    private static final LongAdder aquiferSubstanceCoalescedDispatches = new LongAdder();
+    private static final LongAdder aquiferSubstanceCoalescedRequests = new LongAdder();
     private static final LongAdder aquiferRegionStatusCacheHits = new LongAdder();
     private static final LongAdder aquiferRegionStatusCacheMisses = new LongAdder();
     private static final LongAdder aquiferRegionSurfaceCacheHits = new LongAdder();
@@ -236,10 +240,22 @@ public final class GpuTerrainProfiler {
         aquiferNearestRows.add(rows);
     }
 
+    public static void recordAquiferNearestCoalesced(int requests) {
+        if (!ENABLED || requests <= 1) return;
+        aquiferNearestCoalescedDispatches.increment();
+        aquiferNearestCoalescedRequests.add(requests);
+    }
+
     public static void recordAquiferSubstanceBatch(int rows) {
         if (!ENABLED || rows <= 0) return;
         aquiferSubstanceDispatches.increment();
         aquiferSubstanceRows.add(rows);
+    }
+
+    public static void recordAquiferSubstanceCoalesced(int requests) {
+        if (!ENABLED || requests <= 1) return;
+        aquiferSubstanceCoalescedDispatches.increment();
+        aquiferSubstanceCoalescedRequests.add(requests);
     }
 
     public static void recordBlockWrite() {
@@ -292,11 +308,13 @@ public final class GpuTerrainProfiler {
                 aquiferStatusPrefillCalls.sum(), aquiferStatusPrefillCenters.sum(),
                 aquiferStatusPrefillJavaFallbacks.sum(), aquiferStatusPrefillSamples.sum(),
                 averageNanos(aquiferStatusPrefillNanos, aquiferStatusPrefillSamples));
-        GpuNoise.LOGGER.info("GPU terrain aquifer batches: nearestDispatches={}, nearestRows={}, avgNearestRows={}, substanceDispatches={}, substanceRows={}, avgSubstanceRows={}",
+        GpuNoise.LOGGER.info("GPU terrain aquifer batches: nearestDispatches={}, nearestRows={}, avgNearestRows={}, nearestCoalescedDispatches={}, nearestCoalescedRequests={}, substanceDispatches={}, substanceRows={}, avgSubstanceRows={}, substanceCoalescedDispatches={}, substanceCoalescedRequests={}",
                 aquiferNearestDispatches.sum(), aquiferNearestRows.sum(),
                 averageRows(aquiferNearestRows, aquiferNearestDispatches),
+                aquiferNearestCoalescedDispatches.sum(), aquiferNearestCoalescedRequests.sum(),
                 aquiferSubstanceDispatches.sum(), aquiferSubstanceRows.sum(),
-                averageRows(aquiferSubstanceRows, aquiferSubstanceDispatches));
+                averageRows(aquiferSubstanceRows, aquiferSubstanceDispatches),
+                aquiferSubstanceCoalescedDispatches.sum(), aquiferSubstanceCoalescedRequests.sum());
         GpuNoise.LOGGER.info("GPU terrain aquifer staging slabs: allocated={}, reused={}, pooledBytes={}",
                 GpuAquiferInputBufferPool.allocatedBufferCount(),
                 GpuAquiferInputBufferPool.reusedBufferCount(),
