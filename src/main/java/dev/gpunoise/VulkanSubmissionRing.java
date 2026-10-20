@@ -528,8 +528,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
             switch (dispatch.requestClass) {
                 case GRAPH_ROOTS -> {
                     GraphRootsRequest value = (GraphRootsRequest) request;
-                    slot.submitGraphRootsAsync(value.graph, value.x, value.y, value.z, value.sampleCount)
-                            .whenComplete((result, failure) -> completeOnDispatchWorker(value.future, result, failure));
+                    executeGraphRootsBatch(slot, value);
                 }
                 case GRAPH_GRIDS -> {
                     GraphRootsGridRequest value = (GraphRootsGridRequest) request;
@@ -551,6 +550,91 @@ final class VulkanSubmissionRing implements AutoCloseable {
         } finally {
             if (profile) activeDispatchPreparations.decrementAndGet();
             releaseReservedSlot(dispatch.slot);
+        }
+    }
+
+    /** Coalesces queued point-root requests for one graph into a single Vulkan dispatch. */
+    private void executeGraphRootsBatch(PersistentVulkanNormalNoiseEngine slot,
+                                        GraphRootsRequest first) {
+        List<GraphRootsRequest> requests = new ArrayList<>();
+        requests.add(first);
+        int totalSamples = first.sampleCount;
+        if (totalSamples > 0 && totalSamples <= PersistentVulkanNormalNoiseEngine.CAPACITY
+                && first.sampleCount <= first.x.length
+                && first.sampleCount <= first.y.length
+                && first.sampleCount <= first.z.length) {
+            synchronized (this) {
+                while (totalSamples < PersistentVulkanNormalNoiseEngine.CAPACITY) {
+                    GraphRootsRequest next = pendingGraphRoots.peek();
+                    if (next == null || next.future.isDone() || next.graph != first.graph
+                            || next.sampleCount <= 0
+                            || next.sampleCount > PersistentVulkanNormalNoiseEngine.CAPACITY - totalSamples
+                            || next.sampleCount > next.x.length
+                            || next.sampleCount > next.y.length
+                            || next.sampleCount > next.z.length) break;
+                    next = pendingGraphRoots.poll();
+                    if (next == null) break;
+                    requests.add(next);
+                    totalSamples += next.sampleCount;
+                    recordQueueWait(next.enqueuedNanos, QueueClass.GRAPH_ROOTS);
+                }
+            }
+        }
+        if (requests.size() == 1) {
+            try {
+                slot.submitGraphRootsAsync(first.graph, first.x, first.y, first.z, first.sampleCount)
+                        .whenComplete((result, failure) ->
+                                completeOnDispatchWorker(first.future, result, failure));
+            } catch (Throwable failure) {
+                first.future.completeExceptionally(new IllegalStateException(
+                        "GPU ring graph-roots submission failed", failure));
+            }
+            return;
+        }
+
+        float[] x = new float[totalSamples];
+        float[] y = new float[totalSamples];
+        float[] z = new float[totalSamples];
+        int offset = 0;
+        for (GraphRootsRequest request : requests) {
+            System.arraycopy(request.x, 0, x, offset, request.sampleCount);
+            System.arraycopy(request.y, 0, y, offset, request.sampleCount);
+            System.arraycopy(request.z, 0, z, offset, request.sampleCount);
+            offset += request.sampleCount;
+        }
+        int batchSamples = totalSamples;
+        try {
+            slot.submitGraphRootsAsync(first.graph, x, y, z, batchSamples).whenComplete((result, failure) -> {
+                if (failure != null) {
+                    for (GraphRootsRequest request : requests)
+                        completeOnDispatchWorker(request.future, null, failure);
+                    return;
+                }
+                int roots = first.graph.routerRootCount();
+                int expected = Math.multiplyExact(batchSamples, roots);
+                if (result == null || result.length != expected) {
+                    IllegalStateException invalid = new IllegalStateException(
+                            "Vulkan graph-roots batch returned "
+                                    + (result == null ? "null" : result.length)
+                                    + " values for " + batchSamples + " samples and " + roots + " roots");
+                    for (GraphRootsRequest request : requests)
+                        completeOnDispatchWorker(request.future, null, invalid);
+                    return;
+                }
+                int sampleOffset = 0;
+                for (GraphRootsRequest request : requests) {
+                    int valueOffset = Math.multiplyExact(sampleOffset, roots);
+                    int valueEnd = Math.addExact(valueOffset,
+                            Math.multiplyExact(request.sampleCount, roots));
+                    completeOnDispatchWorker(request.future,
+                            java.util.Arrays.copyOfRange(result, valueOffset, valueEnd), null);
+                    sampleOffset += request.sampleCount;
+                }
+            });
+        } catch (Throwable failure) {
+            for (GraphRootsRequest request : requests)
+                request.future.completeExceptionally(new IllegalStateException(
+                        "GPU ring graph-roots batch submission failed", failure));
         }
     }
 
