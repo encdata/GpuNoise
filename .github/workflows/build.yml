@@ -79,15 +79,15 @@ jobs:
       - name: Build with Gradle
         run: ./gradlew --no-daemon build
 
-      - name: Verify single mod artifact
-        run: python3 tools/ci/verify_mod_artifact.py build/libs/*-all.jar
-
       - name: Upload mod before dedicated-server checks
         uses: actions/upload-artifact@v4
         with:
           name: gpunoise-mod-${{ github.sha }}
           path: build/libs/*-all.jar
           if-no-files-found: error
+
+      - name: Verify single mod artifact
+        run: python3 tools/ci/verify_mod_artifact.py build/libs/*-all.jar
 
       - name: Verify release jar loads in isolated client
         run: xvfb-run --auto-servernum python3 tools/ci/verify_client_artifact.py
