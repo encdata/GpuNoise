@@ -339,48 +339,36 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                  AquiferNearestRequest nearest, AquiferSubstanceRequest substance,
                                  AquiferFluidStatusRequest fluidStatus) {
         if (prefill != null) {
-            try {
-                slot.submitAquiferPrefillAsync(prefill.nearestRecords, prefill.nearestCount,
-                                prefill.statusRecords, prefill.statusCount)
-                        .whenComplete((result, failure) ->
-                                completeOnDispatchWorker(prefill.future, result, failure));
-            } catch (Throwable failure) {
-                prefill.future.completeExceptionally(new IllegalStateException(
-                        "GPU ring combined aquifer prefill submission failed", failure));
-            }
+            dispatchAquiferAsync(slot, "combined aquifer prefill", prefill.future,
+                    engine -> engine.submitAquiferPrefillAsync(prefill.nearestRecords,
+                            prefill.nearestCount, prefill.statusRecords, prefill.statusCount));
             return;
         }
         if (nearest != null) {
-            try {
-                slot.submitAquiferNearestThreeAsync(nearest.records, nearest.count)
-                        .whenComplete((result, failure) ->
-                                completeOnDispatchWorker(nearest.future, result, failure));
-            } catch (Throwable failure) {
-                nearest.future.completeExceptionally(new IllegalStateException(
-                        "GPU ring aquifer nearest-three submission failed", failure));
-            }
+            dispatchAquiferAsync(slot, "aquifer nearest-three", nearest.future,
+                    engine -> engine.submitAquiferNearestThreeAsync(nearest.records, nearest.count));
             return;
         }
         if (substance != null) {
-            try {
-                slot.submitAquiferSubstanceAsync(substance.records, substance.count)
-                        .whenComplete((result, failure) ->
-                                completeOnDispatchWorker(substance.future, result, failure));
-            } catch (Throwable failure) {
-                substance.future.completeExceptionally(new IllegalStateException(
-                        "GPU ring aquifer substance submission failed", failure));
-            }
+            dispatchAquiferAsync(slot, "aquifer substance", substance.future,
+                    engine -> engine.submitAquiferSubstanceAsync(substance.records, substance.count));
             return;
         }
         if (fluidStatus != null) {
-            try {
-                slot.submitAquiferFluidStatusAsync(fluidStatus.records, fluidStatus.count)
-                        .whenComplete((result, failure) ->
-                                completeOnDispatchWorker(fluidStatus.future, result, failure));
-            } catch (Throwable failure) {
-                fluidStatus.future.completeExceptionally(new IllegalStateException(
-                        "GPU ring aquifer fluid-status submission failed", failure));
-            }
+            dispatchAquiferAsync(slot, "aquifer fluid-status", fluidStatus.future,
+                    engine -> engine.submitAquiferFluidStatusAsync(fluidStatus.records, fluidStatus.count));
+        }
+    }
+
+    private <T> void dispatchAquiferAsync(PersistentVulkanNormalNoiseEngine slot, String description,
+                                          CompletableFuture<T> result,
+                                          SlotOperation<CompletableFuture<T>> submission) {
+        try {
+            submission.call(slot).whenComplete((value, failure) ->
+                    completeOnDispatchWorker(result, value, failure));
+        } catch (Throwable failure) {
+            result.completeExceptionally(new IllegalStateException(
+                    "GPU ring " + description + " submission failed", failure));
         }
     }
 
