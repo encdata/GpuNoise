@@ -315,6 +315,9 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
         assert process.stdout is not None
         with log_path.open("w", encoding="utf-8") as log_file:
             for line in process.stdout:
+                # Chunky prints a throughput estimate in its progress line;
+                # CI checks correctness only, so do not retain or publish it.
+                line = re.sub(r", Rate: [0-9]+(?:\.[0-9]+)? cps", "", line)
                 observed_at = time.monotonic()
                 print(line, end="", flush=True)
                 log_file.write(line)
@@ -582,6 +585,9 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
             raise RuntimeError(f"{mode} runServer exited with status {return_code}")
 
         if force_cpu:
+            cpu_run_log = log_path.read_text(encoding="utf-8")
+            if "GPU terrain graph setup skipped for the forced-CPU reference run." not in cpu_run_log:
+                raise RuntimeError("CPU reference run attempted to install a GPU terrain graph")
             cpu_world = ROOT / "run" / run_name / "world"
             snapshot_chunks, snapshot_sections, snapshot_blocks = compare_worlds(cpu_world, cpu_world)
             print(f"CI_WORLDGEN_CPU_SNAPSHOT_PARSED chunks={snapshot_chunks} "

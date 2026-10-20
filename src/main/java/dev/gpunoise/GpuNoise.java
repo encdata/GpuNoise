@@ -62,6 +62,10 @@ public final class GpuNoise {
         if (Boolean.getBoolean("gpunoise.vulkanSmoke")) {
             VulkanCiSmoke.prepareTranslatorIntegration();
         }
+        if (Boolean.getBoolean("gpunoise.forceCpuTerrain")) {
+            LOGGER.info("GPU terrain graph setup skipped for the forced-CPU reference run.");
+            return;
+        }
         if (warmedDevice == null) {
             warmGpuBeforeWorldgen(GpuNoiseConfig.GPU_VENDOR.get());
         }
@@ -71,6 +75,7 @@ public final class GpuNoise {
     }
 
     private void onServerStarting(ServerStartingEvent event) {
+        if (Boolean.getBoolean("gpunoise.forceCpuTerrain")) return;
         if (warmedDevice == null) warmGpuBeforeWorldgen(GpuNoiseConfig.GPU_VENDOR.get());
         if (warmedDevice == null || event.getServer().overworld() == null
                 || GpuTerrainRuntime.terrainInputsAvailable()) return;

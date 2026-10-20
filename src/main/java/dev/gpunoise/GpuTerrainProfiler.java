@@ -234,6 +234,10 @@ public final class GpuTerrainProfiler {
                 averageRows(aquiferNearestRows, aquiferNearestDispatches),
                 aquiferSubstanceDispatches.sum(), aquiferSubstanceRows.sum(),
                 averageRows(aquiferSubstanceRows, aquiferSubstanceDispatches));
+        GpuNoise.LOGGER.info("GPU terrain aquifer staging slabs: allocated={}, reused={}, pooledBytes={}",
+                GpuAquiferInputBufferPool.allocatedBufferCount(),
+                GpuAquiferInputBufferPool.reusedBufferCount(),
+                GpuAquiferInputBufferPool.pooledByteCount());
         GpuNoise.LOGGER.info("GPU terrain aquifer phase average ns: {}",
                 formatAquiferPhases());
         GpuNoise.LOGGER.info("GPU terrain aquifer region-status cache: hits={}, misses={}",

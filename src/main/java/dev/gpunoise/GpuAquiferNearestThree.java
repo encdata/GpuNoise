@@ -115,6 +115,15 @@ public final class GpuAquiferNearestThree {
 
     /** Packs columnar chunk staging directly, without materializing per-query objects. */
     public static ByteBuffer pack(AquiferQueries queries, int offset, int count) {
+        return pack(queries, offset, count, false);
+    }
+
+    /** Packs a reusable GPU submission slab; release it after its async future completes. */
+    public static ByteBuffer packForAsync(AquiferQueries queries, int offset, int count) {
+        return pack(queries, offset, count, true);
+    }
+
+    private static ByteBuffer pack(AquiferQueries queries, int offset, int count, boolean pooled) {
         if (queries == null || count <= 0 || count > MAX_QUERIES
                 || offset < 0 || offset > queries.size() - count)
             throw new IllegalArgumentException("invalid aquifer nearest-four batch range");
@@ -141,7 +150,8 @@ public final class GpuAquiferNearestThree {
                 + (long) uniqueCenters.size() * CENTER_RECORD_BYTES;
         if (byteCount > MAX_PACKED_BYTES || byteCount > Integer.MAX_VALUE)
             throw new IllegalArgumentException("aquifer nearest-center payload exceeds GPU capacity");
-        ByteBuffer packed = ByteBuffer.allocateDirect((int) byteCount).order(ByteOrder.nativeOrder());
+        ByteBuffer packed = (pooled ? GpuAquiferInputBufferPool.acquire((int) byteCount)
+                : ByteBuffer.allocateDirect((int) byteCount)).order(ByteOrder.nativeOrder());
         packed.putInt(count).putInt(uniqueCenters.size());
         for (int i = 0; i < count; i++) {
             int row = offset + i;

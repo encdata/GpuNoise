@@ -913,6 +913,18 @@ public final class VulkanCiSmoke {
             if (!stagedRecords.equals(GpuAquiferSubstance.pack(stagedSubstances))) {
                 throw new IllegalStateException("streamed aquifer substance records changed layout or values");
             }
+            for (ByteBuffer batch : stagedSubstanceBatches) GpuAquiferInputBufferPool.release(batch);
+            long reusedBefore = GpuAquiferInputBufferPool.reusedBufferCount();
+            GpuAquiferSubstance.BatchWriter reuseWriter = new GpuAquiferSubstance.BatchWriter(1, 2);
+            reuseWriter.add(stagedSubstances[0]);
+            List<ByteBuffer> reusedBatches = reuseWriter.finish();
+            if (reusedBatches.size() != 1
+                    || !reusedBatches.get(0).equals(GpuAquiferSubstance.pack(
+                            new GpuAquiferSubstance.Input[]{stagedSubstances[0]}))
+                    || GpuAquiferInputBufferPool.reusedBufferCount() <= reusedBefore) {
+                throw new IllegalStateException("aquifer input slab pool failed to reuse a compatible buffer");
+            }
+            for (ByteBuffer batch : reusedBatches) GpuAquiferInputBufferPool.release(batch);
             var substanceFuture = ring.submitAquiferSubstance(
                     GpuAquiferSubstance.pack(substanceCases), substanceCases.length);
             GpuAquiferFluidStatus.Input[] fluidStatusCases = aquiferFluidStatusCases();

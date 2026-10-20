@@ -381,7 +381,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                             && queries.size() - submittedNearestQueries
                                     >= gpunoise$nearestQueriesPerDispatch) {
                         int count = queries.size() - submittedNearestQueries;
-                        java.nio.ByteBuffer records = GpuAquiferNearestThree.pack(
+                        java.nio.ByteBuffer records = GpuAquiferNearestThree.packForAsync(
                                 queries, submittedNearestQueries, count);
                         nearestBatches.add(gpunoise$submitNearestBatch(records, count));
                         submittedNearestQueries += count;
@@ -411,7 +411,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             for (int offset = submittedNearestQueries; offset < queries.size();
                     offset += gpunoise$nearestQueriesPerDispatch) {
                 int count = Math.min(gpunoise$nearestQueriesPerDispatch, queries.size() - offset);
-                java.nio.ByteBuffer records = GpuAquiferNearestThree.pack(queries, offset, count);
+                java.nio.ByteBuffer records = GpuAquiferNearestThree.packForAsync(queries, offset, count);
                 nearestBatches.add(gpunoise$submitNearestBatch(records, count));
             }
         }
@@ -623,6 +623,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 .toCompletableFuture();
         future.whenComplete((rows, failure) -> {
             if (failure == null) GpuTerrainProfiler.recordAquiferNearestBatch(count);
+            GpuAquiferInputBufferPool.release(records);
         });
         return future;
     }

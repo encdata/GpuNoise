@@ -4,35 +4,59 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayDeque;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Bounded reuse for large direct aquifer input slabs held through async dispatch. */
 public final class GpuAquiferInputBufferPool {
+    private static final int CAPACITY_ALIGNMENT = 4096;
     private static final int MAX_PER_CAPACITY = 4;
-    private static final int MAX_CAPACITIES = 16;
+    private static final int MAX_CAPACITIES = 128;
     private static final long MAX_POOLED_BYTES = 32L * 1024L * 1024L;
     private static final AtomicLong pooledBytes = new AtomicLong();
+    private static final LongAdder allocatedBuffers = new LongAdder();
+    private static final LongAdder reusedBuffers = new LongAdder();
     private static final ConcurrentHashMap<Integer, Bucket> buckets = new ConcurrentHashMap<>();
 
     private GpuAquiferInputBufferPool() {}
 
     public static ByteBuffer acquire(int capacity) {
         if (capacity <= 0) throw new IllegalArgumentException("aquifer input buffer capacity must be positive");
-        Bucket bucket = buckets.get(capacity);
+        long alignedCapacity = ((long) capacity + CAPACITY_ALIGNMENT - 1L)
+                & -((long) CAPACITY_ALIGNMENT);
+        if (alignedCapacity > Integer.MAX_VALUE)
+            throw new IllegalArgumentException("aquifer input buffer capacity exceeds direct-buffer limit");
+        int pooledCapacity = (int) alignedCapacity;
+        Bucket bucket = buckets.get(pooledCapacity);
         ByteBuffer buffer = bucket == null ? null : bucket.acquire();
-        if (buffer == null) buffer = ByteBuffer.allocateDirect(capacity);
+        if (buffer == null) {
+            buffer = ByteBuffer.allocateDirect(pooledCapacity);
+            allocatedBuffers.increment();
+        } else {
+            reusedBuffers.increment();
+        }
         buffer.clear();
         buffer.order(ByteOrder.nativeOrder());
         return buffer;
     }
 
-    public static synchronized void release(ByteBuffer input) {
+    static long allocatedBufferCount() { return allocatedBuffers.sum(); }
+    static long reusedBufferCount() { return reusedBuffers.sum(); }
+    static long pooledByteCount() { return pooledBytes.get(); }
+
+    public static void release(ByteBuffer input) {
         if (input == null || !input.isDirect() || input.capacity() <= 0) return;
         int capacity = input.capacity();
         Bucket bucket = buckets.get(capacity);
         if (bucket == null) {
-            if (buckets.size() >= MAX_CAPACITIES) return;
-            bucket = buckets.computeIfAbsent(capacity, ignored -> new Bucket(capacity));
+            synchronized (buckets) {
+                bucket = buckets.get(capacity);
+                if (bucket == null) {
+                    if (buckets.size() >= MAX_CAPACITIES) return;
+                    bucket = new Bucket(capacity);
+                    buckets.put(capacity, bucket);
+                }
+            }
         }
         ByteBuffer reusable = input.duplicate().order(ByteOrder.nativeOrder());
         reusable.clear();
