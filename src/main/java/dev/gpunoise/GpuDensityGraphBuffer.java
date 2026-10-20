@@ -67,11 +67,18 @@ final class GpuDensityGraphBuffer {
     }
 
     static Packed pack(GpuDensityGraph graph) {
+        int allRoots = graph.routerRootCount() >= Integer.SIZE
+                ? -1 : (1 << graph.routerRootCount()) - 1;
+        return pack(graph, allRoots);
+    }
+
+    /** Packs a block program pruned to the roots that this dispatch will write. */
+    static Packed pack(GpuDensityGraph graph, int blockRootMask) {
         if (graph.registerCount() > MAX_SHADER_REGISTERS) {
             throw new IllegalArgumentException("GPU graph needs " + graph.registerCount()
                     + " live registers; shader capacity is " + MAX_SHADER_REGISTERS);
         }
-        BlockProgram block = blockProgram(graph);
+        BlockProgram block = blockProgram(graph, blockRootMask);
         boolean[] blockSkip = block.skip();
         int blockNodeCount = block.nodeCount();
         int blockNodeOffset = graph.nodes().size();
@@ -228,6 +235,12 @@ final class GpuDensityGraphBuffer {
     }
 
     private static BlockProgram blockProgram(GpuDensityGraph graph) {
+        int allRoots = graph.routerRootCount() >= Integer.SIZE
+                ? -1 : (1 << graph.routerRootCount()) - 1;
+        return blockProgram(graph, allRoots);
+    }
+
+    private static BlockProgram blockProgram(GpuDensityGraph graph, int rootMask) {
         List<GpuDensityGraph.Node> nodes = graph.nodes();
         int[] lastProducer = new int[graph.registerCount()];
         java.util.Arrays.fill(lastProducer, -1);
@@ -256,9 +269,9 @@ final class GpuDensityGraphBuffer {
         java.util.ArrayDeque<Integer> work = new java.util.ArrayDeque<>();
         int[] roots = graph.routerRoots();
         for (int root = 0; root < roots.length; root++) {
-            // The shader writes the stable root table, including placeholder
-            // values for unsupported roots. Keep every referenced register
-            // defined even though the CPU will ignore unsupported outputs.
+            if ((rootMask & (1 << root)) == 0) continue;
+            // Only selected block roots reach the per-block shader. The
+            // corner pass still evaluates the complete stable router table.
             int register = roots[root];
             if (register < 0 || register >= lastProducer.length || lastProducer[register] < 0) {
                 throw new IllegalArgumentException("GPU router root " + root
@@ -296,7 +309,9 @@ final class GpuDensityGraphBuffer {
             int position = compactNodeAt[index];
             for (int producer : childProducers[index]) lastUse[producer] = position;
         }
-        for (int root : roots) lastUse[lastProducer[root]] = blockNodeCount;
+        for (int root = 0; root < roots.length; root++) {
+            if ((rootMask & (1 << root)) != 0) lastUse[lastProducer[roots[root]]] = blockNodeCount;
+        }
 
         List<List<Integer>> releases = new java.util.ArrayList<>(blockNodeCount);
         for (int position = 0; position < blockNodeCount; position++) releases.add(new java.util.ArrayList<>());
@@ -314,7 +329,10 @@ final class GpuDensityGraphBuffer {
             registers[nodeIndex] = freeRegisters.isEmpty() ? nextRegister++ : freeRegisters.removeFirst();
         }
         int[] rootRegisters = new int[roots.length];
-        for (int root = 0; root < roots.length; root++) rootRegisters[root] = registers[lastProducer[roots[root]]];
+        java.util.Arrays.fill(rootRegisters, -1);
+        for (int root = 0; root < roots.length; root++) {
+            if ((rootMask & (1 << root)) != 0) rootRegisters[root] = registers[lastProducer[roots[root]]];
+        }
 
         int[][] splineValueProducers = new int[graph.splines().size()][];
         for (int splineIndex = 0; splineIndex < splineValueProducers.length; splineIndex++) {
