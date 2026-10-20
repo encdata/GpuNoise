@@ -29,6 +29,7 @@ public final class GpuNoise {
     private boolean worldPreparationAttempted;
 
     public GpuNoise(IEventBus modEventBus, ModContainer modContainer) {
+        LOGGER.info("GPU Noise mod constructor initialized.");
         // Defer Vulkan probing until ServerAboutToStart. That event still
         // precedes spawn generation, while an integrated client can render
         // its loading screen and show the terrain setup status.

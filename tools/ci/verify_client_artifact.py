@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MOD_LIST_ENTRY = re.compile(r"^\s*GPU Noise [^\r\n]*\(gpunoise\)\s*$", re.IGNORECASE)
-MOD_CONSTRUCTOR_ENTRY = "GPU Noise inactive: C2ME DFC is not installed"
+MOD_CONSTRUCTOR_ENTRY = "GPU Noise mod constructor initialized."
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 MODULE_RESOLUTION_ERROR = re.compile(
     r"ModuleLayerHandler|ResolutionException|Error while resolving modules|"
