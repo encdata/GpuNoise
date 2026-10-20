@@ -877,7 +877,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         GpuAquiferFluidStatus.BatchWriter statusWriter = null;
         try {
             statusWriter = centers.isEmpty()
-                    ? null : new GpuAquiferFluidStatus.BatchWriter(centers.size());
+                    ? null : new GpuAquiferFluidStatus.BatchWriter(centers.size(), !c2meStatusOnGpu);
             float[] surfaces = new float[GpuAquiferFluidStatus.SURFACE_SAMPLES];
             int[] globalLevels = new int[GpuAquiferFluidStatus.GLOBAL_LEVEL_SAMPLES];
             int[] globalKinds = new int[GpuAquiferFluidStatus.GLOBAL_LEVEL_SAMPLES];

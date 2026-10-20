@@ -43,7 +43,7 @@ public final class GpuAquiferFluidStatus {
     static ByteBuffer packPrecomputed(Input[] inputs) {
         if (inputs == null || inputs.length == 0 || inputs.length > MAX_PREFILL_CENTERS)
             throw new IllegalArgumentException("invalid precomputed aquifer status batch");
-        BatchWriter writer = new BatchWriter(inputs.length);
+        BatchWriter writer = new BatchWriter(inputs.length, true);
         try {
             for (Input input : inputs) {
                 if (input == null || !input.precomputed())
@@ -65,16 +65,24 @@ public final class GpuAquiferFluidStatus {
     public static final class BatchWriter {
         private final int expectedRows;
         private final ByteBuffer packed;
+        private final boolean compactPrecomputed;
         private int rows;
         private boolean finished;
         private boolean allPrecomputed = true;
 
         public BatchWriter(int expectedRows) {
+            this(expectedRows, false);
+        }
+
+        /** Constructs a writer when the caller knows every row is precomputed. */
+        public BatchWriter(int expectedRows, boolean compactPrecomputed) {
             if (expectedRows <= 0 || expectedRows > MAX_QUERIES)
                 throw new IllegalArgumentException("invalid aquifer fluid-status row count");
             this.expectedRows = expectedRows;
+            this.compactPrecomputed = compactPrecomputed;
             this.packed = GpuAquiferInputBufferPool.acquire(
-                    Math.multiplyExact(expectedRows, RECORD_BYTES));
+                    Math.multiplyExact(expectedRows, compactPrecomputed
+                            ? COMPACT_PRECOMPUTED_RECORD_BYTES : RECORD_BYTES));
         }
 
         public void add(int y, int defaultLevel, int defaultKind,
@@ -105,6 +113,13 @@ public final class GpuAquiferFluidStatus {
                     || globalKinds == null || globalKinds.length != GLOBAL_LEVEL_SAMPLES
                     || globalStateIds == null || globalStateIds.length != GLOBAL_LEVEL_SAMPLES)
                 throw new IllegalArgumentException("invalid aquifer fluid-status sample arrays");
+            if (compactPrecomputed) {
+                if (!precomputed)
+                    throw new IllegalArgumentException("compact aquifer status rows must be precomputed");
+                packed.putInt(y).putInt(precomputedLevel).putInt(precomputedStateId).putInt(precomputedKind);
+                rows++;
+                return;
+            }
             packed.putInt(y).putInt(defaultLevel).putInt(defaultKind).putInt(defaultStateId).putInt(lavaStateId)
                     .putFloat(floodedness).putFloat(spread).putFloat(lava)
                     .putFloat(erosion).putFloat(depth);
@@ -128,6 +143,7 @@ public final class GpuAquiferFluidStatus {
             }
             finished = true;
             packed.flip();
+            if (compactPrecomputed) return packed;
             if (!allPrecomputed) return packed;
 
             ByteBuffer compact;
