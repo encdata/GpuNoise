@@ -232,11 +232,14 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 CompletableFuture<Void> build = CompletableFuture.runAsync(
                         () -> gpunoise$prepareGpuDecisions(cache, noiseChunk), gpunoise$aquiferDecisionExecutor);
                 build.whenComplete((ignored, failure) -> {
-                    if (failure != null || gpunoise$decisions == null)
+                    if (failure != null || gpunoise$decisions == null) {
                         gpunoise$decisionBuildFallback = true;
+                        GpuTerrainProfiler.recordAquiferAsyncDecisionFallback();
+                    }
                 });
                 gpunoise$decisionBuild = build;
             } catch (RuntimeException rejected) {
+                GpuTerrainProfiler.recordAquiferAsyncDecisionFallback();
                 if (gpunoise$aquiferBatchWarning.compareAndSet(false, true)) {
                     dev.gpunoise.GpuNoise.LOGGER.warn(
                             "GPU aquifer decision executor rejected a chunk; using vanilla aquifer decisions.", rejected);

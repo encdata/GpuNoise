@@ -30,6 +30,7 @@ public final class GpuTerrainProfiler {
     private static final LongAdder aquiferDecisionWaitCalls = new LongAdder();
     private static final LongAdder aquiferDecisionWaitNanos = new LongAdder();
     private static final LongAdder aquiferDecisionWaitSamples = new LongAdder();
+    private static final LongAdder aquiferAsyncDecisionFallbacks = new LongAdder();
     private static final LongAdder aquiferStatusPrefillCalls = new LongAdder();
     private static final LongAdder aquiferStatusPrefillNanos = new LongAdder();
     private static final LongAdder aquiferStatusPrefillSamples = new LongAdder();
@@ -179,6 +180,10 @@ public final class GpuTerrainProfiler {
         }
     }
 
+    public static void recordAquiferAsyncDecisionFallback() {
+        if (ENABLED) aquiferAsyncDecisionFallbacks.increment();
+    }
+
     /** Starts an unsampled timer for a once-per-chunk aquifer preparation phase. */
     public static long beginAquiferPhase() {
         return ENABLED ? System.nanoTime() : 0L;
@@ -262,9 +267,10 @@ public final class GpuTerrainProfiler {
         GpuNoise.LOGGER.info("GPU terrain aquifer decision preparation: calls={}, sampled={} avgNs={}",
                 aquiferDecisionBuildCalls.sum(), aquiferDecisionBuildSamples.sum(),
                 averageNanos(aquiferDecisionBuildNanos, aquiferDecisionBuildSamples));
-        GpuNoise.LOGGER.info("GPU terrain aquifer decision wait: calls={}, sampled={} avgNs={}",
+        GpuNoise.LOGGER.info("GPU terrain aquifer decision wait: calls={}, sampled={} avgNs={}, fallbacks={}",
                 aquiferDecisionWaitCalls.sum(), aquiferDecisionWaitSamples.sum(),
-                averageNanos(aquiferDecisionWaitNanos, aquiferDecisionWaitSamples));
+                averageNanos(aquiferDecisionWaitNanos, aquiferDecisionWaitSamples),
+                aquiferAsyncDecisionFallbacks.sum());
         GpuNoise.LOGGER.info("GPU terrain cache preparation: calls={}, sampled={} avgNs={}, maxConcurrent={}",
                 terrainCachePreparationCalls.sum(), terrainCachePreparationSamples.sum(),
                 averageNanos(terrainCachePreparationNanos, terrainCachePreparationSamples),
