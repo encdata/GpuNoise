@@ -853,6 +853,23 @@ final class GpuDensityBytecodeCompiler {
             String owner = call.owner;
             String name = call.name;
 
+            // Objects.equals is safe to fold only for immutable String and
+            // enum values; arbitrary captured objects may define mutable or
+            // coordinate-dependent equality behavior.
+            if (owner.equals("java/util/Objects") && name.equals("equals")
+                    && call.getOpcode() == Opcodes.INVOKESTATIC
+                    && call.desc.equals("(Ljava/lang/Object;Ljava/lang/Object;)Z")
+                    && arguments.length == 2
+                    && arguments[0].kind() == Kind.OBJECT && arguments[1].kind() == Kind.OBJECT) {
+                Object left = arguments[0].referenceValue();
+                Object right = arguments[1].referenceValue();
+                if ((left instanceof String && right instanceof String)
+                        || (left instanceof Enum<?> && right instanceof Enum<?>)) {
+                    pushIntegerConstant(left.equals(right) ? 1 : 0);
+                    return;
+                }
+            }
+
             // Registry-backed custom densities commonly store an immutable
             // Holder.Reference and call value() from compute(). Resolve only
             // an already-bound holder: an unbound registry reference would

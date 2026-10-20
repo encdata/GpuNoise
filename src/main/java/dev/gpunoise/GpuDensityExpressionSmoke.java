@@ -185,6 +185,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new StringComparisonConfigurationDensity());
     }
 
+    static VulkanBranchFixture objectsEqualsConfigurationFixture() {
+        return graphFixture(new ObjectsEqualsConfigurationDensity());
+    }
+
     static VulkanBranchFixture enumEqualityConfigurationFixture() {
         return graphFixture(new EnumEqualityConfigurationDensity());
     }
@@ -1045,6 +1049,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new EnumSwitchConfigurationDensity(), "enum-switch terrain configuration");
         verifyStandaloneMath(new StringSwitchConfigurationDensity(), "string-switch terrain configuration");
         verifyStandaloneMath(new StringComparisonConfigurationDensity(), "case-insensitive string terrain configuration");
+        verifyStandaloneMath(new ObjectsEqualsConfigurationDensity(), "immutable Objects.equals terrain configuration");
         verifyStandaloneMath(new EnumEqualityConfigurationDensity(), "enum-equality terrain configuration");
         verifyStandaloneMath(new HolderBackedEnumConfigurationDensity(), "holder-backed enum terrain configuration");
         verifyStandaloneMath(new HolderTypeGuardConfigurationDensity(), "holder-backed typed terrain configuration");
@@ -1916,6 +1921,17 @@ final class GpuDensityExpressionSmoke {
                 return Math.abs(context.blockX() - context.blockZ()) * 0.5;
             }
             return context.blockY() * 0.125;
+        }
+    }
+
+    private static final class ObjectsEqualsConfigurationDensity extends NumericSmokeDensity {
+        private final String mode = "BASIN";
+
+        @Override public double compute(FunctionContext context) {
+            if (java.util.Objects.equals(mode, "BASIN")) {
+                return context.blockZ() * 0.25 - context.blockY() * 0.03125;
+            }
+            return context.blockX() * 0.125;
         }
     }
 
