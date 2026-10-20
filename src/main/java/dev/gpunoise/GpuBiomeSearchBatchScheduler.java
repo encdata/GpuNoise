@@ -15,6 +15,8 @@ final class GpuBiomeSearchBatchScheduler implements AutoCloseable {
     private static final int MAX_BATCH_CHUNKS = 16;
     private static final int BATCH_CHUNKS_AXIS = 4;
     private static final long BATCH_WINDOW_NANOS = TimeUnit.MILLISECONDS.toNanos(1);
+    private static final long REQUEST_TIMEOUT_SECONDS = Math.max(1L,
+            Math.min(600L, Long.getLong("gpunoise.biomeRequestTimeoutSeconds", 120L)));
 
     private final VulkanSubmissionRing ring;
     private final ArrayBlockingQueue<Pending> queue = new ArrayBlockingQueue<>(MAX_PENDING);
@@ -31,7 +33,8 @@ final class GpuBiomeSearchBatchScheduler implements AutoCloseable {
 
     CompletableFuture<int[]> submit(ByteBuffer targets, GpuBiomeSearchTree tree, int count,
                                    int chunkX, int chunkZ) {
-        CompletableFuture<int[]> future = new CompletableFuture<>();
+        CompletableFuture<int[]> future = new CompletableFuture<>()
+                .orTimeout(REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         if (tree == null || count <= 0 || count > PersistentVulkanNormalNoiseEngine.CAPACITY
                 || targets.remaining() != (long) count * 16L) {
             future.completeExceptionally(new IllegalArgumentException("invalid GPU biome request"));
@@ -54,6 +57,7 @@ final class GpuBiomeSearchBatchScheduler implements AutoCloseable {
                 if (closed) break;
                 continue;
             }
+            if (first.future.isDone()) continue;
             ArrayList<Pending> batch = new ArrayList<>(MAX_BATCH_CHUNKS);
             batch.add(first);
             int maxRows = Math.max(1, PersistentVulkanNormalNoiseEngine.CAPACITY / first.count);
@@ -71,6 +75,7 @@ final class GpuBiomeSearchBatchScheduler implements AutoCloseable {
                     continue;
                 }
                 if (next == null) break;
+                if (next.future.isDone()) continue;
                 if (next.tree == first.tree && next.count == first.count
                         && next.tileX == first.tileX && next.tileZ == first.tileZ
                         && next.targets.remaining() == (long) next.count * 16L) {
@@ -97,12 +102,14 @@ final class GpuBiomeSearchBatchScheduler implements AutoCloseable {
             for (Pending request : batch) targets.put(request.targets.duplicate());
             targets.flip();
             int[] output = ring.submitBiomeSearch(targets, batch.get(0).tree, rows)
-                    .get(120, TimeUnit.SECONDS);
+                    .get(REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             if (output.length != rows) throw new IllegalStateException("GPU biome output size mismatch");
             int offset = 0;
             for (Pending request : batch) {
                 int end = offset + request.count;
-                request.future.complete(java.util.Arrays.copyOfRange(output, offset, end));
+                if (!request.future.isDone()) {
+                    request.future.complete(java.util.Arrays.copyOfRange(output, offset, end));
+                }
                 offset = end;
             }
         } catch (Throwable failure) {
