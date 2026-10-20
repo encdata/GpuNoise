@@ -23,6 +23,10 @@ public final class GpuTerrainProfiler {
     private static final LongAdder gpuFinalDensityCalls = new LongAdder();
     private static final LongAdder gpuInitialDensityCalls = new LongAdder();
     private static final LongAdder gpuClimateCalls = new LongAdder();
+    private static final LongAdder graphRootDispatches = new LongAdder();
+    private static final LongAdder graphRootSamples = new LongAdder();
+    private static final LongAdder graphRootReturnedValues = new LongAdder();
+    private static final LongAdder graphRootFullEquivalentValues = new LongAdder();
     private static final LongAdder aquiferCalls = new LongAdder();
     private static final LongAdder aquiferDecisionBuildCalls = new LongAdder();
     private static final LongAdder aquiferDecisionBuildNanos = new LongAdder();
@@ -147,6 +151,15 @@ public final class GpuTerrainProfiler {
     public static void recordGpuInitialDensity(long start) {
         recordGpuRoot(GpuTerrainRoots.INITIAL_DENSITY);
         recordTimed(gpuInitialDensityCalls, initialDensityNanos, initialDensitySamples, start);
+    }
+
+    /** Tracks point-root transfer volume without reporting terrain throughput. */
+    static void recordGraphRootReadback(int samples, int returnedRoots, int availableRoots) {
+        if (!ENABLED || samples <= 0 || returnedRoots <= 0 || availableRoots < returnedRoots) return;
+        graphRootDispatches.increment();
+        graphRootSamples.add(samples);
+        graphRootReturnedValues.add((long) samples * returnedRoots);
+        graphRootFullEquivalentValues.add((long) samples * availableRoots);
     }
 
     public static void recordGpuClimate() {
@@ -290,6 +303,13 @@ public final class GpuTerrainProfiler {
                 gpuClimateCalls.sum(), climateSamples.sum(), averageNanos(climateNanos, climateSamples),
                 aquiferCalls.sum(), aquiferSamples.sum(), averageNanos(aquiferNanos, aquiferSamples),
                 blockWrites.sum(), blockWriteSamples.sum(), averageNanos(blockWriteNanos, blockWriteSamples));
+        long returnedRootValues = graphRootReturnedValues.sum();
+        long fullRootValues = graphRootFullEquivalentValues.sum();
+        double rootReadbackReduction = fullRootValues == 0L ? 0.0
+                : round(100.0 * (fullRootValues - returnedRootValues) / fullRootValues);
+        GpuNoise.LOGGER.info("GPU graph-root readback: dispatches={}, samples={}, values={}, fullRootEquivalentValues={}, reductionPercent={}",
+                graphRootDispatches.sum(), graphRootSamples.sum(), returnedRootValues,
+                fullRootValues, rootReadbackReduction);
         GpuNoise.LOGGER.info("GPU terrain aquifer decision preparation: calls={}, sampled={} avgNs={}",
                 aquiferDecisionBuildCalls.sum(), aquiferDecisionBuildSamples.sum(),
                 averageNanos(aquiferDecisionBuildNanos, aquiferDecisionBuildSamples));

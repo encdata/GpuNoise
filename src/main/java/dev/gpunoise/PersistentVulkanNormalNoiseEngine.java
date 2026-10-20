@@ -479,6 +479,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default()
                         .pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit async graph roots");
             }
+            GpuTerrainProfiler.recordGraphRootReadback(sampleCount, rootCount, graphRootCount);
             inFlightFenceSubmittedNanos = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
             inFlightGraphPreparationNanos = GPU_TIMING_ENABLED
                     ? inFlightFenceSubmittedNanos - preparationStarted : 0L;
