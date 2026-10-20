@@ -835,6 +835,7 @@ final class GpuDensityExpressionSmoke {
         java.util.Arrays.fill(roots, 5);
         roots[1] = 7;
         roots[2] = 2;
+        roots[3] = 8;
         return GpuDensityGraphLowerer.lower(new GpuDensityGraph(
                 java.util.List.of(
                         new GpuDensityGraph.Node("GpuCoordinate", new int[0], new double[0], "X"),
@@ -844,7 +845,8 @@ final class GpuDensityExpressionSmoke {
                         new GpuDensityGraph.Node("Constant", new int[0], new double[]{3.0}, null),
                         new GpuDensityGraph.Node("GpuMath", new int[]{1, 1}, new double[0], "EXPR_MULTIPLY"),
                         new GpuDensityGraph.Node("Constant", new int[0], new double[]{0.0}, null),
-                        new GpuDensityGraph.Node("GpuMath", new int[]{3, 6}, new double[0], "ADD")),
+                        new GpuDensityGraph.Node("GpuMath", new int[]{3, 6}, new double[0], "ADD"),
+                        new GpuDensityGraph.Node("GpuMath", new int[]{1, 4}, new double[0], "ADD")),
                 roots, java.util.List.of(), java.util.List.of(), java.util.List.of(),
                 java.util.List.of(interpolationSource, interpolationMarker, sharedSource, sharedMarker,
                         otherInput, combined, zero, sharedCombined)));

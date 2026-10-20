@@ -36,10 +36,10 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     private static final long BATCH_WINDOW_NANOS = TimeUnit.MILLISECONDS.toNanos(
             Math.max(1L, Math.min(250L, Long.getLong("gpunoise.terrainBatchWindowMs", 50L))));
     private final BlockingQueue<Pending> queue = new ArrayBlockingQueue<>(PENDING_QUEUE_CAPACITY);
-    // Grid metadata is small and the Vulkan submission is asynchronous. Keep a
-    // bounded pool alive until each submission has consumed its metadata rather
-    // than allocating native buffers for every dispatch or reusing one too soon.
-    private final BlockingQueue<DispatchMetadata> metadataPool = new ArrayBlockingQueue<>(8);
+    // Grid metadata is small and Vulkan submissions are asynchronous. Keep one
+    // bounded pool entry per active slot, with a floor for systems that use
+    // several terrain stages on one slot, until each submission consumes it.
+    private final BlockingQueue<DispatchMetadata> metadataPool;
     private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "GPU terrain roots batcher");
         t.setDaemon(true);
@@ -67,13 +67,17 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     private final AtomicLong lastBatchLogBucket = new AtomicLong();
 
     GpuTerrainRootsBatchScheduler() {
-        for (int i = 0; i < 8; i++) metadataPool.add(new DispatchMetadata());
+        int metadataSlots = Math.max(8, GpuTerrainRuntime.activeSubmissionSlotCount());
+        metadataPool = new ArrayBlockingQueue<>(metadataSlots);
+        for (int i = 0; i < metadataSlots; i++) metadataPool.add(new DispatchMetadata());
         GpuNoise.LOGGER.info("GPU terrain batch window={}ms, target={}, chunk limit={}, searchRadiusRegions={}, queueCapacity={}, cacheBuildConcurrency={}, blockOutputRoots={}, outputBufferMiB={}",
                 TimeUnit.NANOSECONDS.toMillis(BATCH_WINDOW_NANOS), TARGET_CHUNKS, MAX_CHUNKS,
                 SEARCH_RADIUS_REGIONS, PENDING_QUEUE_CAPACITY,
                 GpuTerrainAreaRegistry.maxConcurrentCacheBuilds(),
                 GpuTerrainRuntime.terrainBlockOutputRootCount(),
                 (long) PersistentVulkanNormalNoiseEngine.INTERPOLATION_OUTPUT_FLOATS * Float.BYTES / (1024L * 1024L));
+        GpuNoise.LOGGER.info("GPU terrain dispatch metadata pool: {} buffers for {} Vulkan slot(s)",
+                metadataSlots, GpuTerrainRuntime.activeSubmissionSlotCount());
         worker.execute(this::run);
     }
 

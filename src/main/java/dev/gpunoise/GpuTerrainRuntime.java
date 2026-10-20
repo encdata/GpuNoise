@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.StringJoiner;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
 
 import net.minecraft.world.level.levelgen.DensityFunction;
@@ -90,6 +91,10 @@ public final class GpuTerrainRuntime {
         }
     }
     static GpuDevice selectedDevice() { return device; }
+    static int activeSubmissionSlotCount() {
+        VulkanSubmissionRing ring = submissionRing;
+        return ring == null ? 1 : ring.slotCount();
+    }
     static int activeDeviceCount() {
         VulkanSubmissionRing ring = submissionRing;
         return ring == null ? 0 : ring.devices().size();
@@ -694,26 +699,26 @@ public final class GpuTerrainRuntime {
                     GpuInterpolationBatch.METADATA_BYTES).order(java.nio.ByteOrder.nativeOrder());
             outputMetadata.putInt(0).putInt(0).putInt(grid.gridX() - 1).putInt(grid.gridY() - 1)
                     .putInt(grid.gridZ() - 1).putInt(grid.cellWidth()).putInt(grid.cellHeight()).putInt(0).flip();
-            List<GpuTerrainBatchResult> deviceTerrainResults = new ArrayList<>();
+            List<CompletableFuture<GpuTerrainBatchResult>> terrainChecks = new ArrayList<>();
             for (GpuDevice candidate : ring.devices()) {
-                GpuTerrainBatchResult result;
                 if (includeBlockOutputs) {
-                    result = ring.submitTerrainGridForDevice(candidate, graph, metadata, grid.sampleCount(),
-                                    outputMetadata, blocksPerChunk, blockRoots)
-                            .orTimeout(STARTUP_PARITY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
-                            .join();
+                    terrainChecks.add(ring.submitTerrainGridForDevice(candidate, graph, metadata,
+                                    grid.sampleCount(), outputMetadata, blocksPerChunk, blockRoots)
+                            .orTimeout(STARTUP_PARITY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS));
                 } else {
-                    float[] roots = ring.submitGraphRootsGridForDevice(candidate, graph, metadata,
+                    int markers = graph.interpolatedMarkerCount();
+                    terrainChecks.add(ring.submitGraphRootsGridForDevice(candidate, graph, metadata,
                                     1, grid.sampleCount())
                             .orTimeout(STARTUP_PARITY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
-                            .join();
-                    int markers = graph.interpolatedMarkerCount();
-                    result = new GpuTerrainBatchResult(new GpuTerrainRootsResult(roots, 0, roots.length,
-                            graph.routerRootCount(), graph.routerRootCount() + markers, markers),
-                            new GpuTerrainBlockResult(new float[0], 0, 0, 1, 16, 0, 16));
+                            .thenApply(roots -> new GpuTerrainBatchResult(
+                                    new GpuTerrainRootsResult(roots, 0, roots.length, graph.routerRootCount(),
+                                            graph.routerRootCount() + markers, markers),
+                                    new GpuTerrainBlockResult(new float[0], 0, 0, 1, 16, 0, 16))));
                 }
-                deviceTerrainResults.add(result);
             }
+            CompletableFuture.allOf(terrainChecks.toArray(CompletableFuture[]::new)).join();
+            List<GpuTerrainBatchResult> deviceTerrainResults = terrainChecks.stream()
+                    .map(CompletableFuture::join).toList();
             DensityFunction[] cpu = {
                     router.finalDensity(), router.initialDensityWithoutJaggedness(),
                     router.barrierNoise(), router.fluidLevelFloodednessNoise(),
@@ -959,11 +964,16 @@ public final class GpuTerrainRuntime {
     private static float[] submitGraphRootsForParity(GpuDensityGraph graph, float[] x, float[] y, float[] z) {
         VulkanSubmissionRing ring = submissionRing;
         if (ring == null) throw new IllegalStateException("Vulkan submission ring is not installed");
+        List<GpuDevice> candidates = ring.devices();
+        List<CompletableFuture<float[]>> checks = candidates.stream()
+                .map(candidate -> ring.submitGraphRootsForDevice(candidate, graph, x, y, z)
+                        .orTimeout(STARTUP_PARITY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS))
+                .toList();
+        CompletableFuture.allOf(checks.toArray(CompletableFuture[]::new)).join();
         float[] reference = null;
-        for (GpuDevice candidate : ring.devices()) {
-            float[] actual = ring.submitGraphRootsForDevice(candidate, graph, x, y, z)
-                    .orTimeout(STARTUP_PARITY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
-                    .join();
+        for (int deviceIndex = 0; deviceIndex < candidates.size(); deviceIndex++) {
+            GpuDevice candidate = candidates.get(deviceIndex);
+            float[] actual = checks.get(deviceIndex).join();
             if (reference == null) {
                 reference = actual;
                 continue;

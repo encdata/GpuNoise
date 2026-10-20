@@ -339,63 +339,78 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     PersistentVulkanNormalNoiseEngine primary() { return slots[0]; }
     GpuDevice primaryDevice() { return slotDevices[0]; }
+    int slotCount() { return slots.length; }
     List<GpuDevice> devices() { return List.copyOf(new LinkedHashSet<>(List.of(slotDevices))); }
 
     /** Direct startup-parity dispatch pinned to one physical device. */
-    synchronized CompletableFuture<float[]> submitGraphRootsForDevice(GpuDevice target,
-                                                                         GpuDensityGraph graph,
-                                                                         float[] x, float[] y, float[] z) {
-        for (int index = 0; index < slots.length; index++) {
-            PersistentVulkanNormalNoiseEngine slot = slots[index];
-            if (!slotDevices[index].equals(target) || readbackScheduled[index].get()
-                    || slot.hasInFlightWork() || synchronousSlots.contains(slot)) continue;
-            try {
-                return slot.submitGraphRootsAsync(graph, x.clone(), y.clone(), z.clone(), x.length);
-            } catch (Exception failure) {
-                return CompletableFuture.failedFuture(failure);
-            }
-        }
-        return CompletableFuture.failedFuture(new IllegalStateException(
-                "no idle Vulkan slot for startup parity on " + target.name()));
+    CompletableFuture<float[]> submitGraphRootsForDevice(GpuDevice target, GpuDensityGraph graph,
+                                                          float[] x, float[] y, float[] z) {
+        return submitParityOnDevice(target, "graph roots", slot ->
+                slot.submitGraphRootsAsync(graph, x.clone(), y.clone(), z.clone(), x.length));
     }
 
     /** Direct terrain-grid shader parity dispatch pinned to one physical device. */
-    synchronized CompletableFuture<float[]> submitGraphRootsGridForDevice(GpuDevice target,
-                                                                            GpuDensityGraph graph,
-                                                                            ByteBuffer metadata,
-                                                                            int chunkCount,
-                                                                            int samplesPerChunk) {
-        for (int index = 0; index < slots.length; index++) {
-            PersistentVulkanNormalNoiseEngine slot = slots[index];
-            if (!slotDevices[index].equals(target) || readbackScheduled[index].get()
-                    || slot.hasInFlightWork() || synchronousSlots.contains(slot)) continue;
-            try {
-                return slot.submitGraphRootsGridAsync(graph, snapshot(metadata), chunkCount, samplesPerChunk);
-            } catch (Exception failure) {
-                return CompletableFuture.failedFuture(failure);
-            }
-        }
-        return CompletableFuture.failedFuture(new IllegalStateException(
-                "no idle Vulkan slot for terrain-grid parity on " + target.name()));
+    CompletableFuture<float[]> submitGraphRootsGridForDevice(GpuDevice target, GpuDensityGraph graph,
+                                                               ByteBuffer metadata, int chunkCount,
+                                                               int samplesPerChunk) {
+        return submitParityOnDevice(target, "terrain root grid", slot ->
+                slot.submitGraphRootsGridAsync(graph, snapshot(metadata), chunkCount, samplesPerChunk));
     }
 
     /** Direct full grid, interpolation and block-root parity dispatch for one device. */
-    synchronized CompletableFuture<GpuTerrainBatchResult> submitTerrainGridForDevice(
+    CompletableFuture<GpuTerrainBatchResult> submitTerrainGridForDevice(
             GpuDevice target, GpuDensityGraph graph, ByteBuffer gridMetadata, int samplesPerChunk,
             ByteBuffer outputMetadata, int blocksPerChunk, int[] outputRootIndexes) {
-        for (int index = 0; index < slots.length; index++) {
-            PersistentVulkanNormalNoiseEngine slot = slots[index];
-            if (!slotDevices[index].equals(target) || readbackScheduled[index].get()
-                    || slot.hasInFlightWork() || synchronousSlots.contains(slot)) continue;
-            try {
-                return slot.submitGraphGridInterpolated(graph, snapshot(gridMetadata), 1, samplesPerChunk,
-                        snapshot(outputMetadata), blocksPerChunk, outputRootIndexes.clone());
-            } catch (Exception failure) {
-                return CompletableFuture.failedFuture(failure);
+        return submitParityOnDevice(target, "full terrain grid", slot ->
+                slot.submitGraphGridInterpolated(graph, snapshot(gridMetadata), 1, samplesPerChunk,
+                        snapshot(outputMetadata), blocksPerChunk, outputRootIndexes.clone()));
+    }
+
+    /** Runs pinned startup validation on a dispatch worker while reserving the slot. */
+    private <T> CompletableFuture<T> submitParityOnDevice(
+            GpuDevice target, String description, SlotOperation<CompletableFuture<T>> operation) {
+        CompletableFuture<T> result = new CompletableFuture<>();
+        PersistentVulkanNormalNoiseEngine selected = null;
+        synchronized (this) {
+            for (int index = 0; index < slots.length; index++) {
+                PersistentVulkanNormalNoiseEngine slot = slots[index];
+                if (!slotDevices[index].equals(target) || readbackScheduled[index].get()
+                        || slot.hasInFlightWork() || synchronousSlots.contains(slot)) continue;
+                selected = slot;
+                synchronousSlots.add(slot);
+                break;
             }
         }
-        return CompletableFuture.failedFuture(new IllegalStateException(
-                "no idle Vulkan slot for full terrain parity on " + target.name()));
+        if (selected == null) return CompletableFuture.failedFuture(new IllegalStateException(
+                "no idle Vulkan slot for " + description + " parity on " + target.name()));
+        PersistentVulkanNormalNoiseEngine slot = selected;
+        try {
+            dispatchWorkers.execute(() -> {
+                CompletableFuture<T> submitted;
+                try {
+                    submitted = operation.call(slot);
+                } catch (Throwable failure) {
+                    synchronized (this) { synchronousSlots.remove(slot); }
+                    result.completeExceptionally(new IllegalStateException(
+                            "Vulkan " + description + " parity dispatch failed on " + target.name(), failure));
+                    scheduleDrain();
+                    return;
+                }
+                synchronized (this) { synchronousSlots.remove(slot); }
+                scheduleDrain();
+                submitted.whenComplete((value, failure) -> {
+                    Throwable reportedFailure = failure == null ? null
+                            : new IllegalStateException("Vulkan " + description
+                                    + " parity failed on " + target.name(), failure);
+                    completeOnDispatchWorker(result, value, reportedFailure);
+                });
+            });
+        } catch (RuntimeException stopped) {
+            synchronized (this) { synchronousSlots.remove(slot); }
+            result.completeExceptionally(stopped);
+            scheduleDrain();
+        }
+        return result;
     }
 
     CompletableFuture<float[]> submitGraphRoots(GpuDensityGraph graph, float[] x, float[] y, float[] z) {
