@@ -1889,14 +1889,14 @@ final class GpuDensityExpressionSmoke {
     }
 
     private static final class StringSwitchConfigurationDensity extends NumericSmokeDensity {
-        // "FB" and "Ea" collide under String.hashCode(); the generated switch
-        // must still execute its equals chain and select the matching branch.
-        private final String mode = "Ea";
+        // These collide under String.hashCode(), and the shared hash is outside
+        // the exact float range; the equals chain must still select correctly.
+        private final String mode = "BBBBBB";
 
         @Override public double compute(FunctionContext context) {
             return switch (mode) {
-                case "FB" -> context.blockX() * 0.125 + context.blockY() * 0.0625;
-                case "Ea" -> context.blockZ() * 0.25 - context.blockY() * 0.03125;
+                case "AaAaAa" -> context.blockX() * 0.125 + context.blockY() * 0.0625;
+                case "BBBBBB" -> context.blockZ() * 0.25 - context.blockY() * 0.03125;
                 case "ridge" -> Math.abs(context.blockX() - context.blockZ()) * 0.5;
                 default -> context.blockY() * 0.125;
             };
