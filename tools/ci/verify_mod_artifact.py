@@ -149,11 +149,13 @@ def verify(path: Path) -> None:
                 raise ValueError("Embedded dedicated-server LWJGL core lost its JPMS module descriptor")
             if "FMLModType: LIBRARY" not in manifest:
                 raise ValueError("Embedded dedicated-server LWJGL jar is not marked as an FML library")
+            if "Multi-Release: true" not in manifest:
+                raise ValueError("Embedded dedicated-server LWJGL jar does not enable its versioned JPMS descriptor")
             with tempfile.TemporaryDirectory(prefix="gpunoise-module-check-") as temporary_directory:
                 core_path = Path(temporary_directory) / "lwjgl-core.jar"
                 core_path.write_bytes(artifact.read(SERVER_CORE_LIBRARY))
                 module = subprocess.run(
-                    ["jar", "--describe-module", "--file", str(core_path), "--release", "9"],
+                    ["jar", "--describe-module", "--file", str(core_path)],
                     check=True,
                     capture_output=True,
                     text=True,

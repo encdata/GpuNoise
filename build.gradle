@@ -239,7 +239,11 @@ def serverLwjglCoreJarTask = tasks.register('serverLwjglCoreJar', Jar) {
         exclude 'META-INF/MANIFEST.MF', 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA'
     }
     manifest {
-        attributes('FMLModType': 'LIBRARY')
+        // LWJGL declares its JPMS module in META-INF/versions/9. Preserve
+        // multi-release semantics when rebuilding the jar, or the server
+        // loader sees an automatic filename-derived module instead of
+        // org.lwjgl and fails to resolve lwjgl-vulkan/shaderc.
+        attributes('FMLModType': 'LIBRARY', 'Multi-Release': 'true')
     }
 }
 tasks.named('jar', Jar).configure {
