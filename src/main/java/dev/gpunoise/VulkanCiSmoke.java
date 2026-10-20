@@ -78,10 +78,15 @@ public final class VulkanCiSmoke {
             System.out.println("Vulkan CI smoke: coordinate graph shader completed");
             assertConstantResults("coordinate graph shader", graphResults, x.length);
 
-            int[] repeatedRoots = new int[GpuTerrainRoots.COUNT];
-            GpuDensityGraph multiRootGraph = new GpuDensityGraph(
-                    List.of(new GpuDensityGraph.Node("Constant", new int[0], new double[]{EXPECTED}, null, 0)),
-                    repeatedRoots, List.of(), List.of(), List.of(), List.of(), 1);
+            List<GpuDensityGraph.Node> distinctRootNodes = new ArrayList<>(GpuTerrainRoots.COUNT);
+            int[] distinctRootRegisters = new int[GpuTerrainRoots.COUNT];
+            for (int root = 0; root < GpuTerrainRoots.COUNT; root++) {
+                distinctRootNodes.add(new GpuDensityGraph.Node("Constant", new int[0],
+                        new double[]{root + EXPECTED}, null, root));
+                distinctRootRegisters[root] = root;
+            }
+            GpuDensityGraph multiRootGraph = new GpuDensityGraph(distinctRootNodes,
+                    distinctRootRegisters, List.of(), List.of(), List.of(), List.of(), GpuTerrainRoots.COUNT);
             int[] selectedRootIndexes = {GpuTerrainRoots.RIDGES, GpuTerrainRoots.FINAL_DENSITY,
                     GpuTerrainRoots.EROSION};
             float[] selectedRootResults = ring.submitGraphRoots(multiRootGraph, x, y, z, selectedRootIndexes)
@@ -90,9 +95,11 @@ public final class VulkanCiSmoke {
                 throw new IllegalStateException("Selected graph roots returned an invalid compact result length");
             for (int sample = 0; sample < x.length; sample++) {
                 for (int root = 0; root < selectedRootIndexes.length; root++) {
-                    if (Math.abs(selectedRootResults[sample * selectedRootIndexes.length + root] - EXPECTED) > 1.0e-6f)
+                    float expected = selectedRootIndexes[root] + EXPECTED;
+                    if (Math.abs(selectedRootResults[sample * selectedRootIndexes.length + root] - expected) > 1.0e-6f)
                         throw new IllegalStateException("Selected graph root mismatch at sample " + sample
-                                + ", selected root " + selectedRootIndexes[root]);
+                                + ", selected root " + selectedRootIndexes[root] + ": expected " + expected
+                                + ", got " + selectedRootResults[sample * selectedRootIndexes.length + root]);
                 }
             }
 
