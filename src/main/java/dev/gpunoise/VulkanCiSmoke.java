@@ -536,8 +536,9 @@ public final class VulkanCiSmoke {
                 for (int blockX = 0; blockX < 16; blockX++) {
                     for (int root = 0; root < GpuTerrainRoots.COUNT; root++) {
                         float value = markerBlocks.valueAt(blockX, 0, blockZ, root);
-                        float expected = root == 0 ? (blockX - 32.0f) * (blockX - 32.0f)
-                                : root == 1 || root == 2 ? 8.0f : blockX + 3.0f;
+                        float worldX = blockX - 32.0f;
+                        float expected = root == 0 ? worldX * worldX
+                                : root == 1 || root == 2 ? 8.0f : worldX + 3.0f;
                         if (Math.abs(value - expected) > 1.0e-5f) {
                             throw new IllegalStateException("Interpolated-marker block graph mismatch at "
                                     + blockX + ",0," + blockZ + " root " + root + ": expected "
@@ -547,6 +548,31 @@ public final class VulkanCiSmoke {
                 }
             }
             System.out.println("Vulkan CI smoke: interpolated-marker block graph completed");
+
+            // Match the production batch metadata writer: two chunks share
+            // one dispatch but have independent corner, block, and world
+            // coordinate origins. This catches local-offset reuse and stride
+            // mistakes that a single-chunk fixture cannot expose.
+            ByteBuffer multiMarkerGrid = ByteBuffer.allocateDirect(2 * 32)
+                    .order(ByteOrder.nativeOrder());
+            multiMarkerGrid.putInt(-32).putInt(-64).putInt(48)
+                    .putInt(2).putInt(2).putInt(2).putInt(16).putInt(1);
+            multiMarkerGrid.putInt(96).putInt(-32).putInt(-80)
+                    .putInt(2).putInt(2).putInt(2).putInt(16).putInt(1).flip();
+            ByteBuffer multiMarkerOutput = GpuInterpolationBatch.metadata(2, 1, 1, 1,
+                    16, 1, 8, 256, -32, -64, 48);
+            int secondOriginOffset = GpuInterpolationBatch.METADATA_BYTES + 32;
+            multiMarkerOutput.putInt(secondOriginOffset, 96)
+                    .putInt(secondOriginOffset + 4, -32)
+                    .putInt(secondOriginOffset + 8, -80);
+            System.out.println("Vulkan CI smoke: dispatching two chunks with distinct world origins");
+            GpuTerrainBatchResult multiMarkerTerrain = ring.submitGraphGridInterpolated(markerGraph,
+                    multiMarkerGrid, 2, 8, multiMarkerOutput, 256).get(60, TimeUnit.SECONDS);
+            GpuTerrainBlockResult firstChunkBlocks = multiMarkerTerrain.blocks().slice(0, 256);
+            GpuTerrainBlockResult secondChunkBlocks = multiMarkerTerrain.blocks().slice(256, 256);
+            assertMarkerChunkCoordinates(firstChunkBlocks, -32);
+            assertMarkerChunkCoordinates(secondChunkBlocks, 96);
+            System.out.println("Vulkan CI smoke: two-chunk world-origin interpolation completed");
 
             // Production batches omit graph roots that did not pass parity.
             // Verify the compact output remains indexed by the original
@@ -565,7 +591,8 @@ public final class VulkanCiSmoke {
             for (int blockX = 0; blockX < 16; blockX++) {
                 float density = compactBlocks.valueAt(blockX, 0, 0, GpuTerrainRoots.FINAL_DENSITY);
                 float barrier = compactBlocks.valueAt(blockX, 0, 0, GpuTerrainRoots.BARRIER);
-                float expectedDensity = (blockX - 32.0f) * (blockX - 32.0f);
+                float worldX = blockX - 32.0f;
+                float expectedDensity = worldX * worldX;
                 if (Math.abs(density - expectedDensity) > 1.0e-5f || Math.abs(barrier - 8.0f) > 1.0e-5f) {
                     throw new IllegalStateException("Compact terrain block output mismatch at X=" + blockX);
                 }
@@ -1182,6 +1209,27 @@ public final class VulkanCiSmoke {
             throw new IllegalStateException("Terrain startup parity samples do not cover the intended 3D range");
         }
         System.out.println("Vulkan CI smoke: terrain parity classification and 3D sample coverage passed");
+    }
+
+    private static void assertMarkerChunkCoordinates(GpuTerrainBlockResult blocks, int originX) {
+        if (!blocks.contains(15, 0, 15)) {
+            throw new IllegalStateException("Batched marker output has an invalid chunk shape");
+        }
+        for (int z = 0; z < 16; z++) {
+            for (int x = 0; x < 16; x++) {
+                float worldX = originX + x;
+                for (int root = 0; root < GpuTerrainRoots.COUNT; root++) {
+                    float expected = root == GpuTerrainRoots.FINAL_DENSITY ? worldX * worldX
+                            : root == 1 || root == 2 ? 8.0f : worldX + 3.0f;
+                    float actual = blocks.valueAt(x, 0, z, root);
+                    if (Math.abs(actual - expected) > 1.0e-5f) {
+                        throw new IllegalStateException("Batched marker world-coordinate mismatch for origin "
+                                + originX + " at " + x + ",0," + z + " root " + root
+                                + ": expected " + expected + ", got " + actual);
+                    }
+                }
+            }
+        }
     }
 
     private static void verifyTranslatorRegistry() {
