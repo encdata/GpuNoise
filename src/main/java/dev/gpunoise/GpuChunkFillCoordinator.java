@@ -92,6 +92,8 @@ public final class GpuChunkFillCoordinator implements AutoCloseable {
     }
 
     private void prepareCache(Pending item) {
+        if (item.result.isDone()) return;
+        long preparationStart = GpuTerrainProfiler.beginTerrainCachePreparation();
         try {
             int x = item.work.chunk().getPos().getMinBlockX();
             int z = item.work.chunk().getPos().getMinBlockZ();
@@ -102,10 +104,16 @@ public final class GpuChunkFillCoordinator implements AutoCloseable {
             if (item.cache == null) {
                 throw new IllegalStateException("GPU terrain cache was not available after preparation");
             }
+            if (item.result.isCancelled()) {
+                GpuTerrainRuntime.releaseGpuCache(item.cache);
+                item.cache = null;
+            }
         } catch (Throwable error) {
             GpuTerrainRuntime.releaseGpuCache(item.cache);
             item.cache = null;
             item.result.completeExceptionally(error);
+        } finally {
+            GpuTerrainProfiler.recordTerrainCachePreparation(preparationStart);
         }
     }
 
@@ -113,14 +121,22 @@ public final class GpuChunkFillCoordinator implements AutoCloseable {
         // Do not gate fills on the slowest GPU request. Each cache owns its
         // completion future, so its chunk starts as soon as its own slab is
         // ready, even while other cache preparations or dispatches continue.
-        if (item.result.isDone()) return;
         GpuChunkDensityCache cache = item.cache;
         if (cache == null) {
+            if (item.result.isDone()) return;
             item.result.completeExceptionally(new IllegalStateException(
                     "GPU terrain cache preparation failed without a reported cause"));
             return;
         }
+        if (item.result.isDone()) {
+            GpuTerrainRuntime.releaseGpuCache(cache);
+            return;
+        }
         cache.ready().whenComplete((ignored, readinessFailure) -> {
+            if (item.result.isCancelled()) {
+                GpuTerrainRuntime.releaseGpuCache(cache);
+                return;
+            }
             if (readinessFailure != null) {
                 GpuTerrainRuntime.releaseGpuCache(cache);
                 item.result.completeExceptionally(readinessFailure);

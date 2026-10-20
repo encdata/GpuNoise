@@ -1,5 +1,6 @@
 package dev.gpunoise;
 
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -52,6 +53,11 @@ public final class GpuTerrainProfiler {
     private static final LongAdder climateSamples = new LongAdder();
     private static final LongAdder aquiferSamples = new LongAdder();
     private static final LongAdder blockWriteSamples = new LongAdder();
+    private static final LongAdder terrainCachePreparationCalls = new LongAdder();
+    private static final LongAdder terrainCachePreparationNanos = new LongAdder();
+    private static final LongAdder terrainCachePreparationSamples = new LongAdder();
+    private static final AtomicInteger activeTerrainCachePreparations = new AtomicInteger();
+    private static final AtomicInteger maxConcurrentTerrainCachePreparations = new AtomicInteger();
     private static final LongAdder[] gpuRootCalls = createRootFallbackCounters();
     private static final LongAdder[] javaRootFallbackCalls = createRootFallbackCounters();
     private static final AtomicLongArray fillLatencyHistogram = new AtomicLongArray(LATENCY_BUCKETS);
@@ -95,6 +101,24 @@ public final class GpuTerrainProfiler {
         int sequence = hotPathSampleSequence.get();
         hotPathSampleSequence.set(sequence + 1);
         return (sequence & HOT_PATH_SAMPLE_MASK) == 0 ? System.nanoTime() : 0L;
+    }
+
+    /** Starts timing bounded CPU translation and input packing for one terrain cache. */
+    public static long beginTerrainCachePreparation() {
+        if (!ENABLED) return 0L;
+        int active = activeTerrainCachePreparations.incrementAndGet();
+        maxConcurrentTerrainCachePreparations.accumulateAndGet(active, Math::max);
+        return System.nanoTime();
+    }
+
+    public static void recordTerrainCachePreparation(long start) {
+        if (!ENABLED) return;
+        terrainCachePreparationCalls.increment();
+        if (start != 0L) {
+            terrainCachePreparationNanos.add(Math.max(0L, System.nanoTime() - start));
+            terrainCachePreparationSamples.increment();
+        }
+        activeTerrainCachePreparations.decrementAndGet();
     }
 
     public static void recordGpuFinalDensity(long start) {
@@ -225,6 +249,10 @@ public final class GpuTerrainProfiler {
         GpuNoise.LOGGER.info("GPU terrain aquifer decision preparation: calls={}, sampled={} avgNs={}",
                 aquiferDecisionBuildCalls.sum(), aquiferDecisionBuildSamples.sum(),
                 averageNanos(aquiferDecisionBuildNanos, aquiferDecisionBuildSamples));
+        GpuNoise.LOGGER.info("GPU terrain cache preparation: calls={}, sampled={} avgNs={}, maxConcurrent={}",
+                terrainCachePreparationCalls.sum(), terrainCachePreparationSamples.sum(),
+                averageNanos(terrainCachePreparationNanos, terrainCachePreparationSamples),
+                maxConcurrentTerrainCachePreparations.get());
         GpuNoise.LOGGER.info("GPU terrain aquifer status prefill: calls={}, centers={}, javaFallbacks={}, sampled={} avgNs={}",
                 aquiferStatusPrefillCalls.sum(), aquiferStatusPrefillCenters.sum(),
                 aquiferStatusPrefillJavaFallbacks.sum(), aquiferStatusPrefillSamples.sum(),

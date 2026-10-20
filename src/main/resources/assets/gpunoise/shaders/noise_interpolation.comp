@@ -5,8 +5,9 @@ layout(local_size_x = 64) in;
 // Z-fastest, then X, then Y; root values are interleaved within each sample.
 layout(std430,set=0,binding=0) readonly buffer Corners { float corners[]; };
 layout(std430,set=0,binding=1) writeonly buffer InterpolatedInputs { float interpolatedInputs[]; };
-// Per chunk: corner offset, block offset, cellsX, cellsY, cellsZ,
-// blocksPerCellX, blocksPerCellY, reserved. Horizontal X/Z spacing is shared.
+// Per chunk, 12 uint words matching GpuInterpolationBatch: corner offset,
+// block offset, cellsX/Y/Z, blocksPerCellX/Y, reserved, originX/Y/Z, padding.
+// Horizontal X/Z spacing is shared; world origins occupy words 8 through 10.
 layout(std430,set=0,binding=2) readonly buffer Chunks { uint metadata[]; };
 layout(std430,set=0,binding=3) writeonly buffer BlockCoordinates { ivec4 coordinates[]; };
 layout(std430,set=0,binding=4) writeonly buffer LegacyBlocks { float blocks[]; };

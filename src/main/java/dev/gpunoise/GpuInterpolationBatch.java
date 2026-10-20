@@ -7,9 +7,17 @@ import java.nio.ByteOrder;
 final class GpuInterpolationBatch {
     static final int METADATA_INTS = 12;
     static final int METADATA_BYTES = METADATA_INTS * Integer.BYTES;
+    private static final int CORNER_OFFSET_WORD = 0;
+    private static final int BLOCK_OFFSET_WORD = 1;
+    private static final int CELLS_X_WORD = 2;
+    private static final int CELLS_Y_WORD = 3;
+    private static final int CELLS_Z_WORD = 4;
+    private static final int BLOCKS_PER_CELL_X_WORD = 5;
+    private static final int BLOCKS_PER_CELL_Y_WORD = 6;
     private static final int ORIGIN_X_WORD = 8;
     private static final int ORIGIN_Y_WORD = 9;
     private static final int ORIGIN_Z_WORD = 10;
+    private static final int WORDS_PER_RECORD = METADATA_INTS;
 
     private GpuInterpolationBatch() {}
 
@@ -42,24 +50,38 @@ final class GpuInterpolationBatch {
                       int cellsX, int cellsY, int cellsZ,
                       int blocksPerCellX, int blocksPerCellY,
                       int originX, int originY, int originZ) {
-        if (chunk < 0 || target == null || target.capacity() < (long) (chunk + 1) * METADATA_BYTES) {
-            throw new IllegalArgumentException("invalid interpolation metadata destination");
-        }
-        int base = chunk * METADATA_BYTES;
-        target.putInt(base, cornerOffset).putInt(base + 4, blockOffset)
-                .putInt(base + 8, cellsX).putInt(base + 12, cellsY).putInt(base + 16, cellsZ)
-                .putInt(base + 20, blocksPerCellX).putInt(base + 24, blocksPerCellY)
-                .putInt(base + 28, 0).putInt(base + 32, originX).putInt(base + 36, originY)
-                .putInt(base + 40, originZ).putInt(base + 44, 0);
+        validateDestination(target, chunk);
+        int baseWord = Math.multiplyExact(chunk, WORDS_PER_RECORD);
+        putWord(target, baseWord + CORNER_OFFSET_WORD, cornerOffset);
+        putWord(target, baseWord + BLOCK_OFFSET_WORD, blockOffset);
+        putWord(target, baseWord + CELLS_X_WORD, cellsX);
+        putWord(target, baseWord + CELLS_Y_WORD, cellsY);
+        putWord(target, baseWord + CELLS_Z_WORD, cellsZ);
+        putWord(target, baseWord + BLOCKS_PER_CELL_X_WORD, blocksPerCellX);
+        putWord(target, baseWord + BLOCKS_PER_CELL_Y_WORD, blocksPerCellY);
+        putWord(target, baseWord + 7, 0);
+        putWord(target, baseWord + ORIGIN_X_WORD, originX);
+        putWord(target, baseWord + ORIGIN_Y_WORD, originY);
+        putWord(target, baseWord + ORIGIN_Z_WORD, originZ);
+        putWord(target, baseWord + 11, 0);
     }
 
     static void setOrigin(ByteBuffer target, int chunk, int x, int y, int z) {
-        if (chunk < 0 || target == null || target.capacity() < (long) (chunk + 1) * METADATA_BYTES) {
+        validateDestination(target, chunk);
+        int baseWord = Math.multiplyExact(chunk, WORDS_PER_RECORD);
+        putWord(target, baseWord + ORIGIN_X_WORD, x);
+        putWord(target, baseWord + ORIGIN_Y_WORD, y);
+        putWord(target, baseWord + ORIGIN_Z_WORD, z);
+    }
+
+    private static void putWord(ByteBuffer target, int word, int value) {
+        target.putInt(Math.multiplyExact(word, Integer.BYTES), value);
+    }
+
+    private static void validateDestination(ByteBuffer target, int chunk) {
+        if (chunk < 0 || target == null
+                || target.limit() < (long) (chunk + 1) * METADATA_BYTES) {
             throw new IllegalArgumentException("invalid interpolation metadata destination");
         }
-        int base = chunk * METADATA_BYTES;
-        target.putInt(base + ORIGIN_X_WORD * Integer.BYTES, x)
-                .putInt(base + ORIGIN_Y_WORD * Integer.BYTES, y)
-                .putInt(base + ORIGIN_Z_WORD * Integer.BYTES, z);
     }
 }
