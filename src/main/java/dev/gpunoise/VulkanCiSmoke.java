@@ -816,7 +816,7 @@ public final class VulkanCiSmoke {
             int firstSeed = GpuAquiferNearestThree.HEADER_BYTES;
             if (seededNearest.getFloat(firstSeed + 4 * Integer.BYTES) != 0.0f
                     || seededNearest.getFloat(firstSeed + 5 * Integer.BYTES) != 0.0f
-                    || seededNearest.getInt(firstSeed + 6 * Integer.BYTES) != 0
+                    || seededNearest.getInt(firstSeed + 6 * Integer.BYTES) != 2
                     || seededNearest.getFloat(firstSeed + GpuAquiferNearestThree.QUERY_RECORD_BYTES
                             + 4 * Integer.BYTES) != 0.125f
                     || seededNearest.getFloat(firstSeed + GpuAquiferNearestThree.QUERY_RECORD_BYTES
