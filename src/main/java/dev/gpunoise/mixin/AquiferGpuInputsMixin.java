@@ -49,6 +49,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.Objects;
+import java.lang.reflect.Field;
 
 /** Feeds the GPU floodedness root into vanilla's aquifer surface calculation. */
 // C2ME also rewrites computeSurfaceLevel. Apply this small value substitution
@@ -97,6 +98,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private static final AtomicBoolean gpunoise$aquiferPreflightLogged = new AtomicBoolean();
 
     @org.spongepowered.asm.mixin.Unique
+    private static final AtomicBoolean gpunoise$c2meCutoffWarning = new AtomicBoolean();
+
+    @org.spongepowered.asm.mixin.Unique
+    private static volatile Field gpunoise$c2meCutoffField;
+
+    @org.spongepowered.asm.mixin.Unique
     private static final AtomicBoolean gpunoise$exactAquiferInputsLogged = new AtomicBoolean();
 
     @org.spongepowered.asm.mixin.Unique
@@ -104,9 +111,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
 
     @org.spongepowered.asm.mixin.Unique
     private static final ThreadLocal<Boolean> gpunoise$javaAquiferReference = new ThreadLocal<>();
-
-    @org.spongepowered.asm.mixin.Unique
-    private static final AtomicBoolean gpunoise$c2meCutoffWarning = new AtomicBoolean();
 
     @org.spongepowered.asm.mixin.Unique
     private static final int gpunoise$aquiferDecisionConcurrency = (int) Math.max(1L,
@@ -238,17 +242,27 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
 
     @org.spongepowered.asm.mixin.Unique
     private Integer gpunoise$c2meSamplingCutoff() {
+        if (!GpuAquiferRuntimeMode.c2meAquiferRewriteEnabled()) return null;
         try {
-            ClassLoader loader = getClass().getClassLoader();
-            Class<?> accessor = Class.forName(
-                    "com.ishland.c2me.base.mixin.access.IAquiferSamplerImpl", false, loader);
-            if (!accessor.isInstance(this)) return null;
-            Object value = accessor.getMethod("getSamplingYLowPassCutoff").invoke(this);
+            Field cutoffField = gpunoise$c2meCutoffField;
+            if (cutoffField == null) {
+                synchronized (AquiferGpuInputsMixin.class) {
+                    cutoffField = gpunoise$c2meCutoffField;
+                    if (cutoffField == null) {
+                        cutoffField = getClass().getDeclaredField("maxY");
+                        if (!cutoffField.trySetAccessible()) {
+                            throw new IllegalAccessException("NoiseBasedAquifer.maxY is inaccessible");
+                        }
+                        gpunoise$c2meCutoffField = cutoffField;
+                    }
+                }
+            }
+            Object value = cutoffField.get(this);
             return value instanceof Integer cutoff ? cutoff : null;
         } catch (ReflectiveOperationException | LinkageError unavailable) {
             if (gpunoise$c2meCutoffWarning.compareAndSet(false, true)) {
                 dev.gpunoise.GpuNoise.LOGGER.warn(
-                        "C2ME aquifer cutoff accessor is unavailable; its GPU fluid-decision batch will stay disabled",
+                        "C2ME NoiseBasedAquifer.maxY cutoff is unavailable; keeping C2ME fluid decisions on Java",
                         unavailable);
             }
             return null;
@@ -734,27 +748,32 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         List<Map.Entry<Long, GpuAquiferStatusRegionCache.Reservation>> waiters =
                 new ArrayList<>(expectedCenters);
         Object graphIdentity = cache.terrainGraphIdentity();
-        for (int query = 0; query < queries.size(); query++) {
-            for (int[] center : queries.centers(query)) {
-                long key = BlockPos.asLong(center[0], center[1], center[2]);
-                if (!seenCenters.add(key)) continue;
-                Aquifer.FluidStatus cached = gpunoise$getSharedAquiferStatus(graphIdentity, key);
-                if (cached != null) {
-                    GpuTerrainProfiler.recordAquiferRegionStatusCache(true);
-                    statusCache.put(key, cached);
-                    continue;
-                }
-                GpuAquiferStatusRegionCache.Reservation reservation =
-                        GpuAquiferStatusRegionCache.reserve(graphIdentity, globalFluidPicker, key);
-                boolean owner = reservation.isOwner();
-                GpuTerrainProfiler.recordAquiferRegionStatusCache(!owner);
-                if (owner) {
-                    centers.add(center);
-                    owners.add(reservation);
-                } else {
-                    waiters.add(new java.util.AbstractMap.SimpleImmutableEntry<>(key, reservation));
+        try {
+            for (int query = 0; query < queries.size(); query++) {
+                for (int[] center : queries.centers(query)) {
+                    long key = BlockPos.asLong(center[0], center[1], center[2]);
+                    if (!seenCenters.add(key)) continue;
+                    Aquifer.FluidStatus cached = gpunoise$getSharedAquiferStatus(graphIdentity, key);
+                    if (cached != null) {
+                        GpuTerrainProfiler.recordAquiferRegionStatusCache(true);
+                        statusCache.put(key, cached);
+                        continue;
+                    }
+                    GpuAquiferStatusRegionCache.Reservation reservation =
+                            GpuAquiferStatusRegionCache.reserve(graphIdentity, globalFluidPicker, key);
+                    boolean owner = reservation.isOwner();
+                    GpuTerrainProfiler.recordAquiferRegionStatusCache(!owner);
+                    if (owner) {
+                        centers.add(center);
+                        owners.add(reservation);
+                    } else {
+                        waiters.add(new java.util.AbstractMap.SimpleImmutableEntry<>(key, reservation));
+                    }
                 }
             }
+        } catch (RuntimeException | Error failure) {
+            for (GpuAquiferStatusRegionCache.Reservation owner : owners) owner.fail(failure);
+            throw failure;
         }
         GpuAquiferFluidStatus.BatchWriter statusWriter = null;
         BlockState[] sampledFluidTypes;
