@@ -55,7 +55,7 @@ public final class VulkanCiSmoke {
                 List.of(new GpuDensityGraph.Node("Constant", new int[0], new double[]{EXPECTED}, null, 0)),
                 new int[]{0}, List.of(), List.of(), List.of(), List.of(), 1);
         System.out.println("Vulkan CI smoke: creating submission ring");
-        VulkanSubmissionRing ring = VulkanBootstrapThread.call(() -> new VulkanSubmissionRing(selectedDevice));
+        VulkanSubmissionRing ring = createTwoSlotSmokeRing(selectedDevice);
         try (ring) {
             assertNumericFixture(ring, registeredTranslator, "registered custom density translator",
                     new float[]{-193.0f, -1.0f, 37.0f, 256.0f},
@@ -1014,6 +1014,18 @@ public final class VulkanCiSmoke {
 
         System.out.println("Vulkan CI smoke passed on " + device.name()
                 + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, shared 12-root terrain lattices, and non-associative Y-X-Z float rounding; aquifer pressure, four-center selection, and vanilla/C2ME substance decisions matched Java reference cases.");
+    }
+
+    /** Exercise independent command buffers/fences even on Mesa's CPU Vulkan device. */
+    private static VulkanSubmissionRing createTwoSlotSmokeRing(GpuDevice device) throws Exception {
+        String configuredSlots = System.getProperty("gpunoise.submissionSlots");
+        System.setProperty("gpunoise.submissionSlots", "2");
+        try {
+            return VulkanBootstrapThread.call(() -> new VulkanSubmissionRing(device));
+        } finally {
+            if (configuredSlots == null) System.clearProperty("gpunoise.submissionSlots");
+            else System.setProperty("gpunoise.submissionSlots", configuredSlots);
+        }
     }
 
     private static void verifyAquiferStatusRegionCache() {
