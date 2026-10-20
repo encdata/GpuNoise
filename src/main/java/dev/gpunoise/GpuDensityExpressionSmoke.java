@@ -185,6 +185,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new HolderBackedEnumConfigurationDensity());
     }
 
+    static VulkanBranchFixture holderTypeGuardConfigurationFixture() {
+        return graphFixture(new HolderTypeGuardConfigurationDensity());
+    }
+
     static VulkanBranchFixture mixedTerrainRootFixture() {
         DensityFunction supported = new FinalFieldConfigurationDensity();
         GpuDensityGraph baseline = GpuDensityGraphLowerer.lower(
@@ -1033,6 +1037,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new EnumSwitchConfigurationDensity(), "enum-switch terrain configuration");
         verifyStandaloneMath(new EnumEqualityConfigurationDensity(), "enum-equality terrain configuration");
         verifyStandaloneMath(new HolderBackedEnumConfigurationDensity(), "holder-backed enum terrain configuration");
+        verifyStandaloneMath(new HolderTypeGuardConfigurationDensity(), "holder-backed typed terrain configuration");
         GpuDensityBytecodeCompiler.Result mutableEnum = GpuDensityBytecodeCompiler.compile(
                 new MutableEnumConfigurationDensity());
         if (mutableEnum.expression() != null || mutableEnum.rejection() == null
@@ -1906,6 +1911,20 @@ final class GpuDensityExpressionSmoke {
         @Override public double compute(FunctionContext context) {
             return mode == TerrainMode.RIDGE
                     ? context.blockX() * 0.125 : context.blockZ() * 0.25;
+        }
+    }
+
+    private static final class HolderTypeGuardConfigurationDensity extends NumericSmokeDensity {
+        private final Holder<Object> configuration = Holder.direct(
+                new TerrainShapeParameters(0.03125, 0.125));
+
+        @Override public double compute(FunctionContext context) {
+            Object value = configuration.value();
+            if (value instanceof TerrainShapeParameters parameters) {
+                return Math.sin(context.blockX() * parameters.horizontalScale()) * 0.25
+                        + Math.abs(context.blockY() * parameters.verticalScale()) * 0.01;
+            }
+            return context.blockZ() * 0.125;
         }
     }
 

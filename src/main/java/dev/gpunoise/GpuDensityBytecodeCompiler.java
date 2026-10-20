@@ -40,7 +40,8 @@ import org.objectweb.asm.tree.VarInsnNode;
  * <p>This is deliberately a bytecode compiler rather than a class-name
  * heuristic. It only accepts methods whose complete instruction stream can
  * be represented by the IR. Forward conditionals become GPU compare/select
- * nodes. Calls into custom helper/value classes are recursively inlined;
+ * nodes, and type tests on captured configuration values are folded at
+ * compile time. Calls into custom helper/value classes are recursively inlined;
  * field loads are captured only from final fields, and any side effect,
  * unknown call, or unsupported value rejects the whole method so the original
  * Java function remains authoritative.</p>
@@ -419,9 +420,13 @@ final class GpuDensityBytecodeCompiler {
                             reject("unsupported integer operand instruction " + opcodeName(constant.getOpcode()));
                         pushIntegerConstant(constant.operand);
                     } else if (instruction instanceof TypeInsnNode typeInstruction) {
-                        if (typeInstruction.getOpcode() != Opcodes.CHECKCAST)
+                        if (typeInstruction.getOpcode() == Opcodes.CHECKCAST) {
+                            checkCast(typeInstruction.desc);
+                        } else if (typeInstruction.getOpcode() == Opcodes.INSTANCEOF) {
+                            instanceOf(typeInstruction.desc);
+                        } else {
                             reject("unsupported object-type instruction " + opcodeName(typeInstruction.getOpcode()));
-                        checkCast(typeInstruction.desc);
+                        }
                     } else if (instruction instanceof JumpInsnNode jump) {
                         Integer target = labels.get(jump.label);
                         if (target == null) reject("jump target is missing from the method instruction stream");
@@ -974,6 +979,15 @@ final class GpuDensityBytecodeCompiler {
                 reject("captured value type " + value.referenceValue().getClass().getName()
                         + " cannot pass CHECKCAST to " + target.getName());
             }
+        }
+
+        private void instanceOf(String internalName) {
+            Value value = pop("INSTANCEOF");
+            if (value.kind() != Kind.OBJECT || value.referenceValue() == null) {
+                reject("INSTANCEOF requires a captured non-null configuration value");
+            }
+            Class<?> target = resolveOwnerClass(function.getClass(), internalName);
+            pushIntegerConstant(target.isInstance(value.referenceValue()) ? 1 : 0);
         }
 
         private boolean unbox(Object value, String owner, String name, String descriptor) {

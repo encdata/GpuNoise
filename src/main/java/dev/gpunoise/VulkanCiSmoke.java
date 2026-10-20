@@ -218,6 +218,8 @@ public final class VulkanCiSmoke {
                     "enum-equality terrain configuration", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.holderBackedEnumConfigurationFixture(),
                     "holder-backed enum terrain configuration", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.holderTypeGuardConfigurationFixture(),
+                    "holder-backed typed terrain configuration", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.finalFieldConfigurationFixture(),
                     "final-field terrain helper object", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.holderBackedConfigurationFixture(),
