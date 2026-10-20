@@ -81,13 +81,15 @@ final class GpuDensityGraphCompiler {
     }
 
     static GpuDensityGraph compileTerrain(NoiseRouter router) {
-        // Keep every density input used by NoiseChunk and NoiseBasedAquifer
-        // in the same GPU dispatch. The order is part of GpuChunkDensityCache.
+        // Keep every density input used by NoiseChunk, NoiseBasedAquifer, and
+        // OreVeinifier in the same GPU dispatch. The order is part of
+        // GpuChunkDensityCache and must match GpuTerrainRoots.
         return compileTerrainRoots(new DensityFunction[]{router.finalDensity(),
                 router.initialDensityWithoutJaggedness(), router.barrierNoise(),
                 router.fluidLevelFloodednessNoise(), router.fluidLevelSpreadNoise(), router.lavaNoise(),
                 router.erosion(), router.depth(), router.temperature(), router.vegetation(),
-                router.continents(), router.ridges()});
+                router.continents(), router.ridges(), router.veinToggle(), router.veinRidged(),
+                router.veinGap()});
     }
 
     /** Compiles terrain roots transactionally so one modded root cannot poison its siblings. */

@@ -508,9 +508,7 @@ public final class GpuTerrainRuntime {
 
     /** Number of roots currently materialized into the per-block terrain output. */
     static int terrainOutputRootCount() {
-        // final, initial, barrier, floodedness, spread, lava, erosion, depth,
-        // temperature, vegetation, continents, ridges
-        return 12;
+        return GpuTerrainRoots.COUNT;
     }
 
     /** Number of parity-verified roots in compact per-block GPU output. */
@@ -520,16 +518,17 @@ public final class GpuTerrainRuntime {
 
     /**
      * Roots with dense per-block consumers stay in the full-volume result:
-     * final density drives material decisions, initial density is consumed by
-     * terrain/surface stages, and barrier is read for aquifer classification.
-     * Other aquifer roots are sampled at the much smaller set of fluid centers
-     * and use exact corners or Java fallback when no cached corner is present.
-     * Climate roots likewise remain on the corner or Java path.
+     * final/initial density and barrier drive material/surface decisions;
+     * vein roots drive OreVeinifier decisions. Remaining fluid and climate
+     * roots use the cell grid or exact-coordinate dependency cache.
      */
     private static int terrainBlockOutputEligibleRootMask() {
         return (1 << GpuTerrainRoots.FINAL_DENSITY)
                 | (1 << GpuTerrainRoots.INITIAL_DENSITY)
-                | (1 << GpuTerrainRoots.BARRIER);
+                | (1 << GpuTerrainRoots.BARRIER)
+                | (1 << GpuTerrainRoots.VEIN_TOGGLE)
+                | (1 << GpuTerrainRoots.VEIN_RIDGED)
+                | (1 << GpuTerrainRoots.VEIN_GAP);
     }
 
     /** Stable root ordering for compact block readback, derived only from parity-verified roots. */
@@ -668,7 +667,8 @@ public final class GpuTerrainRuntime {
         DensityFunction[] cpu = {router.finalDensity(), router.initialDensityWithoutJaggedness(),
                 router.barrierNoise(), router.fluidLevelFloodednessNoise(), router.fluidLevelSpreadNoise(),
                 router.lavaNoise(), router.erosion(), router.depth(), router.temperature(),
-                router.vegetation(), router.continents(), router.ridges()};
+                router.vegetation(), router.continents(), router.ridges(), router.veinToggle(),
+                router.veinRidged(), router.veinGap()};
         if (graph.routerRootCount() != cpu.length) {
             verifiedTerrainRootMask = 0;
             GpuNoise.LOGGER.warn("GPU compact terrain graph has {} roots; expected {}", graph.routerRootCount(), cpu.length);
@@ -760,7 +760,8 @@ public final class GpuTerrainRuntime {
                     router.barrierNoise(), router.fluidLevelFloodednessNoise(),
                     router.fluidLevelSpreadNoise(), router.lavaNoise(), router.erosion(),
                     router.depth(), router.temperature(), router.vegetation(),
-                    router.continents(), router.ridges()
+                    router.continents(), router.ridges(), router.veinToggle(),
+                    router.veinRidged(), router.veinGap()
             };
             float[] rootWorst = new float[cpu.length];
             int[] worstX = new int[cpu.length], worstY = new int[cpu.length], worstZ = new int[cpu.length];

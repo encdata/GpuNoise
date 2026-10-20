@@ -859,8 +859,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, null, graphBarrier, null);
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, interpolationPipeline);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, interpolationPipelineLayout, 0, stack.longs(interpolationDescriptorSet), null);
-            // Evaluate all graph roots once and materialize the roots consumed
-            // by vanilla terrain density and aquifer code.
+            // Evaluate graph roots once and materialize the compact per-block
+            // terrain and material roots selected by the caller.
             ByteBuffer interpolationPush = stack.malloc(16).order(ByteOrder.nativeOrder()).putInt(chunkCount).putInt(blocksPerChunk).putInt(rootCount).putInt(outputRoots).flip();
             vkCmdPushConstants(commandBuffer, interpolationPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, interpolationPush);
             vkCmdDispatch(commandBuffer, (blockCount + 63) / 64, 1, 1);
