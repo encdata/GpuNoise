@@ -1050,6 +1050,13 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new StringSwitchConfigurationDensity(), "string-switch terrain configuration");
         verifyStandaloneMath(new StringComparisonConfigurationDensity(), "case-insensitive string terrain configuration");
         verifyStandaloneMath(new ObjectsEqualsConfigurationDensity(), "immutable Objects.equals terrain configuration");
+        GpuDensityBytecodeCompiler.Result customObjectsEquals = GpuDensityBytecodeCompiler.compile(
+                new CustomObjectsEqualsDensity());
+        if (customObjectsEquals.expression() != null || customObjectsEquals.rejection() == null
+                || !customObjectsEquals.rejection().contains("opaque method call java.util.Objects.equals")) {
+            throw new AssertionError("custom object equality must remain on Java with a method diagnostic: "
+                    + customObjectsEquals.rejection());
+        }
         verifyStandaloneMath(new EnumEqualityConfigurationDensity(), "enum-equality terrain configuration");
         verifyStandaloneMath(new HolderBackedEnumConfigurationDensity(), "holder-backed enum terrain configuration");
         verifyStandaloneMath(new HolderTypeGuardConfigurationDensity(), "holder-backed typed terrain configuration");
@@ -1932,6 +1939,16 @@ final class GpuDensityExpressionSmoke {
                 return context.blockZ() * 0.25 - context.blockY() * 0.03125;
             }
             return context.blockX() * 0.125;
+        }
+    }
+
+    private static final class CustomObjectsEqualsDensity extends NumericSmokeDensity {
+        private final TerrainShapeParametersObject configuration =
+                new TerrainShapeParametersObject(0.5, 0.25);
+
+        @Override public double compute(FunctionContext context) {
+            return java.util.Objects.equals(configuration, configuration)
+                    ? context.blockX() * 0.125 : context.blockZ() * 0.25;
         }
     }
 
