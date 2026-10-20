@@ -25,6 +25,15 @@ public final class GpuChunkFillCoordinator implements AutoCloseable {
     // Reuse Minecraft's worldgen pool. A private pool oversubscribes the CPU
     // because vanilla already schedules neighboring chunk steps there.
     private final ExecutorService fillExecutor = Util.backgroundExecutor();
+    // Cache graph translation/input packing is separately capped by the cache
+    // registry. Give those bounded tasks their own workers so builds waiting
+    // for a cache permit cannot occupy all Minecraft fill workers.
+    private final ExecutorService cachePreparationExecutor = Executors.newFixedThreadPool(
+            GpuTerrainAreaRegistry.maxConcurrentCacheBuilds(), r -> {
+                Thread t = new Thread(r, "GPU terrain cache preparation");
+                t.setDaemon(true);
+                return t;
+            });
     private final ExecutorService collector = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "GPU Chunk Fill Coordinator");
         t.setDaemon(true);
@@ -61,43 +70,81 @@ public final class GpuChunkFillCoordinator implements AutoCloseable {
     private void prepare(List<Pending> batch) {
         for (Pending item : batch) {
             try {
-                int x = item.work.chunk().getPos().getMinBlockX();
-                int z = item.work.chunk().getPos().getMinBlockZ();
-                if (GpuTerrainRuntime.gpuOnlyWorldgenAvailable())
-                    GpuChunkDensityCache.prefetchStrict(x, z, item.work.settings(), item.work.aquiferRandom());
-                else GpuChunkDensityCache.prefetch(x, z, item.work.settings());
-                item.cache = GpuChunkDensityCache.takePrefetched(x, z);
-            } catch (Throwable error) {
-                GpuTerrainRuntime.releaseGpuCache(item.cache);
-                item.result.completeExceptionally(error);
+                CompletableFuture.runAsync(() -> prepareCache(item), cachePreparationExecutor)
+                        .whenComplete((ignored, failure) -> {
+                            if (failure != null) {
+                                item.result.completeExceptionally(failure);
+                            } else {
+                                startReadyFill(item);
+                            }
+                        });
+            } catch (RuntimeException rejected) {
+                item.result.completeExceptionally(rejected);
             }
         }
-        // Do not gate the whole batch on its slowest GPU request. Each cache
-        // owns its completion future, so CPU material/structure work can begin
-        // as soon as that chunk's GPU slab is ready.
-        for (Pending item : batch) {
-            if (item.result.isDone()) continue;
-            item.cache.ready().whenComplete((ignored, failure) -> {
-                if (failure != null) {
-                    GpuTerrainRuntime.releaseGpuCache(item.cache);
-                    item.result.completeExceptionally(failure);
-                    return;
-                }
+
+        // The collector must not build strict Java inputs serially: those
+        // builders can be substantial for modded density graphs, and serial
+        // preparation delays every later terrain submission in the batch.
+        // Cache claims have their own bounded build semaphore, so this fans
+        // out preparation without creating unbounded simultaneous builders.
+        // Each item continues independently when its own cache is prepared.
+    }
+
+    private void prepareCache(Pending item) {
+        try {
+            int x = item.work.chunk().getPos().getMinBlockX();
+            int z = item.work.chunk().getPos().getMinBlockZ();
+            if (GpuTerrainRuntime.gpuOnlyWorldgenAvailable())
+                GpuChunkDensityCache.prefetchStrict(x, z, item.work.settings(), item.work.aquiferRandom());
+            else GpuChunkDensityCache.prefetch(x, z, item.work.settings());
+            item.cache = GpuChunkDensityCache.takePrefetched(x, z);
+            if (item.cache == null) {
+                throw new IllegalStateException("GPU terrain cache was not available after preparation");
+            }
+        } catch (Throwable error) {
+            GpuTerrainRuntime.releaseGpuCache(item.cache);
+            item.cache = null;
+            item.result.completeExceptionally(error);
+        }
+    }
+
+    private void startReadyFill(Pending item) {
+        // Do not gate fills on the slowest GPU request. Each cache owns its
+        // completion future, so its chunk starts as soon as its own slab is
+        // ready, even while other cache preparations or dispatches continue.
+        if (item.result.isDone()) return;
+        GpuChunkDensityCache cache = item.cache;
+        if (cache == null) {
+            item.result.completeExceptionally(new IllegalStateException(
+                    "GPU terrain cache preparation failed without a reported cause"));
+            return;
+        }
+        cache.ready().whenComplete((ignored, readinessFailure) -> {
+            if (readinessFailure != null) {
+                GpuTerrainRuntime.releaseGpuCache(cache);
+                item.result.completeExceptionally(readinessFailure);
+                return;
+            }
+            try {
                 CompletableFuture.supplyAsync(() -> {
                             GpuTerrainRuntime.enterGpuDensityScope();
                             try {
-                                return item.work.fill(item.cache);
+                                return item.work.fill(cache);
                             } finally {
                                 GpuTerrainRuntime.leaveGpuDensityScope();
                             }
                         }, fillExecutor)
                         .whenComplete((chunk, error) -> {
-                            GpuTerrainRuntime.releaseGpuCache(item.cache);
+                            GpuTerrainRuntime.releaseGpuCache(cache);
                             if (error != null) item.result.completeExceptionally(error);
                             else item.result.complete(chunk);
                         });
-            });
-        }
+            } catch (RuntimeException rejected) {
+                GpuTerrainRuntime.releaseGpuCache(cache);
+                item.result.completeExceptionally(rejected);
+            }
+        });
     }
 
     public interface Work {
@@ -116,6 +163,7 @@ public final class GpuChunkFillCoordinator implements AutoCloseable {
 
     @Override public void close() {
         collector.shutdownNow();
+        cachePreparationExecutor.shutdownNow();
         // fillExecutor is owned by Minecraft's Util background executor.
     }
 }

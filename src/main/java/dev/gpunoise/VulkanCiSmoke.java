@@ -561,13 +561,23 @@ public final class VulkanCiSmoke {
                     .putInt(2).putInt(2).putInt(2).putInt(16).putInt(1).flip();
             ByteBuffer multiMarkerOutput = GpuInterpolationBatch.metadata(2, 1, 1, 1,
                     16, 1, 8, 256, -32, -64, 48);
-            int secondOriginOffset = GpuInterpolationBatch.METADATA_BYTES + 32;
-            multiMarkerOutput.putInt(secondOriginOffset, 96)
-                    .putInt(secondOriginOffset + 4, -32)
-                    .putInt(secondOriginOffset + 8, -80);
+            GpuInterpolationBatch.setOrigin(multiMarkerOutput, 1, 96, -32, -80);
+            if (multiMarkerOutput.getInt(0) != 0 || multiMarkerOutput.getInt(4) != 0
+                    || multiMarkerOutput.getInt(32) != -32
+                    || multiMarkerOutput.getInt(GpuInterpolationBatch.METADATA_BYTES) != 8
+                    || multiMarkerOutput.getInt(GpuInterpolationBatch.METADATA_BYTES + 4) != 256
+                    || multiMarkerOutput.getInt(GpuInterpolationBatch.METADATA_BYTES + 32) != 96) {
+                throw new IllegalStateException("Two-chunk interpolation metadata writer produced invalid offsets");
+            }
             System.out.println("Vulkan CI smoke: dispatching two chunks with distinct world origins");
             GpuTerrainBatchResult multiMarkerTerrain = ring.submitGraphGridInterpolated(markerGraph,
                     multiMarkerGrid, 2, 8, multiMarkerOutput, 256).get(60, TimeUnit.SECONDS);
+            if (Math.abs(multiMarkerTerrain.corners().valueAt(0, 0) - 1024.0f) > 1.0e-5f
+                    || Math.abs(multiMarkerTerrain.corners().valueAt(8, 0) - 9216.0f) > 1.0e-5f) {
+                throw new IllegalStateException("Two-chunk terrain corner roots lost their world-origin order: first="
+                        + multiMarkerTerrain.corners().valueAt(0, 0) + ", second="
+                        + multiMarkerTerrain.corners().valueAt(8, 0));
+            }
             GpuTerrainBlockResult firstChunkBlocks = multiMarkerTerrain.blocks().slice(0, 256);
             GpuTerrainBlockResult secondChunkBlocks = multiMarkerTerrain.blocks().slice(256, 256);
             assertMarkerChunkCoordinates(firstChunkBlocks, -32);

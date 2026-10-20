@@ -383,6 +383,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         int cornerOffset = 0;
         int blockOffset = 0;
         int outputRoots = GpuTerrainRuntime.terrainBlockOutputRootCount();
+        int metadataChunk = 0;
         for (Pending item : batch) {
             GpuTerrainGrid g = item.grid;
             metadata.putInt(g.minX()).putInt(g.minY()).putInt(g.minZ())
@@ -392,16 +393,15 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
             int cellsX = g.gridX() - 1;
             int cellsY = g.gridY() - 1;
             int cellsZ = g.gridZ() - 1;
-            outputMetadata.putInt(cornerOffset).putInt(blockOffset)
-                    .putInt(cellsX).putInt(cellsY).putInt(cellsZ)
-                    .putInt(g.cellWidth()).putInt(g.cellHeight()).putInt(0)
-                    .putInt(g.minX()).putInt(g.minY()).putInt(g.minZ()).putInt(0);
+            GpuInterpolationBatch.write(outputMetadata, metadataChunk++, cornerOffset, blockOffset,
+                    cellsX, cellsY, cellsZ, g.cellWidth(), g.cellHeight(),
+                    g.minX(), g.minY(), g.minZ());
             cornerOffset += g.sampleCount();
             blockOffset += blocksPerChunk;
         }
         metadata.flip();
         if (!blockOutput) outputMetadata.limit(0);
-        outputMetadata.flip();
+        else outputMetadata.position(0).limit(batch.size() * GpuInterpolationBatch.METADATA_BYTES);
         if (batch.stream().allMatch(item -> item.future.isCancelled())) {
             metadataPool.offer(buffers);
             return;
