@@ -5,6 +5,8 @@ import net.minecraft.core.Holder;
 import net.minecraft.world.level.levelgen.DensityFunction;
 import net.minecraft.world.level.levelgen.DensityFunctions;
 import net.minecraft.world.level.levelgen.synth.NormalNoise;
+import java.util.HashSet;
+import java.util.Set;
 
 /** CPU-side public-API checks used by the GitHub Actions Vulkan smoke entry point. */
 final class GpuDensityExpressionSmoke {
@@ -303,6 +305,7 @@ final class GpuDensityExpressionSmoke {
     }
 
     static void verify() {
+        verifyWorldgenDependencyIndex();
         verifyParityRootPruning();
         verifyTerrainDecisionFallback();
         verifyTransparentMarkerElimination();
@@ -472,6 +475,49 @@ final class GpuDensityExpressionSmoke {
                 (double) (float) 1.00000006, "packed-float constant");
 
         verifyBytecodeFrontend();
+    }
+
+    /** Exercises primitive-index growth, collisions, exact tuple matching, and builder ownership. */
+    private static void verifyWorldgenDependencyIndex() {
+        final int count = 20_000;
+        int[] xs = new int[count], ys = new int[count], zs = new int[count];
+        Set<GpuWorldgenDependency.Coordinate> expected = new HashSet<>(count + 8);
+        GpuWorldgenDependency.Builder builder = new GpuWorldgenDependency.Builder();
+        for (int i = 0; i < count; i++) {
+            int x = i * 7_919 - 83_000_000;
+            int y = i % 769 - 384;
+            int z = 71_003_003 - i * 104_729;
+            xs[i] = x;
+            ys[i] = y;
+            zs[i] = z;
+            expected.add(new GpuWorldgenDependency.Coordinate(x, y, z));
+            builder.add(x, y, z).add(x, y, z);
+        }
+        builder.add(Integer.MIN_VALUE, Integer.MAX_VALUE, -1)
+                .add(Integer.MAX_VALUE, Integer.MIN_VALUE, 1);
+        expected.add(new GpuWorldgenDependency.Coordinate(Integer.MIN_VALUE, Integer.MAX_VALUE, -1));
+        expected.add(new GpuWorldgenDependency.Coordinate(Integer.MAX_VALUE, Integer.MIN_VALUE, 1));
+
+        GpuWorldgenDependency dependency = builder.build();
+        if (dependency.samples() != expected.size() || dependency.pages() != 1)
+            throw new AssertionError("primitive worldgen index lost or duplicated coordinates: samples="
+                    + dependency.samples() + ", expected=" + expected.size());
+        for (int i = 0; i < count; i++) {
+            if (!dependency.contains(xs[i], ys[i], zs[i]))
+                throw new AssertionError("primitive worldgen index missed tuple " + i);
+        }
+        if (!dependency.contains(Integer.MIN_VALUE, Integer.MAX_VALUE, -1)
+                || !dependency.contains(Integer.MAX_VALUE, Integer.MIN_VALUE, 1)
+                || dependency.contains(Integer.MIN_VALUE, Integer.MAX_VALUE, 1)
+                || dependency.contains(17, 19, 23)) {
+            throw new AssertionError("primitive worldgen index did not preserve exact three-axis membership");
+        }
+        try {
+            builder.add(1, 2, 3);
+            throw new AssertionError("built worldgen dependency builder accepted mutation");
+        } catch (IllegalStateException expectedFailure) {
+            // A built index is shared by the immutable dependency and must no longer be mutable.
+        }
     }
 
     private static void verifyTransparentMarkerElimination() {
