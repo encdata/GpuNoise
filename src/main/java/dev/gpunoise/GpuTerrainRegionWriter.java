@@ -92,7 +92,7 @@ final class GpuTerrainRegionWriter implements AutoCloseable {
     private static boolean compatible(GpuTerrainDecisionWriter.ChunkFill first,
                                       GpuTerrainDecisionWriter.ChunkFill next) {
         return first.cache().terrainGraphIdentity() == next.cache().terrainGraphIdentity()
-                && first.chunk().getWorldForge() == next.chunk().getWorldForge()
+                && first.chunk().getHeightAccessorForGeneration() == next.chunk().getHeightAccessorForGeneration()
                 && Math.floorDiv(first.chunk().getPos().x, REGION_CHUNKS)
                 == Math.floorDiv(next.chunk().getPos().x, REGION_CHUNKS)
                 && Math.floorDiv(first.chunk().getPos().z, REGION_CHUNKS)

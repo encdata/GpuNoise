@@ -59,7 +59,7 @@ public final class GpuTerrainDecisionWriter {
         ChunkFill first = fills.get(0);
         int regionX = Math.floorDiv(first.chunk().getPos().x, 4);
         int regionZ = Math.floorDiv(first.chunk().getPos().z, 4);
-        Object worldIdentity = first.chunk().getWorldForge();
+        Object worldIdentity = first.chunk().getHeightAccessorForGeneration();
         Set<ChunkAccess> uniqueChunks = new HashSet<>(fills.size());
         ArrayList<LevelChunkSection> acquired = new ArrayList<>(fills.size() * 8);
         ArrayList<ChunkAccess> written = new ArrayList<>(java.util.Collections.nCopies(fills.size(), null));
@@ -71,7 +71,7 @@ public final class GpuTerrainDecisionWriter {
                 ChunkFill fill = fills.get(fillIndex);
                 if (Math.floorDiv(fill.chunk().getPos().x, 4) != regionX
                         || Math.floorDiv(fill.chunk().getPos().z, 4) != regionZ
-                        || fill.chunk().getWorldForge() != worldIdentity
+                        || fill.chunk().getHeightAccessorForGeneration() != worldIdentity
                         || fill.minCellY() != first.minCellY()
                         || fill.cellCountY() != first.cellCountY()
                         || fill.cellWidth() != first.cellWidth()
