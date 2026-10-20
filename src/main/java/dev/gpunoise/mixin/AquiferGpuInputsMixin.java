@@ -724,13 +724,15 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 {0, 0}, {-2, -1}, {-1, -1}, {0, -1}, {1, -1}, {-3, 0},
                 {-2, 0}, {-1, 0}, {1, 0}, {-2, 1}, {-1, 1}, {0, 1}, {1, 1}
         };
-        Map<Long, Integer> indexes = new HashMap<>();
-        List<int[]> centers = new ArrayList<>();
+        int expectedCenters = Math.min(GpuAquiferFluidStatus.MAX_PREFILL_CENTERS,
+                Math.max(16, queries.size() / 32));
+        Map<Long, Integer> indexes = new HashMap<>(expectedCenters);
+        List<int[]> centers = new ArrayList<>(expectedCenters);
         Object graphIdentity = cache.terrainGraphIdentity();
         for (int query = 0; query < queries.size(); query++) {
             for (int[] center : queries.centers(query)) {
                 long key = BlockPos.asLong(center[0], center[1], center[2]);
-                if (indexes.containsKey(key)) continue;
+                if (indexes.get(key) != null) continue;
                 Aquifer.FluidStatus cached = gpunoise$getSharedAquiferStatus(graphIdentity, key);
                 GpuTerrainProfiler.recordAquiferRegionStatusCache(cached != null);
                 if (cached != null) {

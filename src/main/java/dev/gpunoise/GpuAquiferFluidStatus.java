@@ -70,8 +70,12 @@ public final class GpuAquiferFluidStatus {
 
         public ByteBuffer finish() {
             if (finished) throw new IllegalStateException("aquifer fluid-status writer is finished");
-            if (rows != expectedRows) throw new IllegalStateException(
-                    "aquifer fluid-status batch is incomplete: expected=" + expectedRows + ", actual=" + rows);
+            if (rows != expectedRows) {
+                int actualRows = rows;
+                close();
+                throw new IllegalStateException("aquifer fluid-status batch is incomplete: expected="
+                        + expectedRows + ", actual=" + actualRows);
+            }
             finished = true;
             return packed.flip();
         }
