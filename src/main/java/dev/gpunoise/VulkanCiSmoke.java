@@ -1069,7 +1069,7 @@ public final class VulkanCiSmoke {
 
         GpuChunkPipelineGate activeGate = new GpuChunkPipelineGate(1);
         CompletableFuture<Void> activeStage = new CompletableFuture<>();
-        CompletableFuture<Void> active = activeGate.submit(() -> activeStage);
+        CompletableFuture<Void> active = activeGate.submit(() -> activeStage, activeStage::cancel);
         if (!active.cancel(true) || !activeStage.isCancelled()) {
             throw new IllegalStateException("running GPU terrain request did not receive cancellation");
         }

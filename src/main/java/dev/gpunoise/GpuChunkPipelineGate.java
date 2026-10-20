@@ -3,7 +3,7 @@ package dev.gpunoise;
 import java.util.ArrayDeque;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.Future;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /** Bounds complete GPU-cache-plus-CPU-fill operations without blocking workers. */
@@ -18,8 +18,20 @@ final class GpuChunkPipelineGate {
     }
 
     <T> CompletableFuture<T> submit(Supplier<? extends CompletionStage<T>> operation) {
+        return submit(operation, ignored -> {});
+    }
+
+    /**
+     * Submits work with an operation-owned cancellation hook. The hook owns
+     * cancellation semantics because cancelling an arbitrary dependent
+     * CompletableFuture can complete its wrapper while the underlying GPU or
+     * CPU work keeps running, which would release this gate slot too early.
+     */
+    <T> CompletableFuture<T> submit(Supplier<? extends CompletionStage<T>> operation,
+                                    Consumer<Boolean> cancellation) {
         if (operation == null) throw new NullPointerException("operation");
-        Task<T> task = new Task<>(operation);
+        if (cancellation == null) throw new NullPointerException("cancellation");
+        Task<T> task = new Task<>(operation, cancellation);
         task.result.whenComplete((ignored, failure) -> {
             if (task.result.isCancelled()) cancel(task);
         });
@@ -66,18 +78,14 @@ final class GpuChunkPipelineGate {
             return;
         }
 
-        Future<?> cancellable = null;
-        try {
-            cancellable = stage.toCompletableFuture();
-        } catch (RuntimeException ignored) {
-            // Some CompletionStage implementations do not expose a Future.
-        }
-        boolean cancelStage;
+        boolean cancelOperation;
         synchronized (this) {
-            task.activeStage = cancellable;
-            cancelStage = task.result.isCancelled();
+            task.stageReady = true;
+            cancelOperation = (task.cancellationRequested || task.result.isCancelled())
+                    && !task.cancellationHookInvoked;
+            if (cancelOperation) task.cancellationHookInvoked = true;
         }
-        if (cancelStage && cancellable != null) cancellable.cancel(true);
+        if (cancelOperation) invokeCancellation(task);
 
         try {
             stage.whenComplete((value, failure) -> {
@@ -92,12 +100,14 @@ final class GpuChunkPipelineGate {
     }
 
     private void cancel(Task<?> task) {
-        Future<?> active = null;
+        boolean invokeCancellation = false;
         boolean releaseReservedSlot = false;
         synchronized (this) {
             if (task.finished) return;
             if (task.started) {
-                active = task.activeStage;
+                task.cancellationRequested = true;
+                invokeCancellation = task.stageReady && !task.cancellationHookInvoked;
+                if (invokeCancellation) task.cancellationHookInvoked = true;
             } else if (task.slotReserved) {
                 // A promoted task may be cancelled before its starter runs.
                 // Mark it finished now; the queued starter will become a no-op.
@@ -108,8 +118,17 @@ final class GpuChunkPipelineGate {
                 task.finished = true;
             }
         }
-        if (active != null) active.cancel(true);
+        if (invokeCancellation) invokeCancellation(task);
         if (releaseReservedSlot) finish(task);
+    }
+
+    private static void invokeCancellation(Task<?> task) {
+        try {
+            task.cancellation.accept(true);
+        } catch (Throwable ignored) {
+            // Cancellation is best effort; the operation's stage still owns
+            // the slot until its actual completion is observed.
+        }
     }
 
     private void finish(Task<?> task) {
@@ -124,7 +143,6 @@ final class GpuChunkPipelineGate {
     private Task<?> finishLocked(Task<?> task) {
         if (task.finished) return null;
         task.finished = true;
-        task.activeStage = null;
         if (task.slotReserved) {
             task.slotReserved = false;
             inFlight--;
@@ -148,10 +166,14 @@ final class GpuChunkPipelineGate {
         boolean slotReserved;
         boolean started;
         boolean finished;
-        Future<?> activeStage;
+        boolean stageReady;
+        boolean cancellationRequested;
+        boolean cancellationHookInvoked;
+        final Consumer<Boolean> cancellation;
 
-        Task(Supplier<? extends CompletionStage<T>> operation) {
+        Task(Supplier<? extends CompletionStage<T>> operation, Consumer<Boolean> cancellation) {
             this.operation = operation;
+            this.cancellation = cancellation;
         }
     }
 }
