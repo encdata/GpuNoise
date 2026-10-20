@@ -1315,6 +1315,29 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         return records.remaining() / count;
     }
 
+    private void writeCompactAquiferStatusOutput(ByteBuffer records, int count, int outputBaseInt) {
+        ByteBuffer mapped = persistentMappings.get(aquiferNearestOutput);
+        if (mapped == null) throw new IllegalStateException("aquifer output is not host visible");
+        IntBuffer output = mapped.duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
+        IntBuffer input = records.duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
+        int requiredInts = Math.addExact(outputBaseInt,
+                Math.multiplyExact(count, GpuAquiferFluidStatus.OUTPUT_INTS));
+        if (input.remaining() != count * 4 || requiredInts > output.capacity())
+            throw new IllegalArgumentException("invalid compact aquifer status output range");
+        for (int row = 0; row < count; row++) {
+            input.get(); // Y is not part of the aquifer status output ABI.
+            int level = input.get();
+            int stateId = input.get();
+            int kind = input.get();
+            int base = outputBaseInt + row * GpuAquiferFluidStatus.OUTPUT_INTS;
+            output.put(base, level);
+            output.put(base + 1, 0);
+            output.put(base + 2, 0);
+            output.put(base + 3, stateId);
+            output.put(base + 4, kind);
+        }
+    }
+
     /** Runs nearest-center ranking and center-status prefill without waiting on its fence. */
     synchronized CompletableFuture<GpuAquiferPrefillResult> submitAquiferPrefillAsync(
             ByteBuffer nearestRecords, int nearestCount, ByteBuffer statusRecords, int statusCount)
@@ -1333,10 +1356,12 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 || !validAquiferStatusPayload(statusRecords, statusCount))
             throw new IllegalArgumentException("invalid combined aquifer prefill batch");
         int statusStride = aquiferStatusStride(statusRecords, statusCount);
+        boolean compactPrecomputed = statusStride
+                == GpuAquiferFluidStatus.COMPACT_PRECOMPUTED_RECORD_BYTES;
         int nearestBytes = nearestRecords.remaining();
         int statusByteOffset = (nearestBytes + 3) & ~3;
-        long combinedBytes = (long) statusByteOffset
-                + (long) statusCount * statusStride;
+        long combinedBytes = compactPrecomputed ? nearestBytes
+                : (long) statusByteOffset + (long) statusCount * statusStride;
         if (combinedBytes > AQUIFER_INPUT_BYTES)
             throw new IllegalArgumentException("combined aquifer input exceeds GPU capacity");
 
@@ -1345,8 +1370,13 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 .order(ByteOrder.nativeOrder());
         else input.clear();
         input.put(nearestRecords.duplicate());
-        while (input.position() < statusByteOffset) input.put((byte) 0);
-        input.put(statusRecords.duplicate()).flip();
+        if (!compactPrecomputed) {
+            while (input.position() < statusByteOffset) input.put((byte) 0);
+            input.put(statusRecords.duplicate());
+        }
+        input.flip();
+        if (compactPrecomputed) writeCompactAquiferStatusOutput(statusRecords, statusCount,
+                nearestCount * GpuAquiferNearestThree.OUTPUT_INTS);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             if (persistentMappings.get(aquiferNearestInputs) == null)
                 put(aquiferNearestInputs, input, stack);
@@ -1360,16 +1390,17 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             vkCmdPushConstants(commandBuffer, aquiferNearestPipelineLayout,
                     VK_SHADER_STAGE_COMPUTE_BIT, 0, nearestPush);
             vkCmdDispatch(commandBuffer, Math.max(1, (nearestCount + 63) / 64), 1, 1);
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, aquiferFluidStatusPipeline);
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                    aquiferFluidStatusPipelineLayout, 0, stack.longs(aquiferNearestDescriptorSet), null);
-            ByteBuffer statusPush = stack.malloc(16).order(ByteOrder.nativeOrder())
-                    .putInt(statusCount).putInt(statusByteOffset)
-                    .putInt(nearestCount * GpuAquiferNearestThree.OUTPUT_INTS)
-                    .putInt(statusStride == GpuAquiferFluidStatus.COMPACT_PRECOMPUTED_RECORD_BYTES ? 1 : 0).flip();
-            vkCmdPushConstants(commandBuffer, aquiferFluidStatusPipelineLayout,
-                    VK_SHADER_STAGE_COMPUTE_BIT, 0, statusPush);
-            vkCmdDispatch(commandBuffer, (statusCount + 63) / 64, 1, 1);
+            if (!compactPrecomputed) {
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, aquiferFluidStatusPipeline);
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                        aquiferFluidStatusPipelineLayout, 0, stack.longs(aquiferNearestDescriptorSet), null);
+                ByteBuffer statusPush = stack.malloc(16).order(ByteOrder.nativeOrder())
+                        .putInt(statusCount).putInt(statusByteOffset)
+                        .putInt(nearestCount * GpuAquiferNearestThree.OUTPUT_INTS).putInt(0).flip();
+                vkCmdPushConstants(commandBuffer, aquiferFluidStatusPipelineLayout,
+                        VK_SHADER_STAGE_COMPUTE_BIT, 0, statusPush);
+                vkCmdDispatch(commandBuffer, (statusCount + 63) / 64, 1, 1);
+            }
             long nearestOutputBytes = (long) nearestCount
                     * GpuAquiferNearestThree.OUTPUT_INTS * Integer.BYTES;
             long statusOutputBytes = (long) statusCount
@@ -1380,7 +1411,12 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                         .dstAccessMask(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
                         .buffer(aquiferNearestOutput.buffer)
                         .offset(0).size(nearestOutputBytes + statusOutputBytes);
-                vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                int srcStages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+                if (compactPrecomputed) {
+                    computeBarrier.srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT);
+                    srcStages |= VK_PIPELINE_STAGE_HOST_BIT;
+                }
+                vkCmdPipelineBarrier(commandBuffer, srcStages,
                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, null, computeBarrier, null);
                 vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                         aquiferDecisionChainPipeline);
@@ -1430,10 +1466,12 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 || !validAquiferStatusPayload(statusRecords, statusCount))
             throw new IllegalArgumentException("invalid combined aquifer prefill batch");
         int statusStride = aquiferStatusStride(statusRecords, statusCount);
+        boolean compactPrecomputed = statusStride
+                == GpuAquiferFluidStatus.COMPACT_PRECOMPUTED_RECORD_BYTES;
         int nearestBytes = nearestRecords.remaining();
         int statusByteOffset = (nearestBytes + 3) & ~3;
-        long combinedBytes = (long) statusByteOffset
-                + (long) statusCount * statusStride;
+        long combinedBytes = compactPrecomputed ? nearestBytes
+                : (long) statusByteOffset + (long) statusCount * statusStride;
         if (combinedBytes > AQUIFER_INPUT_BYTES)
             throw new IllegalArgumentException("combined aquifer input exceeds GPU capacity");
 
@@ -1445,8 +1483,13 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             input.clear();
         }
         input.put(nearestRecords.duplicate());
-        while (input.position() < statusByteOffset) input.put((byte) 0);
-        input.put(statusRecords.duplicate()).flip();
+        if (!compactPrecomputed) {
+            while (input.position() < statusByteOffset) input.put((byte) 0);
+            input.put(statusRecords.duplicate());
+        }
+        input.flip();
+        if (compactPrecomputed) writeCompactAquiferStatusOutput(statusRecords, statusCount,
+                nearestCount * GpuAquiferNearestThree.OUTPUT_INTS);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             if (persistentMappings.get(aquiferNearestInputs) == null)
                 put(aquiferNearestInputs, input, stack);
@@ -1462,16 +1505,17 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     VK_SHADER_STAGE_COMPUTE_BIT, 0, nearestPush);
             vkCmdDispatch(commandBuffer, Math.max(1, (nearestCount + 63) / 64), 1, 1);
 
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, aquiferFluidStatusPipeline);
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                    aquiferFluidStatusPipelineLayout, 0, stack.longs(aquiferNearestDescriptorSet), null);
-            ByteBuffer statusPush = stack.malloc(16).order(ByteOrder.nativeOrder())
-                    .putInt(statusCount).putInt(statusByteOffset)
-                    .putInt(nearestCount * GpuAquiferNearestThree.OUTPUT_INTS)
-                    .putInt(statusStride == GpuAquiferFluidStatus.COMPACT_PRECOMPUTED_RECORD_BYTES ? 1 : 0).flip();
-            vkCmdPushConstants(commandBuffer, aquiferFluidStatusPipelineLayout,
-                    VK_SHADER_STAGE_COMPUTE_BIT, 0, statusPush);
-            vkCmdDispatch(commandBuffer, (statusCount + 63) / 64, 1, 1);
+            if (!compactPrecomputed) {
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, aquiferFluidStatusPipeline);
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                        aquiferFluidStatusPipelineLayout, 0, stack.longs(aquiferNearestDescriptorSet), null);
+                ByteBuffer statusPush = stack.malloc(16).order(ByteOrder.nativeOrder())
+                        .putInt(statusCount).putInt(statusByteOffset)
+                        .putInt(nearestCount * GpuAquiferNearestThree.OUTPUT_INTS).putInt(0).flip();
+                vkCmdPushConstants(commandBuffer, aquiferFluidStatusPipelineLayout,
+                        VK_SHADER_STAGE_COMPUTE_BIT, 0, statusPush);
+                vkCmdDispatch(commandBuffer, (statusCount + 63) / 64, 1, 1);
+            }
 
             long outputBytes = ((long) nearestCount * GpuAquiferNearestThree.OUTPUT_INTS
                     + (long) statusCount * GpuAquiferFluidStatus.OUTPUT_INTS) * Integer.BYTES;
