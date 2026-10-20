@@ -16,6 +16,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.LinkedHashSet;
 
 /**
  * Safe in-flight submission ring. Each slot owns its Vulkan buffers, command
@@ -23,7 +26,9 @@ import java.util.function.Supplier;
  * overwrite resources still used by another dispatch.
  */
 final class VulkanSubmissionRing implements AutoCloseable {
-    private static final int MAX_SLOT_COUNT = 2;
+    private static final int MAX_SLOT_COUNT_PER_DEVICE = 2;
+    private static final int MAX_DEVICE_COUNT = (int) Math.max(1L,
+            Math.min(8L, Long.getLong("gpunoise.maxDevices", 2L)));
     /** Bound retained request payloads across every queue class, including in-flight work. */
     private static final int MAX_PENDING_SUBMISSIONS = (int) Math.max(8L,
             Math.min(256L, Long.getLong("gpunoise.submissionQueueCapacity", 32L)));
@@ -34,6 +39,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
     private static final long COMPLETION_POLL_MICROS = 250L;
     private static final long IDLE_POLL_MILLIS = 1L;
     private final PersistentVulkanNormalNoiseEngine[] slots;
+    /** Physical-device identity for each independently owned slot. */
+    private final GpuDevice[] slotDevices;
     /** A slot stays unavailable from signaled-fence detection through host readback. */
     private final AtomicBoolean[] readbackScheduled;
     private final AtomicBoolean drainScheduled = new AtomicBoolean();
@@ -57,50 +64,102 @@ final class VulkanSubmissionRing implements AutoCloseable {
     private long queueDispatchSamples;
     private long totalQueueWaitNanos;
     private long maxQueueWaitNanos;
+    /** Round-robin tie break among physical devices with equal free capacity. */
+    private int nextSlotIndex;
     private final long[] queueClassSamples = new long[QUEUE_CLASSES.length];
     private final long[] queueClassWaitNanos = new long[QUEUE_CLASSES.length];
     private final long[] queueClassMaxWaitNanos = new long[QUEUE_CLASSES.length];
     /** Next request class to inspect; prevents a busy producer class starving terrain. */
     private int nextQueueClass;
-    private final ScheduledExecutorService completion = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread thread = new Thread(r, "GPU Vulkan completion");
-        thread.setDaemon(true);
-        return thread;
-    });
-    private final ExecutorService dispatchWorkers = Executors.newFixedThreadPool(MAX_SLOT_COUNT, r -> {
-        Thread thread = new Thread(r, "GPU Vulkan dispatch");
-        thread.setDaemon(true);
-        return thread;
-    });
-    /** Large mapped-output copies must not hold up fence polling for other slots. */
-    private final ExecutorService readbacks = Executors.newFixedThreadPool(MAX_SLOT_COUNT, r -> {
-        Thread thread = new Thread(r, "GPU Vulkan readback");
-        thread.setDaemon(true);
-        return thread;
-    });
-    /** Command recording/submission may take CPU time; keep it off the fence poller. */
+    private final ExecutorService dispatchWorkers;
+    private final ExecutorService readbacks;
     private final ExecutorService submissions = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "GPU Vulkan submit");
         thread.setDaemon(true);
         return thread;
     });
-
+    private final ScheduledExecutorService completion = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread thread = new Thread(r, "GPU Vulkan completion");
+        thread.setDaemon(true);
+        return thread;
+    });
+    /** Dispatch continuations and mapped readbacks scale with active slots. */
+    private ExecutorService createDispatchWorkers(int slotCount) {
+        return Executors.newFixedThreadPool(slotCount, r -> {
+        Thread thread = new Thread(r, "GPU Vulkan dispatch");
+        thread.setDaemon(true);
+        return thread;
+        });
+    }
+    private ExecutorService createReadbacks(int slotCount) {
+        return Executors.newFixedThreadPool(slotCount, r -> {
+        Thread thread = new Thread(r, "GPU Vulkan readback");
+        thread.setDaemon(true);
+        return thread;
+        });
+    }
     VulkanSubmissionRing(GpuDevice device) throws Exception {
-        int requestedSlots = requestedSlotCount(device);
-        slots = new PersistentVulkanNormalNoiseEngine[requestedSlots];
-        readbackScheduled = new AtomicBoolean[requestedSlots];
-        for (int i = 0; i < requestedSlots; i++) readbackScheduled[i] = new AtomicBoolean();
-        int created = 0;
-        try {
-            slots[0] = new PersistentVulkanNormalNoiseEngine(device);
-            created = 1;
-            for (; created < slots.length; created++) slots[created] = new PersistentVulkanNormalNoiseEngine(slots[0]);
-        } catch (Exception failure) {
-            for (int i = 0; i < created; i++) slots[i].close();
-            throw failure;
+        this(List.of(device));
+    }
+
+    /**
+     * Creates one bounded submission ring spanning preferred physical devices.
+     * Each device owns its own Vulkan instance, logical device and queue; a slot
+     * is never shared across physical devices.
+     */
+    VulkanSubmissionRing(List<GpuDevice> devices) throws Exception {
+        if (devices == null || devices.isEmpty()) throw new IllegalArgumentException("no Vulkan devices supplied");
+        List<PersistentVulkanNormalNoiseEngine> createdSlots = new ArrayList<>();
+        List<GpuDevice> createdDevices = new ArrayList<>();
+        Throwable lastFailure = null;
+        int selectedDevices = 0;
+        for (GpuDevice candidate : devices) {
+            if (candidate == null) continue;
+            // Mesa CPU Vulkan remains a valid fallback for CI and systems
+            // without hardware Vulkan; do not mix it into a hardware pool.
+            if (candidate.deviceType() == org.lwjgl.vulkan.VK10.VK_PHYSICAL_DEVICE_TYPE_CPU
+                    && !createdSlots.isEmpty()) continue;
+            if (selectedDevices >= MAX_DEVICE_COUNT) break;
+            List<PersistentVulkanNormalNoiseEngine> deviceSlots = new ArrayList<>();
+            try {
+                PersistentVulkanNormalNoiseEngine primary = new PersistentVulkanNormalNoiseEngine(candidate);
+                deviceSlots.add(primary);
+                int requested = requestedSlotCount(candidate);
+                for (int i = 1; i < requested; i++) {
+                    try {
+                        deviceSlots.add(new PersistentVulkanNormalNoiseEngine(primary));
+                    } catch (Exception slotFailure) {
+                        GpuNoise.LOGGER.warn("Could not create additional Vulkan slot on {}; keeping {} slot(s)",
+                                candidate.name(), deviceSlots.size(), slotFailure);
+                        break;
+                    }
+                }
+                createdSlots.addAll(deviceSlots);
+                for (int i = 0; i < deviceSlots.size(); i++) createdDevices.add(candidate);
+                selectedDevices++;
+                GpuNoise.LOGGER.info("GPU Vulkan device ring: {} slot(s) on {} ({})",
+                        deviceSlots.size(), candidate.name(), candidate.vendorName());
+            } catch (Exception failure) {
+                lastFailure = failure;
+                for (PersistentVulkanNormalNoiseEngine slot : deviceSlots) {
+                    try { slot.close(); } catch (Throwable closeFailure) { failure.addSuppressed(closeFailure); }
+                }
+                GpuNoise.LOGGER.warn("Vulkan runtime initialization failed on {}; trying another device",
+                        candidate.name(), failure);
+            }
         }
-        GpuNoise.LOGGER.info("GPU Vulkan submission slots: {} (requested {}); set gpunoise.submissionSlots=1..{} to tune resource use",
-                created, requestedSlots, MAX_SLOT_COUNT);
+        if (createdSlots.isEmpty()) {
+            if (lastFailure instanceof Exception exception) throw exception;
+            throw new IllegalStateException("no hardware Vulkan device could initialize");
+        }
+        slots = createdSlots.toArray(PersistentVulkanNormalNoiseEngine[]::new);
+        slotDevices = createdDevices.toArray(GpuDevice[]::new);
+        readbackScheduled = new AtomicBoolean[slots.length];
+        for (int i = 0; i < slots.length; i++) readbackScheduled[i] = new AtomicBoolean();
+        dispatchWorkers = createDispatchWorkers(slots.length);
+        readbacks = createReadbacks(slots.length);
+        GpuNoise.LOGGER.info("GPU Vulkan submission pool ready: devices={}, slots={}; set gpunoise.maxDevices and gpunoise.submissionSlots to tune resource use",
+                selectedDevices, slots.length);
         // Fence checks are non-blocking. Polling is frequent only while useful;
         // the executor never waits synchronously for a terrain submission.
         completion.execute(this::pollAndDrain);
@@ -112,9 +171,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
         if (configured != null) {
             try {
                 int value = Integer.parseInt(configured.trim());
-                if (value >= 1 && value <= MAX_SLOT_COUNT) return value;
+                if (value >= 1 && value <= MAX_SLOT_COUNT_PER_DEVICE) return value;
                 GpuNoise.LOGGER.warn("Ignoring gpunoise.submissionSlots={}; expected 1..{}",
-                        configured, MAX_SLOT_COUNT);
+                        configured, MAX_SLOT_COUNT_PER_DEVICE);
             } catch (NumberFormatException invalid) {
                 GpuNoise.LOGGER.warn("Ignoring invalid gpunoise.submissionSlots={}", configured);
             }
@@ -122,7 +181,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
         // Discrete GPUs usually have enough dedicated memory to keep two
         // terrain batches resident. Integrated and software Vulkan devices
         // stay single-slot by default to avoid competing with the CPU/server.
-        return device.deviceType() == org.lwjgl.vulkan.VK10.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 2 : 1;
+        return device.deviceType() == org.lwjgl.vulkan.VK10.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
+                ? MAX_SLOT_COUNT_PER_DEVICE : 1;
     }
 
     private void pollAndDrain() {
@@ -278,6 +338,65 @@ final class VulkanSubmissionRing implements AutoCloseable {
     }
 
     PersistentVulkanNormalNoiseEngine primary() { return slots[0]; }
+    GpuDevice primaryDevice() { return slotDevices[0]; }
+    List<GpuDevice> devices() { return List.copyOf(new LinkedHashSet<>(List.of(slotDevices))); }
+
+    /** Direct startup-parity dispatch pinned to one physical device. */
+    synchronized CompletableFuture<float[]> submitGraphRootsForDevice(GpuDevice target,
+                                                                         GpuDensityGraph graph,
+                                                                         float[] x, float[] y, float[] z) {
+        for (int index = 0; index < slots.length; index++) {
+            PersistentVulkanNormalNoiseEngine slot = slots[index];
+            if (!slotDevices[index].equals(target) || readbackScheduled[index].get()
+                    || slot.hasInFlightWork() || synchronousSlots.contains(slot)) continue;
+            try {
+                return slot.submitGraphRootsAsync(graph, x.clone(), y.clone(), z.clone(), x.length);
+            } catch (Exception failure) {
+                return CompletableFuture.failedFuture(failure);
+            }
+        }
+        return CompletableFuture.failedFuture(new IllegalStateException(
+                "no idle Vulkan slot for startup parity on " + target.name()));
+    }
+
+    /** Direct terrain-grid shader parity dispatch pinned to one physical device. */
+    synchronized CompletableFuture<float[]> submitGraphRootsGridForDevice(GpuDevice target,
+                                                                            GpuDensityGraph graph,
+                                                                            ByteBuffer metadata,
+                                                                            int chunkCount,
+                                                                            int samplesPerChunk) {
+        for (int index = 0; index < slots.length; index++) {
+            PersistentVulkanNormalNoiseEngine slot = slots[index];
+            if (!slotDevices[index].equals(target) || readbackScheduled[index].get()
+                    || slot.hasInFlightWork() || synchronousSlots.contains(slot)) continue;
+            try {
+                return slot.submitGraphRootsGridAsync(graph, snapshot(metadata), chunkCount, samplesPerChunk);
+            } catch (Exception failure) {
+                return CompletableFuture.failedFuture(failure);
+            }
+        }
+        return CompletableFuture.failedFuture(new IllegalStateException(
+                "no idle Vulkan slot for terrain-grid parity on " + target.name()));
+    }
+
+    /** Direct full grid, interpolation and block-root parity dispatch for one device. */
+    synchronized CompletableFuture<GpuTerrainBatchResult> submitTerrainGridForDevice(
+            GpuDevice target, GpuDensityGraph graph, ByteBuffer gridMetadata, int samplesPerChunk,
+            ByteBuffer outputMetadata, int blocksPerChunk, int[] outputRootIndexes) {
+        for (int index = 0; index < slots.length; index++) {
+            PersistentVulkanNormalNoiseEngine slot = slots[index];
+            if (!slotDevices[index].equals(target) || readbackScheduled[index].get()
+                    || slot.hasInFlightWork() || synchronousSlots.contains(slot)) continue;
+            try {
+                return slot.submitGraphGridInterpolated(graph, snapshot(gridMetadata), 1, samplesPerChunk,
+                        snapshot(outputMetadata), blocksPerChunk, outputRootIndexes.clone());
+            } catch (Exception failure) {
+                return CompletableFuture.failedFuture(failure);
+            }
+        }
+        return CompletableFuture.failedFuture(new IllegalStateException(
+                "no idle Vulkan slot for full terrain parity on " + target.name()));
+    }
 
     CompletableFuture<float[]> submitGraphRoots(GpuDensityGraph graph, float[] x, float[] y, float[] z) {
         return submitGraphRoots(graph, x, y, z, x.length);
@@ -306,16 +425,51 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     /** Starts at most one request per free slot, rotating classes to avoid producer starvation. */
     private synchronized void drainGraphRoots() {
-        for (int i = 0; i < slots.length; i++) {
-            PersistentVulkanNormalNoiseEngine slot = slots[i];
-            if (slot == null || readbackScheduled[i].get()
-                    || slot.hasInFlightWork() || synchronousSlots.contains(slot)) continue;
+        for (int dispatched = 0; dispatched < slots.length; dispatched++) {
+            int index = selectLeastLoadedSlot();
+            if (index < 0) return;
+            PersistentVulkanNormalNoiseEngine slot = slots[index];
             for (int attempt = 0; attempt < QUEUE_CLASSES.length; attempt++) {
                 QueueClass requestClass = QUEUE_CLASSES[nextQueueClass];
                 nextQueueClass = (nextQueueClass + 1) % QUEUE_CLASSES.length;
-                if (dispatchNext(slot, requestClass)) break;
+                if (dispatchNext(slot, requestClass)) {
+                    nextSlotIndex = (index + 1) % slots.length;
+                    break;
+                }
+                if (attempt == QUEUE_CLASSES.length - 1) return;
             }
         }
+    }
+
+    /**
+     * Mirrors C2ME OCL's available-permit selection: choose a device with the
+     * largest fraction of idle submission slots, then rotate ties. This keeps
+     * multi-GPU work balanced without pinning requests to a fixed first device.
+     */
+    private int selectLeastLoadedSlot() {
+        int best = -1;
+        double bestFreeRatio = -1.0;
+        for (int offset = 0; offset < slots.length; offset++) {
+            int index = (nextSlotIndex + offset) % slots.length;
+            PersistentVulkanNormalNoiseEngine slot = slots[index];
+            if (readbackScheduled[index].get() || slot.hasInFlightWork() || synchronousSlots.contains(slot)) continue;
+            int deviceSlots = 0;
+            int freeDeviceSlots = 0;
+            GpuDevice candidateDevice = slotDevices[index];
+            for (int other = 0; other < slots.length; other++) {
+                if (!slotDevices[other].equals(candidateDevice)) continue;
+                deviceSlots++;
+                PersistentVulkanNormalNoiseEngine otherSlot = slots[other];
+                if (!readbackScheduled[other].get() && !otherSlot.hasInFlightWork()
+                        && !synchronousSlots.contains(otherSlot)) freeDeviceSlots++;
+            }
+            double freeRatio = deviceSlots == 0 ? 0.0 : (double) freeDeviceSlots / deviceSlots;
+            if (freeRatio > bestFreeRatio) {
+                best = index;
+                bestFreeRatio = freeRatio;
+            }
+        }
+        return best;
     }
 
     /**

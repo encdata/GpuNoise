@@ -452,7 +452,9 @@ public final class GpuDensityExpression {
             requireValue(left); requireValue(right);
             if (!List.of("EQ", "NE", "LT", "LE", "GT", "GE",
                     "DCMPL_EQ", "DCMPL_NE", "DCMPL_LT", "DCMPL_LE", "DCMPL_GT", "DCMPL_GE",
-                    "DCMPG_EQ", "DCMPG_NE", "DCMPG_LT", "DCMPG_LE", "DCMPG_GT", "DCMPG_GE")
+                    "DCMPG_EQ", "DCMPG_NE", "DCMPG_LT", "DCMPG_LE", "DCMPG_GT", "DCMPG_GE",
+                    "FCMPL_EQ", "FCMPL_NE", "FCMPL_LT", "FCMPL_LE", "FCMPL_GT", "FCMPL_GE",
+                    "FCMPG_EQ", "FCMPG_NE", "FCMPG_LT", "FCMPG_LE", "FCMPG_GT", "FCMPG_GE")
                     .contains(operation)) {
                 throw new IllegalArgumentException("Unsupported GPU comparison " + operation);
             }

@@ -96,29 +96,28 @@ public final class GpuNoise {
             LOGGER.info("GPU Noise inactive: no supported server GPU detected; vanilla terrain remains unchanged.");
             return;
         }
-        GpuDevice device = null;
-        for (int index = 0; index < candidates.size(); index++) {
-            GpuDevice candidate = candidates.get(index);
+        java.util.ArrayList<GpuDevice> usableDevices = new java.util.ArrayList<>(candidates.size());
+        for (GpuDevice candidate : candidates) {
             if (!VulkanComputeProbe.verify(candidate)) {
                 LOGGER.warn("Vulkan compute setup failed on {}; trying the next supported device.", candidate.name());
                 continue;
             }
-            if (GpuTerrainRuntime.start(candidate)) {
-                device = candidate;
-                if (index > 0) LOGGER.info("Preferred Vulkan device was unavailable; falling back to {} ({}).",
-                        candidate.name(), candidate.vendorName());
-                break;
-            }
-            LOGGER.warn("GPU Noise runtime setup failed on {}; trying the next supported device.", candidate.name());
+            usableDevices.add(candidate);
         }
-        if (device == null) {
+        if (usableDevices.isEmpty() || !GpuTerrainRuntime.start(usableDevices)) {
             LOGGER.info("GPU Noise inactive: no discovered GPU could create a Vulkan compute device; vanilla terrain remains unchanged.");
             return;
         }
 
+        GpuDevice device = GpuTerrainRuntime.selectedDevice();
+        if (device == null) {
+            LOGGER.error("GPU Vulkan device pool started without a primary device; disabling GPU terrain.");
+            GpuTerrainRuntime.stop();
+            return;
+        }
         warmedDevice = device;
-        LOGGER.info("GPU Noise Vulkan runtime warmed during mod registration; selected {} ({}).",
-                device.name(), device.vendorName());
+        LOGGER.info("GPU Noise Vulkan runtime warmed during mod registration; primary device is {} ({}), {} Vulkan device(s) are available to the async terrain submission pool.",
+                device.name(), device.vendorName(), GpuTerrainRuntime.activeDeviceCount());
     }
 
     private void installWorldGraph(MinecraftServer server) {

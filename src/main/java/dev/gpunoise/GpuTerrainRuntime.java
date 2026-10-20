@@ -67,13 +67,18 @@ public final class GpuTerrainRuntime {
 
     public static synchronized boolean start(GpuDevice selected) {
         if (selected == null) return false;
+        return start(java.util.List.of(selected));
+    }
+
+    /** Starts a shared bounded submission pool over the preferred Vulkan devices. */
+    public static synchronized boolean start(java.util.List<GpuDevice> candidates) {
+        if (candidates == null || candidates.isEmpty()) return false;
         try {
-            submissionRing = VulkanBootstrapThread.call(() -> new VulkanSubmissionRing(selected));
-            // The ring owns the one terrain VkInstance/VkDevice/VkQueue.
-            // Startup parity uses its primary slot instead of allocating a
-            // second complete engine and a second set of persistent buffers.
+            submissionRing = VulkanBootstrapThread.call(() -> new VulkanSubmissionRing(candidates));
+            // Startup parity shares the primary slot; terrain dispatches fan
+            // out across every available engine in the device pool.
             engine = submissionRing.primary();
-            device = selected;
+            device = submissionRing.primaryDevice();
             return true;
         } catch (Exception failure) {
             GpuNoise.LOGGER.error("Persistent Vulkan terrain engine failed to initialize", failure);
@@ -83,6 +88,11 @@ public final class GpuTerrainRuntime {
             device = null;
             return false;
         }
+    }
+    static GpuDevice selectedDevice() { return device; }
+    static int activeDeviceCount() {
+        VulkanSubmissionRing ring = submissionRing;
+        return ring == null ? 0 : ring.devices().size();
     }
     public static boolean active() { return device != null; }
 
@@ -664,10 +674,46 @@ public final class GpuTerrainRuntime {
                 16 / cellWidth + 1, settings.height() / cellHeight + 1,
                 16 / cellWidth + 1, cellWidth, cellHeight);
         try {
-            GpuTerrainBatchResult batch = scheduler.submit(grid).toCompletableFuture()
+            // Exercise the real spatial batch collector once, then pin the
+            // same workload to every device so one passing adapter cannot
+            // hide a mismatch on another adapter in the pool.
+            scheduler.submit(grid).toCompletableFuture()
                     .orTimeout(STARTUP_PARITY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
                     .join();
-            GpuTerrainRootsResult values = batch.corners();
+            VulkanSubmissionRing ring = submissionRing;
+            if (ring == null) throw new IllegalStateException("Vulkan submission pool is not installed");
+            java.nio.ByteBuffer metadata = java.nio.ByteBuffer.allocateDirect(32)
+                    .order(java.nio.ByteOrder.nativeOrder());
+            metadata.putInt(grid.minX()).putInt(grid.minY()).putInt(grid.minZ())
+                    .putInt(grid.gridX()).putInt(grid.gridY()).putInt(grid.gridZ())
+                    .putInt(grid.cellWidth()).putInt(grid.cellHeight()).flip();
+            int[] blockRoots = terrainBlockOutputRootIndexes();
+            boolean includeBlockOutputs = terrainBlockOutputEnabled() && blockRoots.length > 0;
+            int blocksPerChunk = Math.multiplyExact(256, settings.height());
+            java.nio.ByteBuffer outputMetadata = java.nio.ByteBuffer.allocateDirect(
+                    GpuInterpolationBatch.METADATA_BYTES).order(java.nio.ByteOrder.nativeOrder());
+            outputMetadata.putInt(0).putInt(0).putInt(grid.gridX() - 1).putInt(grid.gridY() - 1)
+                    .putInt(grid.gridZ() - 1).putInt(grid.cellWidth()).putInt(grid.cellHeight()).putInt(0).flip();
+            List<GpuTerrainBatchResult> deviceTerrainResults = new ArrayList<>();
+            for (GpuDevice candidate : ring.devices()) {
+                GpuTerrainBatchResult result;
+                if (includeBlockOutputs) {
+                    result = ring.submitTerrainGridForDevice(candidate, graph, metadata, grid.sampleCount(),
+                                    outputMetadata, blocksPerChunk, blockRoots)
+                            .orTimeout(STARTUP_PARITY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+                            .join();
+                } else {
+                    float[] roots = ring.submitGraphRootsGridForDevice(candidate, graph, metadata,
+                                    1, grid.sampleCount())
+                            .orTimeout(STARTUP_PARITY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+                            .join();
+                    int markers = graph.interpolatedMarkerCount();
+                    result = new GpuTerrainBatchResult(new GpuTerrainRootsResult(roots, 0, roots.length,
+                            graph.routerRootCount(), graph.routerRootCount() + markers, markers),
+                            new GpuTerrainBlockResult(new float[0], 0, 0, 1, 16, 0, 16));
+                }
+                deviceTerrainResults.add(result);
+            }
             DensityFunction[] cpu = {
                     router.finalDensity(), router.initialDensityWithoutJaggedness(),
                     router.barrierNoise(), router.fluidLevelFloodednessNoise(),
@@ -687,17 +733,19 @@ public final class GpuTerrainRuntime {
                         int z = grid.minZ() + gz * cellWidth;
                         for (int root = 0; root < cpu.length; root++) {
                             if (!graph.supportsRouterRoot(root)) continue;
-                            float actual = values.valueAt(sample, root);
                             float expected = (float) cpu[root].compute(
                                     new DensityFunction.SinglePointContext(x, y, z));
-                            float error = root == GpuTerrainRoots.FINAL_DENSITY
-                                    ? GpuTerrainParity.decisionError(actual, expected)
-                                    : GpuTerrainParity.error(actual, expected);
-                            if (error > rootWorst[root]) {
-                                rootWorst[root] = error;
-                                worstX[root] = x;
-                                worstY[root] = y;
-                                worstZ[root] = z;
+                            for (GpuTerrainBatchResult deviceResult : deviceTerrainResults) {
+                                float actual = deviceResult.corners().valueAt(sample, root);
+                                float error = root == GpuTerrainRoots.FINAL_DENSITY
+                                        ? GpuTerrainParity.decisionError(actual, expected)
+                                        : GpuTerrainParity.error(actual, expected);
+                                if (error > rootWorst[root]) {
+                                    rootWorst[root] = error;
+                                    worstX[root] = x;
+                                    worstY[root] = y;
+                                    worstZ[root] = z;
+                                }
                             }
                         }
                     }
@@ -714,10 +762,14 @@ public final class GpuTerrainRuntime {
                 }
             }
             verifiedTerrainRootMask &= gridVerifiedRoots;
-            int verifiedBlockRoots = verifyTerrainBlockOutputs(graph, cpu, batch.blocks(), settings);
+            int verifiedBlockRoots = (1 << GpuTerrainRoots.COUNT) - 1;
+            int verifiedInterpolatedRoots = (1 << GpuTerrainRoots.COUNT) - 1;
+            for (GpuTerrainBatchResult deviceResult : deviceTerrainResults) {
+                verifiedBlockRoots &= verifyTerrainBlockOutputs(graph, cpu, deviceResult.blocks(), settings);
+                verifiedInterpolatedRoots &= findInterpolatedBlockOutputRoots(graph, deviceResult.blocks());
+            }
             verifiedTerrainBlockRootMask = verifiedBlockRoots & verifiedTerrainRootMask;
-            interpolatedTerrainBlockRootMask = findInterpolatedBlockOutputRoots(graph, batch.blocks())
-                    & verifiedTerrainRootMask;
+            interpolatedTerrainBlockRootMask = verifiedInterpolatedRoots & verifiedTerrainRootMask;
             terrainBlockOutputVerificationComplete = true;
             GpuNoise.LOGGER.info("GPU terrain grid parity: {} samples, {}/{} roots verified, verifiedMask=0x{}",
                     grid.sampleCount(), Integer.bitCount(verifiedTerrainRootMask), supportedRoots,
@@ -907,9 +959,40 @@ public final class GpuTerrainRuntime {
     private static float[] submitGraphRootsForParity(GpuDensityGraph graph, float[] x, float[] y, float[] z) {
         VulkanSubmissionRing ring = submissionRing;
         if (ring == null) throw new IllegalStateException("Vulkan submission ring is not installed");
-        return ring.submitGraphRoots(graph, x, y, z)
-                .orTimeout(STARTUP_PARITY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
-                .join();
+        float[] reference = null;
+        for (GpuDevice candidate : ring.devices()) {
+            float[] actual = ring.submitGraphRootsForDevice(candidate, graph, x, y, z)
+                    .orTimeout(STARTUP_PARITY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+                    .join();
+            if (reference == null) {
+                reference = actual;
+                continue;
+            }
+            if (actual.length != reference.length) {
+                throw new IllegalStateException("Vulkan devices returned different startup parity output sizes");
+            }
+            float worst = 0.0f;
+            int worstIndex = -1;
+            for (int i = 0; i < actual.length; i++) {
+                int root = i % Math.max(1, graph.routerRootCount());
+                float error = graph.routerRootCount() == GpuTerrainRoots.COUNT
+                        && root == GpuTerrainRoots.FINAL_DENSITY
+                        ? GpuTerrainParity.decisionError(actual[i], reference[i])
+                        : GpuTerrainParity.error(actual[i], reference[i]);
+                if (error > worst) {
+                    worst = error;
+                    worstIndex = i;
+                }
+            }
+            if (worst >= 1.0E-4f) {
+                throw new IllegalStateException("Vulkan device parity mismatch on " + candidate.name()
+                        + ": maxError=" + worst + " at output " + worstIndex);
+            }
+            GpuNoise.LOGGER.info("GPU cross-device graph parity: device={}, samples={}, maxError={}, parity=true",
+                    candidate.name(), actual.length / Math.max(1, graph.routerRootCount()), worst);
+        }
+        if (reference == null) throw new IllegalStateException("Vulkan device pool has no parity target");
+        return reference;
     }
 
     private static void fillVolumeParitySamples(float[] x, float[] y, float[] z) {
