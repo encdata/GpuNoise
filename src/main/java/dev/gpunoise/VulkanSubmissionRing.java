@@ -14,6 +14,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 import java.util.ArrayList;
@@ -38,6 +39,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
     // so low handoff latency does not become constant CPU wakeup overhead.
     private static final long COMPLETION_POLL_MICROS = 250L;
     private static final long IDLE_POLL_MILLIS = 1L;
+    private static final boolean DISPATCH_PROFILE_ENABLED = Boolean.getBoolean("gpunoise.profileTerrain");
     private final PersistentVulkanNormalNoiseEngine[] slots;
     /** Physical-device identity for each independently owned slot. */
     private final GpuDevice[] slotDevices;
@@ -59,6 +61,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
     /** A permit belongs to a request until its result future completes. */
     private final Semaphore submissionPermits = new Semaphore(MAX_PENDING_SUBMISSIONS);
     private final AtomicLong submissionSaturationEvents = new AtomicLong();
+    /** Measures overlapping host-side command preparation, never worldgen throughput. */
+    private final AtomicInteger activeDispatchPreparations = new AtomicInteger();
+    private final AtomicInteger maxConcurrentDispatchPreparations = new AtomicInteger();
     /** Prevents concurrent dispatch workers from selecting the same idle slot. */
     private final Set<PersistentVulkanNormalNoiseEngine> reservedSlots =
             Collections.newSetFromMap(new IdentityHashMap<>());
@@ -339,9 +344,10 @@ final class VulkanSubmissionRing implements AutoCloseable {
         queueClassMaxWaitNanos[classIndex] = Math.max(queueClassMaxWaitNanos[classIndex], waitNanos);
         long samples = ++queueDispatchSamples;
         if ((samples & 127L) == 0L) {
-            GpuNoise.LOGGER.info("GPU Vulkan submission queue: dispatches={}, avgQueueWaitMs={}, maxQueueWaitMs={}, slots={}",
+            GpuNoise.LOGGER.info("GPU Vulkan submission queue: dispatches={}, avgQueueWaitMs={}, maxQueueWaitMs={}, slots={}, maxConcurrentPreparation={}",
                     samples, totalQueueWaitNanos / (double) samples / 1_000_000.0,
-                    maxQueueWaitNanos / 1_000_000.0, slots.length);
+                    maxQueueWaitNanos / 1_000_000.0, slots.length,
+                    maxConcurrentDispatchPreparations.get());
             for (int i = 0; i < QUEUE_CLASSES.length; i++) {
                 long classSamples = queueClassSamples[i];
                 if (classSamples == 0L) continue;
@@ -469,7 +475,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
         for (int attempt = 0; attempt < QUEUE_CLASSES.length; attempt++) {
             QueueClass requestClass = QUEUE_CLASSES[nextQueueClass];
             nextQueueClass = (nextQueueClass + 1) % QUEUE_CLASSES.length;
-            Object request = switch (requestClass) {
+            DispatchRequest request = switch (requestClass) {
                 case GRAPH_ROOTS -> pollLive(pendingGraphRoots);
                 case GRAPH_GRIDS -> pollLive(pendingGraphGrids);
                 case FULL_TERRAIN -> pollLive(pendingTerrainGrids);
@@ -483,52 +489,40 @@ final class VulkanSubmissionRing implements AutoCloseable {
         return null;
     }
 
-    private static <T> T pollLive(BlockingQueue<T> queue) {
+    private static <T extends DispatchRequest> T pollLive(BlockingQueue<T> queue) {
         T request;
         while ((request = queue.poll()) != null) {
-            CompletableFuture<?> future = requestFuture(request);
-            if (future == null || !future.isDone()) return request;
+            if (!request.future().isDone()) return request;
         }
         return null;
     }
 
-    private Object pollAquiferRequest() {
-        Object request = pollLive(pendingAquiferPrefill);
+    private DispatchRequest pollAquiferRequest() {
+        DispatchRequest request = pollLive(pendingAquiferPrefill);
         if (request == null) request = pollLive(pendingAquiferNearest);
         if (request == null) request = pollLive(pendingAquiferSubstance);
         if (request == null) request = pollLive(pendingAquiferFluidStatus);
         return request;
     }
 
-    private static CompletableFuture<?> requestFuture(Object request) {
-        if (request instanceof GraphRootsRequest value) return value.future;
-        if (request instanceof GraphRootsGridRequest value) return value.future;
-        if (request instanceof TerrainGridRequest value) return value.future;
-        if (request instanceof BlockingRequest<?> value) return value.future;
-        if (request instanceof AquiferNearestRequest value) return value.future;
-        if (request instanceof AquiferSubstanceRequest value) return value.future;
-        if (request instanceof AquiferFluidStatusRequest value) return value.future;
-        if (request instanceof AquiferPrefillRequest value) return value.future;
-        throw new IllegalArgumentException("unknown Vulkan ring request type " + request.getClass().getName());
+    private static CompletableFuture<?> requestFuture(DispatchRequest request) {
+        return request.future();
     }
 
-    private static long enqueuedNanos(Object request) {
-        if (request instanceof GraphRootsRequest value) return value.enqueuedNanos;
-        if (request instanceof GraphRootsGridRequest value) return value.enqueuedNanos;
-        if (request instanceof TerrainGridRequest value) return value.enqueuedNanos;
-        if (request instanceof BlockingRequest<?> value) return value.enqueuedNanos;
-        if (request instanceof AquiferNearestRequest value) return value.enqueuedNanos;
-        if (request instanceof AquiferSubstanceRequest value) return value.enqueuedNanos;
-        if (request instanceof AquiferFluidStatusRequest value) return value.enqueuedNanos;
-        if (request instanceof AquiferPrefillRequest value) return value.enqueuedNanos;
-        throw new IllegalArgumentException("unknown Vulkan ring request type " + request.getClass().getName());
+    private static long enqueuedNanos(DispatchRequest request) {
+        return request.enqueuedNanos();
     }
 
     private void executeReservedDispatch(ReservedDispatch dispatch) {
+        boolean profile = DISPATCH_PROFILE_ENABLED && !requestFuture(dispatch.request).isDone();
+        if (profile) {
+            int active = activeDispatchPreparations.incrementAndGet();
+            maxConcurrentDispatchPreparations.accumulateAndGet(active, Math::max);
+        }
         try {
             if (requestFuture(dispatch.request).isDone()) return;
             PersistentVulkanNormalNoiseEngine slot = dispatch.slot;
-            Object request = dispatch.request;
+            DispatchRequest request = dispatch.request;
             switch (dispatch.requestClass) {
                 case GRAPH_ROOTS -> {
                     GraphRootsRequest value = (GraphRootsRequest) request;
@@ -553,6 +547,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
         } catch (Throwable failure) {
             failDispatch(dispatch, failure);
         } finally {
+            if (profile) activeDispatchPreparations.decrementAndGet();
             releaseReservedSlot(dispatch.slot);
         }
     }
@@ -564,7 +559,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
         request.future.complete(request.operation.call(slot));
     }
 
-    private void executeAquiferReserved(PersistentVulkanNormalNoiseEngine slot, Object request) {
+    private void executeAquiferReserved(PersistentVulkanNormalNoiseEngine slot, DispatchRequest request) {
         if (request instanceof AquiferPrefillRequest value) {
             dispatchAquiferAsync(slot, "combined aquifer prefill", value.future,
                     engine -> engine.submitAquiferPrefillAsync(value.nearestRecords, value.nearestCount,
@@ -682,8 +677,15 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     private enum QueueClass { GRAPH_ROOTS, GRAPH_GRIDS, FULL_TERRAIN, BLOCKING, AQUIFER }
 
+    private sealed interface DispatchRequest permits GraphRootsRequest, GraphRootsGridRequest,
+            TerrainGridRequest, BlockingRequest, AquiferNearestRequest, AquiferSubstanceRequest,
+            AquiferFluidStatusRequest, AquiferPrefillRequest {
+        CompletableFuture<?> future();
+        long enqueuedNanos();
+    }
+
     private record ReservedDispatch(PersistentVulkanNormalNoiseEngine slot,
-                                    QueueClass requestClass, Object request) {}
+                                    QueueClass requestClass, DispatchRequest request) {}
 
     private <T> void dispatchAquiferAsync(PersistentVulkanNormalNoiseEngine slot, String description,
                                           CompletableFuture<T> result,
@@ -934,28 +936,32 @@ final class VulkanSubmissionRing implements AutoCloseable {
     }
 
     private record GraphRootsRequest(GpuDensityGraph graph, float[] x, float[] y, float[] z,
-                                     int sampleCount, CompletableFuture<float[]> future, long enqueuedNanos) {}
+                                     int sampleCount, CompletableFuture<float[]> future, long enqueuedNanos)
+            implements DispatchRequest {}
     private record GraphRootsGridRequest(GpuDensityGraph graph, ByteBuffer metadata, int chunkCount, int samplesPerChunk,
-                                         CompletableFuture<float[]> future, long enqueuedNanos) {}
+                                         CompletableFuture<float[]> future, long enqueuedNanos)
+            implements DispatchRequest {}
     private record TerrainGridRequest(GpuDensityGraph graph, ByteBuffer gridMetadata, int chunkCount,
                                       int samplesPerChunk, ByteBuffer outputMetadata, int blocksPerChunk,
                                       int[] outputRootIndexes, CompletableFuture<GpuTerrainBatchResult> future,
-                                      long enqueuedNanos) {}
+                                      long enqueuedNanos) implements DispatchRequest {}
     private record AquiferNearestRequest(ByteBuffer records, int count, CompletableFuture<int[]> future,
-                                        long enqueuedNanos) {}
+                                        long enqueuedNanos) implements DispatchRequest {}
     private record AquiferSubstanceRequest(ByteBuffer records, int count, CompletableFuture<int[]> future,
-                                           long enqueuedNanos) {}
+                                           long enqueuedNanos) implements DispatchRequest {}
     private record AquiferFluidStatusRequest(ByteBuffer records, int count, CompletableFuture<int[]> future,
-                                             long enqueuedNanos) {}
+                                             long enqueuedNanos) implements DispatchRequest {}
     private record AquiferPrefillRequest(ByteBuffer nearestRecords, int nearestCount,
                                          ByteBuffer statusRecords, int statusCount,
-                                         CompletableFuture<GpuAquiferPrefillResult> future, long enqueuedNanos) {}
+                                         CompletableFuture<GpuAquiferPrefillResult> future, long enqueuedNanos)
+            implements DispatchRequest {}
     @FunctionalInterface
     private interface SlotOperation<T> {
         T call(PersistentVulkanNormalNoiseEngine slot) throws Exception;
     }
     private record BlockingRequest<T>(String description, SlotOperation<T> operation,
-                                      CompletableFuture<T> future, long enqueuedNanos) {}
+                                      CompletableFuture<T> future, long enqueuedNanos)
+            implements DispatchRequest {}
     private record ParityRequest<T>(GpuDevice target, String description,
                                     SlotOperation<CompletableFuture<T>> operation,
                                     CompletableFuture<T> future) {}
