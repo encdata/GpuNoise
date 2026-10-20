@@ -2,6 +2,7 @@ package dev.gpunoise;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -883,9 +884,14 @@ public final class VulkanCiSmoke {
                             GpuAquiferSubstance.LAVA, GpuAquiferSubstance.WATER,
                             0b101101, 0, false, true, false, 0)
             };
-            GpuAquiferSubstance.BatchWriter substanceWriter = new GpuAquiferSubstance.BatchWriter(3);
+            GpuAquiferSubstance.BatchWriter substanceWriter = new GpuAquiferSubstance.BatchWriter(3, 2);
             substanceWriter.addPositiveDensity(0.25, 7, false);
             substanceWriter.addDirectGlobalFluid(-1.0, -4, true);
+            List<ByteBuffer> stagedSubstanceBatches = new ArrayList<>(substanceWriter.drain());
+            if (stagedSubstanceBatches.size() != 1
+                    || stagedSubstanceBatches.get(0).remaining() != 2 * GpuAquiferSubstance.RECORD_BYTES) {
+                throw new IllegalStateException("aquifer substance drain did not publish the completed rows");
+            }
             GpuAquiferSubstance.Input aquiferSubstance = stagedSubstances[2];
             substanceWriter.addAquifer(aquiferSubstance.density(), aquiferSubstance.barrier(),
                     aquiferSubstance.y(), aquiferSubstance.level0(), aquiferSubstance.level1(),
@@ -896,7 +902,13 @@ public final class VulkanCiSmoke {
                     aquiferSubstance.belowIsLava(), aquiferSubstance.c2meAquifer());
             ByteBuffer stagedRecords = ByteBuffer.allocateDirect(3 * GpuAquiferSubstance.RECORD_BYTES)
                     .order(java.nio.ByteOrder.nativeOrder());
-            for (ByteBuffer batch : substanceWriter.finish()) stagedRecords.put(batch);
+            List<ByteBuffer> trailingSubstanceBatches = substanceWriter.finish();
+            if (trailingSubstanceBatches.size() != 1
+                    || trailingSubstanceBatches.get(0).remaining() != GpuAquiferSubstance.RECORD_BYTES) {
+                throw new IllegalStateException("aquifer substance writer did not accept rows after drain");
+            }
+            stagedSubstanceBatches.addAll(trailingSubstanceBatches);
+            for (ByteBuffer batch : stagedSubstanceBatches) stagedRecords.put(batch);
             stagedRecords.flip();
             if (!stagedRecords.equals(GpuAquiferSubstance.pack(stagedSubstances))) {
                 throw new IllegalStateException("streamed aquifer substance records changed layout or values");

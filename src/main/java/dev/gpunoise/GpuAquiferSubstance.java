@@ -92,14 +92,22 @@ public final class GpuAquiferSubstance {
     /** Incremental direct-buffer staging for chunk-sized aquifer decisions. */
     public static final class BatchWriter {
         private final int expectedRows;
+        private final int rowsPerBuffer;
         private final List<ByteBuffer> completed = new ArrayList<>();
         private ByteBuffer current;
         private int size;
         private boolean finished;
 
         public BatchWriter(int expectedRows) {
+            this(expectedRows, MAX_QUERIES);
+        }
+
+        public BatchWriter(int expectedRows, int rowsPerBuffer) {
             if (expectedRows < 0) throw new IllegalArgumentException("negative aquifer batch capacity");
+            if (rowsPerBuffer <= 0 || rowsPerBuffer > MAX_QUERIES)
+                throw new IllegalArgumentException("invalid aquifer rows per buffer");
             this.expectedRows = expectedRows;
+            this.rowsPerBuffer = rowsPerBuffer;
         }
 
         public int size() { return size; }
@@ -135,13 +143,22 @@ public final class GpuAquiferSubstance {
 
         public List<ByteBuffer> finish() {
             if (finished) throw new IllegalStateException("aquifer batch writer is already finished");
+            List<ByteBuffer> batches = drain();
             finished = true;
+            return batches;
+        }
+
+        /** Publishes all staged rows so far while keeping the writer appendable. */
+        public List<ByteBuffer> drain() {
+            if (finished) throw new IllegalStateException("aquifer batch writer is already finished");
             if (current != null && current.position() > 0) {
                 current.flip();
                 completed.add(current);
                 current = null;
             }
-            return List.copyOf(completed);
+            List<ByteBuffer> batches = List.copyOf(completed);
+            completed.clear();
+            return batches;
         }
 
         private void write(double density, double barrier, int y,
@@ -157,7 +174,7 @@ public final class GpuAquiferSubstance {
                     current.flip();
                     completed.add(current);
                 }
-                current = allocateBatch(Math.min(expectedRows - size, MAX_QUERIES));
+                current = allocateBatch(Math.min(expectedRows - size, rowsPerBuffer));
             }
             int flags = (directGlobalFluid ? 1 : 0) | (belowIsLava ? 2 : 0)
                     | (c2meAquifer ? 4 : 0);
