@@ -363,6 +363,45 @@ only after readback. The profiler reports actual dispatch sizes and how many
 chunk requests were joined, so dedicated-server traces can show whether region
 concurrency is feeding the device often enough to make this useful.
 
+### Aquifer CPU/GPU synchronization boundary
+
+The C2ME aquifer path currently has two GPU submissions per chunk decision
+batch. The first Vulkan command buffer dispatches nearest-center selection and
+fluid-status prefill, then performs one final readback. Java maps statuses to
+Minecraft block states, resolves center references, and packs substance rows;
+the second Vulkan command buffer evaluates those rows and reads back compact
+decisions. The standalone vanilla aquifer path skips fluid-status prefill but
+still reads nearest-center rows before Java packs the substance inputs. This
+means input staging and Minecraft state resolution, rather than shader
+execution alone, determine whether the stages can be fused.
+
+The next synchronization reduction is a GPU-resident decision chain: upload
+query metadata, center/status inputs, and chunk-local state mappings once;
+dispatch nearest-center ranking; make its output visible to subsequent compute
+stages with a shader-write to shader-read barrier; resolve center statuses and
+evaluate substance decisions without mapping intermediate buffers to Java;
+then read back only compact final decisions and any rows explicitly marked for
+vanilla fallback. The status contract must carry exact block-state IDs as well
+as fluid kinds and levels, because `OTHER_FLUID` cannot preserve custom fluid
+identity or status equality. Cached statuses and shared-center indices must
+refer to stable rows in the same upload. Any unsupported fluid picker,
+uncertain float boundary, state-palette overflow, or failed parity check must
+mark only affected rows for exact vanilla evaluation.
+
+The fluid-status ABI now includes exact default, neighbor, and lava state IDs
+in both its input records and five-word output rows. Java cache reconstruction
+uses the returned state ID, and the Mesa smoke fixture includes a custom state
+ID so the new field is parity-checked before the decision-chain shader consumes
+it.
+
+Do not enable this chain until the CPU reference and Lavapipe fixtures compare
+all four ranked centers, selected states, status-equality cases, fluid update
+flags, custom-fluid IDs, palette overflow, and fallback rows. The current
+two-submission path remains the correctness reference while the chained ABI
+and shader are introduced. This work reduces one intermediate device-to-host
+readback and one host-to-device upload; it does not change Minecraft's CPU
+chunk writer.
+
 The terrain roots batcher now reuses a bounded pool of direct metadata buffers
 until each asynchronous Vulkan submission completes. The scheduler uses the
 same 4x4 aligned chunk regions as C2ME-OCL, with a 2x2 mode and bounded

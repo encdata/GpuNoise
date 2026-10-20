@@ -10,10 +10,12 @@ public final class GpuAquiferFluidStatus {
     public static final int SURFACE_SAMPLES = 13;
     /** One global fluid sample per C2ME OCL surface offset. */
     public static final int GLOBAL_LEVEL_SAMPLES = SURFACE_SAMPLES;
-    public static final int RECORD_BYTES = 192;
+    /** Header + scalar roots + surface/level/kind/state arrays, std430 stride 4. */
+    public static final int RECORD_BYTES = 248;
     /** Upper bound for a single C2ME chunk's unique center neighborhood. */
     public static final int MAX_PREFILL_CENTERS = 8192;
-    public static final int OUTPUT_INTS = 3;
+    /** Level, selected source, flags, exact fluid block-state ID, and broad kind. */
+    public static final int OUTPUT_INTS = 5;
     public static final int MAX_QUERIES = PersistentVulkanNormalNoiseEngine.CAPACITY;
     public static final int AIR = 0;
     public static final int WATER = 1;
@@ -53,18 +55,27 @@ public final class GpuAquiferFluidStatus {
         public void add(int y, int defaultLevel, int defaultKind,
                         float floodedness, float spread, float lava, float erosion, float depth,
                         float[] surfaceHeights, int[] globalLevels, int[] globalKinds) {
+            add(y, defaultLevel, defaultKind, 0, 0, floodedness, spread, lava, erosion, depth,
+                    surfaceHeights, globalLevels, globalKinds, new int[GLOBAL_LEVEL_SAMPLES]);
+        }
+
+        public void add(int y, int defaultLevel, int defaultKind, int defaultStateId, int lavaStateId,
+                        float floodedness, float spread, float lava, float erosion, float depth,
+                        float[] surfaceHeights, int[] globalLevels, int[] globalKinds, int[] globalStateIds) {
             if (finished) throw new IllegalStateException("aquifer fluid-status writer is finished");
             if (rows >= expectedRows) throw new IllegalStateException("aquifer fluid-status batch overflow");
             if (surfaceHeights == null || surfaceHeights.length != SURFACE_SAMPLES
                     || globalLevels == null || globalLevels.length != GLOBAL_LEVEL_SAMPLES
-                    || globalKinds == null || globalKinds.length != GLOBAL_LEVEL_SAMPLES)
+                    || globalKinds == null || globalKinds.length != GLOBAL_LEVEL_SAMPLES
+                    || globalStateIds == null || globalStateIds.length != GLOBAL_LEVEL_SAMPLES)
                 throw new IllegalArgumentException("invalid aquifer fluid-status sample arrays");
-            packed.putInt(y).putInt(defaultLevel).putInt(defaultKind).putInt(0)
+            packed.putInt(y).putInt(defaultLevel).putInt(defaultKind).putInt(defaultStateId).putInt(lavaStateId)
                     .putFloat(floodedness).putFloat(spread).putFloat(lava)
                     .putFloat(erosion).putFloat(depth);
             for (float value : surfaceHeights) packed.putFloat(value);
             for (int value : globalLevels) packed.putInt(value);
             for (int value : globalKinds) packed.putInt(value);
+            for (int value : globalStateIds) packed.putInt(value);
             rows++;
         }
 
@@ -105,23 +116,26 @@ public final class GpuAquiferFluidStatus {
         if (input == null) throw new NullPointerException("aquifer fluid-status input");
         if (input.surfaceHeights == null || input.surfaceHeights.length != SURFACE_SAMPLES
                 || input.globalLevels == null || input.globalLevels.length != GLOBAL_LEVEL_SAMPLES
-                || input.globalKinds == null || input.globalKinds.length != GLOBAL_LEVEL_SAMPLES)
+                || input.globalKinds == null || input.globalKinds.length != GLOBAL_LEVEL_SAMPLES
+                || input.globalStateIds == null || input.globalStateIds.length != GLOBAL_LEVEL_SAMPLES)
             throw new IllegalArgumentException("invalid aquifer fluid-status sample arrays");
-        packed.putInt(input.y).putInt(input.defaultLevel).putInt(input.defaultKind).putInt(0)
+        packed.putInt(input.y).putInt(input.defaultLevel).putInt(input.defaultKind)
+                .putInt(input.defaultStateId).putInt(input.lavaStateId)
                 .putFloat(input.floodedness).putFloat(input.spread).putFloat(input.lava)
                 .putFloat(input.erosion).putFloat(input.depth);
         for (float value : input.surfaceHeights) packed.putFloat(value);
         for (int value : input.globalLevels) packed.putInt(value);
         for (int value : input.globalKinds) packed.putInt(value);
+        for (int value : input.globalStateIds) packed.putInt(value);
     }
 
-    /** Returns [fluid level, global-status source slot, flags]. */
+    /** Returns [fluid level, global-status source slot, flags, state ID, kind]. */
     public static int[] evaluate(Input input) {
-        if (!finite(input)) return result(0, 0, FLAG_CPU_FALLBACK);
+        if (!finite(input)) return result(0, 0, FLAG_CPU_FALLBACK, 0, OTHER_FLUID);
         if (Math.abs(input.erosion + 0.225f) <= DECISION_EPSILON
                 || Math.abs(input.depth - 0.9f) <= DECISION_EPSILON
                 || Math.abs(Math.abs(input.lava) - 0.3f) <= DECISION_EPSILON)
-            return result(0, 0, FLAG_CPU_FALLBACK);
+            return result(0, 0, FLAG_CPU_FALLBACK, 0, OTHER_FLUID);
 
         int surfaceEstimate = Integer.MAX_VALUE;
         int maxY = input.y + 12;
@@ -131,13 +145,15 @@ public final class GpuAquiferFluidStatus {
             int surface = (int) Math.floor(input.surfaceHeights[neighbor]);
             int o = surface + 8;
             boolean center = neighbor == 0;
-            if (center && minY > o) return result(input.defaultLevel, 0, 0);
+            if (center && minY > o) return result(input.defaultLevel, 0, 0,
+                    input.defaultStateId, input.defaultKind);
             boolean aboveSurface = maxY > o;
             if (aboveSurface || center) {
                 int kindAtSurface = input.globalKinds[neighbor];
                 if (kindAtSurface != AIR) {
                     if (center) centerHasFluid = true;
-                    if (aboveSurface) return result(input.globalLevels[neighbor], neighbor + 1, 0);
+                    if (aboveSurface) return result(input.globalLevels[neighbor], neighbor + 1, 0,
+                            input.globalStateIds[neighbor], input.globalKinds[neighbor]);
                 }
             }
             surfaceEstimate = Math.min(surfaceEstimate, surface);
@@ -157,7 +173,7 @@ public final class GpuAquiferFluidStatus {
         }
         if (Math.abs(density) <= DECISION_EPSILON
                 || Math.abs(levelDensity) <= DECISION_EPSILON)
-            return result(0, 0, FLAG_CPU_FALLBACK);
+            return result(0, 0, FLAG_CPU_FALLBACK, 0, OTHER_FLUID);
 
         int fluidLevel;
         if (levelDensity > 0.0f) {
@@ -166,7 +182,7 @@ public final class GpuAquiferFluidStatus {
             double scaledSpread = input.spread * 10.0;
             double multipleBoundary = scaledSpread / 3.0;
             if (Math.abs(multipleBoundary - Math.rint(multipleBoundary)) <= DECISION_EPSILON)
-                return result(0, 0, FLAG_CPU_FALLBACK);
+                return result(0, 0, FLAG_CPU_FALLBACK, 0, OTHER_FLUID);
             int base = Math.floorDiv(input.y, 40) * 40 + 20;
             int spreadOffset = (int) Math.floor(multipleBoundary) * 3;
             fluidLevel = Math.min(surfaceEstimate, base + spreadOffset);
@@ -176,15 +192,16 @@ public final class GpuAquiferFluidStatus {
 
         if (fluidLevel <= -10 && fluidLevel != LAVA_DISABLED_LEVEL
                 && input.defaultKind != LAVA && Math.abs(input.lava) > 0.3f) {
-            return result(fluidLevel, 0, FLAG_LAVA_OVERRIDE);
+            return result(fluidLevel, 0, FLAG_LAVA_OVERRIDE, input.lavaStateId, LAVA);
         }
-        return result(fluidLevel, 0, 0);
+        return result(fluidLevel, 0, 0, input.defaultStateId, input.defaultKind);
     }
 
     private static boolean finite(Input input) {
         if (input.surfaceHeights == null || input.surfaceHeights.length != SURFACE_SAMPLES
                 || input.globalLevels == null || input.globalLevels.length != GLOBAL_LEVEL_SAMPLES
                 || input.globalKinds == null || input.globalKinds.length != GLOBAL_LEVEL_SAMPLES
+                || input.globalStateIds == null || input.globalStateIds.length != GLOBAL_LEVEL_SAMPLES
                 || !Float.isFinite(input.floodedness) || !Float.isFinite(input.spread)
                 || !Float.isFinite(input.lava) || !Float.isFinite(input.erosion)
                 || !Float.isFinite(input.depth)) return false;
@@ -196,11 +213,19 @@ public final class GpuAquiferFluidStatus {
         return Math.max(min, Math.min(max, value));
     }
 
-    private static int[] result(int level, int source, int flags) {
-        return new int[]{level, source, flags};
+    private static int[] result(int level, int source, int flags, int stateId, int kind) {
+        return new int[]{level, source, flags, stateId, kind};
     }
 
-    public record Input(int y, int defaultLevel, int defaultKind,
+    public record Input(int y, int defaultLevel, int defaultKind, int defaultStateId, int lavaStateId,
                         float floodedness, float spread, float lava, float erosion, float depth,
-                        float[] surfaceHeights, int[] globalLevels, int[] globalKinds) {}
+                        float[] surfaceHeights, int[] globalLevels, int[] globalKinds, int[] globalStateIds) {
+        /** Compatibility constructor for shader fixtures that only test levels and broad kinds. */
+        public Input(int y, int defaultLevel, int defaultKind,
+                     float floodedness, float spread, float lava, float erosion, float depth,
+                     float[] surfaceHeights, int[] globalLevels, int[] globalKinds) {
+            this(y, defaultLevel, defaultKind, 0, 0, floodedness, spread, lava, erosion, depth,
+                    surfaceHeights, globalLevels, globalKinds, new int[GLOBAL_LEVEL_SAMPLES]);
+        }
+    }
 }

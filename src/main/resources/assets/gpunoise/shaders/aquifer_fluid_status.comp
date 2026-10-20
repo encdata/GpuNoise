@@ -1,13 +1,14 @@
 #version 450
 layout(local_size_x = 64) in;
 
-// Mirrors the C2ME OCL aquifer prefill record. The first 16 bytes form a
-// stable scalar header; all following scalar arrays have std430 stride 4.
+// Aquifer status staging keeps exact state IDs alongside broad fluid kinds so
+// a later GPU substance stage can consume these rows without a Java readback.
 struct InputRecord {
     int y;
     int defaultLevel;
     uint defaultKind;
-    uint reserved;
+    int defaultStateId;
+    int lavaStateId;
     float floodedness;
     float spread;
     float lava;
@@ -16,6 +17,7 @@ struct InputRecord {
     float surfaceHeights[13];
     int globalLevels[13];
     uint globalKinds[13];
+    int globalStateIds[13];
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer Inputs { InputRecord items[]; };
@@ -33,14 +35,16 @@ float clampValue(float value, float low, float high) {
     return max(low, min(high, value));
 }
 
-void emit(uint row, int level, int source, uint flags) {
-    uint base = outputBaseInt + row * 3u;
+void emit(uint row, int level, int source, uint flags, int stateId, uint kind) {
+    uint base = outputBaseInt + row * 5u;
     values[base] = level;
     values[base + 1u] = source;
     values[base + 2u] = int(flags);
+    values[base + 3u] = stateId;
+    values[base + 4u] = int(kind);
 }
 
-void fallback(uint row) { emit(row, 0, 0, FLAG_CPU_FALLBACK); }
+void fallback(uint row) { emit(row, 0, 0, FLAG_CPU_FALLBACK, 0, 3u); }
 
 void main() {
     uint row = gl_GlobalInvocationID.x;
@@ -74,7 +78,7 @@ void main() {
         int levelY = surface + 8;
         bool center = neighbor == 0;
         if (center && minY > levelY) {
-            emit(row, r.defaultLevel, 0, 0u);
+            emit(row, r.defaultLevel, 0, 0u, r.defaultStateId, r.defaultKind);
             return;
         }
         bool aboveSurface = maxY > levelY;
@@ -82,7 +86,8 @@ void main() {
             if (r.globalKinds[neighbor] != AIR) {
                 if (center) centerHasFluid = true;
                 if (aboveSurface) {
-                    emit(row, r.globalLevels[neighbor], neighbor + 1, 0u);
+                    emit(row, r.globalLevels[neighbor], neighbor + 1, 0u,
+                            r.globalStateIds[neighbor], r.globalKinds[neighbor]);
                     return;
                 }
             }
@@ -127,8 +132,8 @@ void main() {
 
     if (fluidLevel <= -10 && fluidLevel != LAVA_DISABLED_LEVEL
             && r.defaultKind != LAVA && abs(r.lava) > 0.3) {
-        emit(row, fluidLevel, 0, FLAG_LAVA_OVERRIDE);
+        emit(row, fluidLevel, 0, FLAG_LAVA_OVERRIDE, r.lavaStateId, LAVA);
         return;
     }
-    emit(row, fluidLevel, 0, 0u);
+    emit(row, fluidLevel, 0, 0u, r.defaultStateId, r.defaultKind);
 }

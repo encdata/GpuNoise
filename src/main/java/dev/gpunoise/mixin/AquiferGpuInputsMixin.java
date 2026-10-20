@@ -781,20 +781,20 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             throw failure;
         }
         GpuAquiferFluidStatus.BatchWriter statusWriter = null;
-        BlockState[] sampledFluidTypes;
         try {
             statusWriter = centers.isEmpty()
                     ? null : new GpuAquiferFluidStatus.BatchWriter(centers.size());
-            sampledFluidTypes = new BlockState[Math.multiplyExact(
-                    centers.size(), GpuAquiferFluidStatus.SURFACE_SAMPLES)];
             float[] surfaces = new float[GpuAquiferFluidStatus.SURFACE_SAMPLES];
             int[] globalLevels = new int[GpuAquiferFluidStatus.GLOBAL_LEVEL_SAMPLES];
             int[] globalKinds = new int[GpuAquiferFluidStatus.GLOBAL_LEVEL_SAMPLES];
+            int[] globalStateIds = new int[GpuAquiferFluidStatus.GLOBAL_LEVEL_SAMPLES];
             for (int index = 0; index < centers.size(); index++) {
                 int[] center = centers.get(index);
                 int centerX = center[0], centerY = center[1], centerZ = center[2];
                 Aquifer.FluidStatus defaultStatus = gpunoise$sampleGlobalFluidLevel(
                         fluidLevelSampler, cache, centerY);
+                BlockState defaultFluidType =
+                        ((AquiferFluidStatusAccessor) (Object) defaultStatus).gpunoise$fluidType();
                 for (int sample = 0; sample < offsets.length; sample++) {
                     int surfaceX = Math.floorDiv(centerX + (offsets[sample][0] << 4), 4) * 4;
                     int surfaceZ = Math.floorDiv(centerZ + (offsets[sample][1] << 4), 4) * 4;
@@ -803,9 +803,10 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     int surfaceY = (int) Math.floor(surfaces[sample]) + 8;
                     Aquifer.FluidStatus sampled = gpunoise$sampleGlobalFluidLevel(
                             fluidLevelSampler, cache, surfaceY);
-                    sampledFluidTypes[index * GpuAquiferFluidStatus.SURFACE_SAMPLES + sample] =
-                            ((AquiferFluidStatusAccessor) (Object) sampled).gpunoise$fluidType();
                     globalLevels[sample] = gpunoise$fluidLevel(sampled);
+                    BlockState sampledType =
+                            ((AquiferFluidStatusAccessor) (Object) sampled).gpunoise$fluidType();
+                    globalStateIds[sample] = Block.getId(sampledType);
                     BlockState sampledState = sampled.at(surfaceY);
                     globalKinds[sample] = sampledState.isAir() ? GpuAquiferFluidStatus.AIR
                             : sampledState.is(Blocks.WATER) ? GpuAquiferFluidStatus.WATER
@@ -817,14 +818,14 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 GpuWorldgenDependency.Coordinate lava = GpuWorldgenDependency.lavaCoordinate(
                         centerX, centerY, centerZ);
                 statusWriter.add(centerY,
-                        gpunoise$fluidLevel(defaultStatus), gpunoise$fluidKind(
-                        ((AquiferFluidStatusAccessor) (Object) defaultStatus).gpunoise$fluidType()),
+                        gpunoise$fluidLevel(defaultStatus), gpunoise$fluidKind(defaultFluidType),
+                        Block.getId(defaultFluidType), Block.getId(Blocks.LAVA.defaultBlockState()),
                         (float) cache.aquiferFloodedness(centerX, centerY, centerZ),
                         (float) cache.aquiferSpread(spread.x(), spread.y(), spread.z()),
                         (float) cache.aquiferLava(lava.x(), lava.y(), lava.z()),
                         (float) cache.aquiferErosion(centerX, centerY, centerZ),
                         (float) cache.aquiferDepth(centerX, centerY, centerZ),
-                        surfaces, globalLevels, globalKinds);
+                        surfaces, globalLevels, globalKinds, globalStateIds);
             }
         } catch (RuntimeException | Error failure) {
             if (statusWriter != null) statusWriter.close();
@@ -863,21 +864,28 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 int level = outputs[base];
                 int source = outputs[base + 1];
                 int flags = outputs[base + 2];
+                int fluidStateId = outputs[base + 3];
                 Aquifer.FluidStatus status;
                 if ((flags & GpuAquiferFluidStatus.FLAG_CPU_FALLBACK) != 0
                         || source < 0 || source > GpuAquiferFluidStatus.SURFACE_SAMPLES) {
                     status = gpunoise$getAquiferStatus(key);
                     javaFallbacks++;
-                } else if ((flags & GpuAquiferFluidStatus.FLAG_LAVA_OVERRIDE) != 0) {
-                    status = new Aquifer.FluidStatus(level, Blocks.LAVA.defaultBlockState());
                 } else if (source == 0) {
-                    Aquifer.FluidStatus defaultStatus = gpunoise$sampleGlobalFluidLevel(
-                            fluidLevelSampler, cache, center[1]);
-                    status = new Aquifer.FluidStatus(level,
-                            ((AquiferFluidStatusAccessor) (Object) defaultStatus).gpunoise$fluidType());
+                    BlockState fluidType = Block.stateById(fluidStateId);
+                    if (fluidType == null) {
+                        status = gpunoise$getAquiferStatus(key);
+                        javaFallbacks++;
+                    } else {
+                        status = new Aquifer.FluidStatus(level, fluidType);
+                    }
                 } else {
-                    status = new Aquifer.FluidStatus(level,
-                            sampledFluidTypes[index * GpuAquiferFluidStatus.SURFACE_SAMPLES + source - 1]);
+                    BlockState fluidType = Block.stateById(fluidStateId);
+                    if (fluidType == null) {
+                        status = gpunoise$getAquiferStatus(key);
+                        javaFallbacks++;
+                    } else {
+                        status = new Aquifer.FluidStatus(level, fluidType);
+                    }
                 }
                 statusCache.put(key, status);
                 owners.get(index).complete(status);

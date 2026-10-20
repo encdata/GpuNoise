@@ -988,10 +988,12 @@ public final class VulkanCiSmoke {
             GpuAquiferFluidStatus.BatchWriter fluidStatusWriter =
                     new GpuAquiferFluidStatus.BatchWriter(1);
             fluidStatusWriter.add(fluidStatusCase.y(), fluidStatusCase.defaultLevel(),
-                    fluidStatusCase.defaultKind(), fluidStatusCase.floodedness(),
+                    fluidStatusCase.defaultKind(), fluidStatusCase.defaultStateId(),
+                    fluidStatusCase.lavaStateId(), fluidStatusCase.floodedness(),
                     fluidStatusCase.spread(), fluidStatusCase.lava(), fluidStatusCase.erosion(),
                     fluidStatusCase.depth(), fluidStatusCase.surfaceHeights(),
-                    fluidStatusCase.globalLevels(), fluidStatusCase.globalKinds());
+                    fluidStatusCase.globalLevels(), fluidStatusCase.globalKinds(),
+                    fluidStatusCase.globalStateIds());
             ByteBuffer streamedFluidStatus = fluidStatusWriter.finish();
             if (!streamedFluidStatus.equals(GpuAquiferFluidStatus.pack(
                     new GpuAquiferFluidStatus.Input[]{fluidStatusCase}))) {
@@ -1011,6 +1013,11 @@ public final class VulkanCiSmoke {
                                 + ", actual=" + fluidStatusResults[base + field]);
                     }
                 }
+            }
+            if (fluidStatusResults[3] != 0x12345
+                    || fluidStatusResults[GpuAquiferFluidStatus.OUTPUT_INTS + 3] != 0x54321
+                    || fluidStatusResults[2 * GpuAquiferFluidStatus.OUTPUT_INTS + 3] != 10) {
+                throw new IllegalStateException("fluid-status shader did not preserve exact custom/default/lava state IDs");
             }
             int[][] oneNearestQuery = {{0, 0, 0}};
             int[][] oneNearestCenters = new int[GpuAquiferNearestThree.CANDIDATES][3];
@@ -1666,26 +1673,35 @@ public final class VulkanCiSmoke {
         int[] dryKinds = new int[GpuAquiferFluidStatus.GLOBAL_LEVEL_SAMPLES];
         int[] neighborLevels = dryLevels.clone();
         int[] neighborKinds = dryKinds.clone();
+        int[] neighborStateIds = new int[GpuAquiferFluidStatus.GLOBAL_LEVEL_SAMPLES];
         neighborLevels[0] = 5;
         neighborKinds[0] = GpuAquiferFluidStatus.WATER;
+        neighborStateIds[0] = 0x12345;
         GpuAquiferFluidStatus.Input neighborStatus = new GpuAquiferFluidStatus.Input(
-                0, 63, GpuAquiferFluidStatus.WATER, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-                drySurface.clone(), neighborLevels, neighborKinds);
+                0, 63, GpuAquiferFluidStatus.WATER, 0x54321, 10,
+                0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                drySurface.clone(), neighborLevels, neighborKinds, neighborStateIds);
         float[] highSurface = new float[GpuAquiferFluidStatus.SURFACE_SAMPLES];
         java.util.Arrays.fill(highSurface, 100.0f);
         int[] centerLevels = dryLevels.clone();
         int[] centerKinds = dryKinds.clone();
+        int[] centerStateIds = new int[GpuAquiferFluidStatus.GLOBAL_LEVEL_SAMPLES];
         centerKinds[0] = GpuAquiferFluidStatus.WATER;
+        centerStateIds[0] = 0x54321;
         GpuAquiferFluidStatus.Input spreadLevel = new GpuAquiferFluidStatus.Input(
-                0, 63, GpuAquiferFluidStatus.WATER, 0.7f, 0.31f, 0.0f, 0.0f, 0.0f,
-                highSurface, centerLevels, centerKinds);
+                0, 63, GpuAquiferFluidStatus.WATER, 0x54321, 10,
+                0.7f, 0.31f, 0.0f, 0.0f, 0.0f,
+                highSurface, centerLevels, centerKinds, centerStateIds);
         int[] lavaLevels = dryLevels.clone();
         int[] lavaKinds = dryKinds.clone();
+        int[] lavaStateIds = new int[GpuAquiferFluidStatus.GLOBAL_LEVEL_SAMPLES];
         lavaLevels[0] = 10;
         lavaKinds[0] = GpuAquiferFluidStatus.WATER;
+        lavaStateIds[0] = 0x12345;
         GpuAquiferFluidStatus.Input lavaOverride = new GpuAquiferFluidStatus.Input(
-                -20, 63, GpuAquiferFluidStatus.WATER, -0.2f, 0.31f, 0.4f, 0.0f, 0.0f,
-                drySurface.clone(), lavaLevels, lavaKinds);
+                -20, 63, GpuAquiferFluidStatus.WATER, 0x54321, 10,
+                -0.2f, 0.31f, 0.4f, 0.0f, 0.0f,
+                drySurface.clone(), lavaLevels, lavaKinds, lavaStateIds);
         GpuAquiferFluidStatus.Input uncertainDeepDarkBoundary = new GpuAquiferFluidStatus.Input(
                 0, 63, GpuAquiferFluidStatus.WATER, 0.0f, 0.0f, 0.0f, -0.225f, 0.0f,
                 drySurface.clone(), dryLevels.clone(), dryKinds.clone());
