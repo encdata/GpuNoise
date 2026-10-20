@@ -85,10 +85,19 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private final VkCommandBuffer commandBuffer;
     /** Exactly one graph-roots dispatch owns this command buffer and mapped output at a time. */
     private CompletableFuture<float[]> inFlightGraphRoots;
+    /** Full terrain dispatch shares the same slot and fence as graph-root work. */
+    private CompletableFuture<GpuTerrainBatchResult> inFlightTerrain;
     private int inFlightSamples;
     private int inFlightRoots;
+    private int inFlightTerrainBlockCount;
+    private int inFlightTerrainOutputRoots;
+    private int inFlightTerrainBlocksPerChunk;
+    private int inFlightTerrainCornerRoots;
+    private int inFlightTerrainCornerStride;
+    private int[] inFlightTerrainRootIndexes;
     private long inFlightFenceSubmittedNanos;
     private long inFlightGraphPreparationNanos;
+    private long inFlightTerrainPreparationNanos;
     private long completedGraphFenceSamples;
     private long totalGraphFenceNanos;
     private long totalGraphPreparationNanos;
@@ -458,24 +467,48 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
 
     synchronized void pollGraphRootsCompletion() {
         CompletableFuture<float[]> future = inFlightGraphRoots;
-        if (future == null) return;
+        CompletableFuture<GpuTerrainBatchResult> terrainFuture = inFlightTerrain;
+        if (future == null && terrainFuture == null) return;
         int status = vkGetFenceStatus(device, fence);
         if (status == VK_NOT_READY) return;
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            check(status, "poll graph-roots fence");
+            check(status, "poll terrain fence");
             long fenceDuration = GPU_TIMING_ENABLED
                     ? System.nanoTime() - inFlightFenceSubmittedNanos : 0L;
-            long gpuCommandNanos = GPU_TIMING_ENABLED ? readGpuTimestamp(stack) : -1L;
             long readbackStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
-            float[] output = readResults(inFlightSamples, inFlightRoots, stack);
-            if (GPU_TIMING_ENABLED) recordGraphFenceDuration(inFlightGraphPreparationNanos,
-                    fenceDuration, gpuCommandNanos, System.nanoTime() - readbackStarted);
-            check(vkResetFences(device, fence), "reset async graph-roots fence");
-            inFlightGraphRoots = null;
-            future.complete(output);
+            if (terrainFuture != null) {
+                long[] stageGpuNanos = GPU_TIMING_ENABLED ? readTerrainGpuTimestamps(stack) : null;
+                float[] corners = readRootResults(inFlightSamples, inFlightTerrainCornerRoots,
+                        inFlightTerrainCornerStride, stack);
+                FloatBuffer blockValues = persistentMappings.get(interpolationOutput).duplicate()
+                        .order(ByteOrder.nativeOrder()).asFloatBuffer();
+                blockValues.clear();
+                blockValues.limit(inFlightTerrainBlockCount * inFlightTerrainOutputRoots);
+                float[] blocks = new float[inFlightTerrainBlockCount * inFlightTerrainOutputRoots];
+                blockValues.get(blocks);
+                if (GPU_TIMING_ENABLED) recordTerrainBatchDuration(inFlightTerrainPreparationNanos,
+                        fenceDuration, stageGpuNanos, System.nanoTime() - readbackStarted);
+                GpuTerrainBatchResult result = new GpuTerrainBatchResult(
+                        new GpuTerrainRootsResult(corners, 0, corners.length, inFlightTerrainCornerRoots),
+                        new GpuTerrainBlockResult(blocks, 0, inFlightTerrainBlockCount,
+                                inFlightTerrainRootIndexes, 16, inFlightTerrainBlocksPerChunk / 256, 16));
+                check(vkResetFences(device, fence), "reset async terrain fence");
+                inFlightTerrain = null;
+                terrainFuture.complete(result);
+            } else {
+                long gpuCommandNanos = GPU_TIMING_ENABLED ? readGpuTimestamp(stack) : -1L;
+                float[] output = readResults(inFlightSamples, inFlightRoots, stack);
+                if (GPU_TIMING_ENABLED) recordGraphFenceDuration(inFlightGraphPreparationNanos,
+                        fenceDuration, gpuCommandNanos, System.nanoTime() - readbackStarted);
+                check(vkResetFences(device, fence), "reset async graph-roots fence");
+                inFlightGraphRoots = null;
+                future.complete(output);
+            }
         } catch (Throwable failure) {
             inFlightGraphRoots = null;
-            future.completeExceptionally(failure);
+            inFlightTerrain = null;
+            if (future != null) future.completeExceptionally(failure);
+            if (terrainFuture != null) terrainFuture.completeExceptionally(failure);
         }
     }
 
@@ -530,6 +563,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     }
 
     synchronized boolean graphRootsInFlight() { return inFlightGraphRoots != null; }
+    synchronized boolean hasInFlightWork() { return inFlightGraphRoots != null || inFlightTerrain != null; }
 
     private float[] submit(GpuGlobalNoiseBatch.Packed packed, MemoryStack stack) throws Exception {
             graphResourcesGraph = null;
@@ -560,28 +594,29 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     }
 
     /** Runs a grid graph dispatch directly into the persistent block output buffer. */
-    synchronized GpuTerrainBatchResult submitGraphGridInterpolated(ByteBuffer gridMetadata, int chunkCount,
-                                                                     int samplesPerChunk, ByteBuffer outputMetadata,
-                                                                     int blocksPerChunk) throws Exception {
+    synchronized CompletableFuture<GpuTerrainBatchResult> submitGraphGridInterpolated(ByteBuffer gridMetadata, int chunkCount,
+                                                                                         int samplesPerChunk, ByteBuffer outputMetadata,
+                                                                                         int blocksPerChunk) throws Exception {
         return submitGraphGridInterpolated(GpuTerrainRuntime.currentTerrainGraph(), gridMetadata,
                 chunkCount, samplesPerChunk, outputMetadata, blocksPerChunk);
     }
 
-    synchronized GpuTerrainBatchResult submitGraphGridInterpolated(GpuDensityGraph graph,
-                                                                     ByteBuffer gridMetadata, int chunkCount,
-                                                                     int samplesPerChunk, ByteBuffer outputMetadata,
-                                                                     int blocksPerChunk) throws Exception {
+    synchronized CompletableFuture<GpuTerrainBatchResult> submitGraphGridInterpolated(GpuDensityGraph graph,
+                                                                                         ByteBuffer gridMetadata, int chunkCount,
+                                                                                         int samplesPerChunk, ByteBuffer outputMetadata,
+                                                                                         int blocksPerChunk) throws Exception {
         int[] outputRoots = new int[graph.routerRootCount()];
         for (int i = 0; i < outputRoots.length; i++) outputRoots[i] = i;
         return submitGraphGridInterpolated(graph, gridMetadata, chunkCount, samplesPerChunk,
                 outputMetadata, blocksPerChunk, outputRoots);
     }
 
-    synchronized GpuTerrainBatchResult submitGraphGridInterpolated(GpuDensityGraph graph,
-                                                                     ByteBuffer gridMetadata, int chunkCount,
-                                                                     int samplesPerChunk, ByteBuffer outputMetadata,
-                                                                     int blocksPerChunk,
-                                                                     int[] outputRootIndexes) throws Exception {
+    synchronized CompletableFuture<GpuTerrainBatchResult> submitGraphGridInterpolated(GpuDensityGraph graph,
+                                                                                         ByteBuffer gridMetadata, int chunkCount,
+                                                                                         int samplesPerChunk, ByteBuffer outputMetadata,
+                                                                                         int blocksPerChunk,
+                                                                                         int[] outputRootIndexes) throws Exception {
+        if (hasInFlightWork()) throw new IllegalStateException("Vulkan slot is still in flight");
         if (chunkCount <= 0 || samplesPerChunk <= 0 || blocksPerChunk <= 0
                 || (long) chunkCount * samplesPerChunk > CAPACITY
                 || gridMetadata.remaining() < chunkCount * 32L
@@ -694,25 +729,19 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default()
                         .pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit grid interpolation");
             }
-            long submittedAt = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
-            check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait grid interpolation");
-            long submitToFenceNanos = GPU_TIMING_ENABLED ? System.nanoTime() - submittedAt : 0L;
-            long[] stageGpuNanos = GPU_TIMING_ENABLED ? readTerrainGpuTimestamps(stack) : null;
-            long readbackStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
-            check(vkResetFences(device, fence), "reset grid interpolation fence");
-            float[] corners = readRootResults(sampleCount, rootCount, cornerStride, stack);
-            FloatBuffer blockValues = persistentMappings.get(interpolationOutput).duplicate()
-                    .order(ByteOrder.nativeOrder()).asFloatBuffer();
-            blockValues.clear();
-            blockValues.limit(blockCount * outputRoots);
-            float[] blocks = new float[blockCount * outputRoots];
-            blockValues.get(blocks);
-            if (GPU_TIMING_ENABLED) recordTerrainBatchDuration(submittedAt - preparationStarted,
-                    submitToFenceNanos, stageGpuNanos, System.nanoTime() - readbackStarted);
-            return new GpuTerrainBatchResult(new GpuTerrainRootsResult(corners, 0, corners.length,
-                    rootCount),
-                    new GpuTerrainBlockResult(blocks, 0, blockCount, outputRootIndexes,
-                            16, blocksPerChunk / 256, 16));
+            inFlightFenceSubmittedNanos = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
+            inFlightTerrainPreparationNanos = GPU_TIMING_ENABLED
+                    ? inFlightFenceSubmittedNanos - preparationStarted : 0L;
+            inFlightSamples = sampleCount;
+            inFlightRoots = rootCount;
+            inFlightTerrainBlockCount = blockCount;
+            inFlightTerrainOutputRoots = outputRoots;
+            inFlightTerrainBlocksPerChunk = blocksPerChunk;
+            inFlightTerrainCornerRoots = rootCount;
+            inFlightTerrainCornerStride = cornerStride;
+            inFlightTerrainRootIndexes = outputRootIndexes.clone();
+            inFlightTerrain = new CompletableFuture<>();
+            return inFlightTerrain;
         }
     }
 

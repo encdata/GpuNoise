@@ -32,6 +32,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
     /** Requests wait here, not on a worldgen thread, while the shared slot is busy. */
     private final ConcurrentLinkedQueue<GraphRootsRequest> pendingGraphRoots = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<GraphRootsGridRequest> pendingGraphGrids = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<TerrainGridRequest> pendingTerrainGrids = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<AquiferNearestRequest> pendingAquiferNearest = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<AquiferSubstanceRequest> pendingAquiferSubstance = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<AquiferFluidStatusRequest> pendingAquiferFluidStatus = new ConcurrentLinkedQueue<>();
@@ -71,12 +72,12 @@ final class VulkanSubmissionRing implements AutoCloseable {
             for (PersistentVulkanNormalNoiseEngine slot : slots) {
                 if (slot == null) continue;
                 slot.pollGraphRootsCompletion();
-                graphInFlight |= slot.graphRootsInFlight();
+                graphInFlight |= slot.hasInFlightWork();
             }
             drainGraphRoots();
             // drainGraphRoots may have started the next queued submission.
             for (PersistentVulkanNormalNoiseEngine slot : slots) {
-                if (slot != null) graphInFlight |= slot.graphRootsInFlight();
+                if (slot != null) graphInFlight |= slot.hasInFlightWork();
             }
             if (graphInFlight) delay = COMPLETION_POLL_MICROS;
         } catch (Throwable failure) {
@@ -115,13 +116,13 @@ final class VulkanSubmissionRing implements AutoCloseable {
         return !pendingGraphRoots.isEmpty() || !pendingGraphGrids.isEmpty()
                 || !pendingAquiferNearest.isEmpty() || !pendingAquiferSubstance.isEmpty()
                 || !pendingAquiferFluidStatus.isEmpty() || !pendingAquiferPrefill.isEmpty()
-                || !pendingBlocking.isEmpty();
+                || !pendingBlocking.isEmpty() || !pendingTerrainGrids.isEmpty();
     }
 
     private synchronized boolean canStartQueuedWork() {
         if (aquiferKernelInFlight || blockingKernelInFlight) return false;
         for (PersistentVulkanNormalNoiseEngine slot : slots) {
-            if (slot != null && !slot.graphRootsInFlight()) return true;
+            if (slot != null && !slot.hasInFlightWork()) return true;
         }
         return false;
     }
@@ -131,6 +132,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
         while ((graph = pendingGraphRoots.poll()) != null) graph.future.completeExceptionally(failure);
         GraphRootsGridRequest grid;
         while ((grid = pendingGraphGrids.poll()) != null) grid.future.completeExceptionally(failure);
+        TerrainGridRequest terrain;
+        while ((terrain = pendingTerrainGrids.poll()) != null) terrain.future.completeExceptionally(failure);
         AquiferNearestRequest nearest;
         while ((nearest = pendingAquiferNearest.poll()) != null) nearest.future.completeExceptionally(failure);
         AquiferSubstanceRequest substance;
@@ -165,7 +168,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
         if (graph == null) return CompletableFuture.failedFuture(
                 new IllegalStateException("GPU terrain graph is not installed"));
         CompletableFuture<float[]> future = new CompletableFuture<>();
-        pendingGraphGrids.add(new GraphRootsGridRequest(graph, metadata, chunkCount, samplesPerChunk, future));
+        pendingGraphGrids.add(new GraphRootsGridRequest(graph, snapshot(metadata), chunkCount, samplesPerChunk, future));
         scheduleDrain();
         return future;
     }
@@ -174,11 +177,27 @@ final class VulkanSubmissionRing implements AutoCloseable {
     private synchronized void drainGraphRoots() {
         if (aquiferKernelInFlight || blockingKernelInFlight) return;
         for (PersistentVulkanNormalNoiseEngine slot : slots) {
-            if (slot == null || slot.graphRootsInFlight()) continue;
+            if (slot == null || slot.hasInFlightWork()) continue;
             GraphRootsRequest request = pendingGraphRoots.poll();
             if (request == null) {
                 GraphRootsGridRequest grid = pendingGraphGrids.poll();
                 if (grid == null) {
+                    TerrainGridRequest terrain = pendingTerrainGrids.poll();
+                    if (terrain != null) {
+                        try {
+                            slot.submitGraphGridInterpolated(terrain.graph, terrain.gridMetadata,
+                                            terrain.chunkCount, terrain.samplesPerChunk,
+                                            terrain.outputMetadata, terrain.blocksPerChunk, terrain.outputRootIndexes)
+                                    .whenComplete((result, failure) -> {
+                                        if (failure != null) terrain.future.completeExceptionally(failure);
+                                        else terrain.future.complete(result);
+                                    });
+                        } catch (Throwable failure) {
+                            terrain.future.completeExceptionally(new IllegalStateException(
+                                    "GPU ring full terrain submission failed", failure));
+                        }
+                        return;
+                    }
                     // Full terrain dispatches are the producer's main unit of
                     // work. Do not let a long queue of auxiliary aquifer
                     // lookups starve them after graph-grid work is drained.
@@ -387,12 +406,14 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                                                            ByteBuffer outputMetadata,
                                                                            int blocksPerChunk,
                                                                            int[] outputRootIndexes) {
-        PersistentVulkanNormalNoiseEngine slot = slots[Math.floorMod(next.getAndIncrement(), slots.length)];
-        ByteBuffer inputGridMetadata = gridMetadata.duplicate();
-        ByteBuffer inputOutputMetadata = outputMetadata.duplicate();
+        ByteBuffer inputGridMetadata = snapshot(gridMetadata);
+        ByteBuffer inputOutputMetadata = snapshot(outputMetadata);
         int[] roots = outputRootIndexes.clone();
-        return submitBlocking("grid terrain output", () -> slot.submitGraphGridInterpolated(graph,
-                inputGridMetadata, chunkCount, samplesPerChunk, inputOutputMetadata, blocksPerChunk, roots));
+        CompletableFuture<GpuTerrainBatchResult> future = new CompletableFuture<>();
+        pendingTerrainGrids.add(new TerrainGridRequest(graph, inputGridMetadata, chunkCount,
+                samplesPerChunk, inputOutputMetadata, blocksPerChunk, roots, future));
+        scheduleDrain();
+        return future;
     }
 
     CompletableFuture<GpuFusedResult> submitGraphInterpolated(GpuDensityGraph graph, float[] x, float[] y, float[] z,
@@ -401,6 +422,14 @@ final class VulkanSubmissionRing implements AutoCloseable {
         ByteBuffer inputMetadata = metadata.duplicate();
         return submitBlocking("fused terrain", () ->
                 slot.submitGraphInterpolated(graph, x, y, z, sampleCount, inputMetadata, chunkCount, blocksPerChunk));
+    }
+
+    /** Own the small metadata payload until the queued dispatch has consumed it. */
+    private static ByteBuffer snapshot(ByteBuffer source) {
+        ByteBuffer input = source.duplicate();
+        ByteBuffer copy = ByteBuffer.allocateDirect(input.remaining()).order(source.order());
+        copy.put(input).flip();
+        return copy;
     }
 
     @Override public void close() {
@@ -417,6 +446,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
         GraphRootsGridRequest gridRequest;
         while ((gridRequest = pendingGraphGrids.poll()) != null)
             gridRequest.future.completeExceptionally(stopped);
+        TerrainGridRequest terrainRequest;
+        while ((terrainRequest = pendingTerrainGrids.poll()) != null)
+            terrainRequest.future.completeExceptionally(stopped);
         AquiferNearestRequest request;
         while ((request = pendingAquiferNearest.poll()) != null)
             request.future.completeExceptionally(stopped);
@@ -441,6 +473,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                      int sampleCount, CompletableFuture<float[]> future) {}
     private record GraphRootsGridRequest(GpuDensityGraph graph, ByteBuffer metadata, int chunkCount, int samplesPerChunk,
                                          CompletableFuture<float[]> future) {}
+    private record TerrainGridRequest(GpuDensityGraph graph, ByteBuffer gridMetadata, int chunkCount,
+                                      int samplesPerChunk, ByteBuffer outputMetadata, int blocksPerChunk,
+                                      int[] outputRootIndexes, CompletableFuture<GpuTerrainBatchResult> future) {}
     private record AquiferNearestRequest(ByteBuffer records, int count, CompletableFuture<int[]> future) {}
     private record AquiferSubstanceRequest(ByteBuffer records, int count, CompletableFuture<int[]> future) {}
     private record AquiferFluidStatusRequest(ByteBuffer records, int count, CompletableFuture<int[]> future) {}
