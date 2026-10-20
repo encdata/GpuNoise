@@ -1244,7 +1244,8 @@ public final class VulkanCiSmoke {
             float gap = (i & 8) == 0 ? 0.2f : -0.45f;
             records[i] = GpuOreVeinDecisions.pack(toggle, ridged, gap, x, y, z, randomFactory);
             expected[i] = GpuOreVeinDecisions.evaluate(records[i]);
-            javaFillers[i] = OreVeinifier.create(DensityFunctions.constant(toggle),
+            javaFillers[i] = dev.gpunoise.mixin.OreVeinifierGpuMixin.gpunoise$invokeCreate(
+                    DensityFunctions.constant(toggle),
                     DensityFunctions.constant(ridged), DensityFunctions.constant(gap), randomFactory);
         }
         ByteBuffer packed = GpuOreVeinDecisions.packBatch(records);

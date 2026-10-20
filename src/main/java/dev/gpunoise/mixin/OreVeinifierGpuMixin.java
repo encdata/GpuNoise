@@ -18,13 +18,20 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /** Uses parity-admitted Vulkan ore decisions while preserving the rule's Java result elsewhere. */
 @Mixin(OreVeinifier.class)
-abstract class OreVeinifierGpuMixin {
+public abstract class OreVeinifierGpuMixin {
     @org.spongepowered.asm.mixin.Unique
     private static final boolean gpunoise$verify = Boolean.getBoolean("gpunoise.verifyOreVeinGpu");
     @org.spongepowered.asm.mixin.Unique
     private static final AtomicBoolean gpunoise$mismatchLogged = new AtomicBoolean();
     @org.spongepowered.asm.mixin.Unique
     private static final AtomicBoolean gpunoise$useLogged = new AtomicBoolean();
+
+    @org.spongepowered.asm.mixin.gen.Invoker("create")
+    public static NoiseChunk.BlockStateFiller gpunoise$invokeCreate(
+            DensityFunction toggle, DensityFunction ridged, DensityFunction gap,
+            PositionalRandomFactory randomFactory) {
+        throw new AssertionError("Mixin invoker was not transformed");
+    }
 
     @Inject(method = "create", at = @At("RETURN"), cancellable = true)
     private static void gpunoise$useGpuOreVeinRows(

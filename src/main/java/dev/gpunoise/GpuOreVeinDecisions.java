@@ -3,8 +3,8 @@ package dev.gpunoise;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-import net.minecraft.core.Block;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 

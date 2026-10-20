@@ -160,7 +160,7 @@ abstract class NoiseChunkGeneratorWriteMixin {
         // flight; an unavailable root or failed dispatch leaves its filler on
         // the original Java implementation.
         CompletableFuture<Void> oreVeinBuild = cache.prepareOreVeinDecisions(randomState.oreRandom())
-                .handle((table, failure) -> {
+                .<Void>handle((table, failure) -> {
                     if (failure != null) {
                         dev.gpunoise.GpuNoise.LOGGER.warn(
                                 "GPU ore-vein preparation failed; OreVeinifier stays on Java", failure);
