@@ -338,6 +338,18 @@ final class VulkanSubmissionRing implements AutoCloseable {
     private void dispatchAquifer(PersistentVulkanNormalNoiseEngine slot, AquiferPrefillRequest prefill,
                                  AquiferNearestRequest nearest, AquiferSubstanceRequest substance,
                                  AquiferFluidStatusRequest fluidStatus) {
+        if (prefill != null) {
+            try {
+                slot.submitAquiferPrefillAsync(prefill.nearestRecords, prefill.nearestCount,
+                                prefill.statusRecords, prefill.statusCount)
+                        .whenComplete((result, failure) ->
+                                completeOnDispatchWorker(prefill.future, result, failure));
+            } catch (Throwable failure) {
+                prefill.future.completeExceptionally(new IllegalStateException(
+                        "GPU ring combined aquifer prefill submission failed", failure));
+            }
+            return;
+        }
         synchronousSlots.add(slot);
         try {
             dispatchWorkers.execute(() -> {
