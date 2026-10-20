@@ -488,14 +488,15 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         long nearestStatusStart = GpuTerrainProfiler.beginAquiferPhase();
         boolean combineAquiferPasses = c2meAquifer && queries.size() > 0
                 && queries.size() <= GpuAquiferNearestThree.MAX_QUERIES;
+        GpuAquiferPrefillResult chainedAquifer = null;
         if (combineAquiferPasses) {
-            int[] rows = gpunoise$prefillC2meFluidStatuses(cache, queries, fluidStatuses,
-                    c2meGlobalFluidLevels, substanceWriter, queries.size());
-            nearestBatches.add(CompletableFuture.completedFuture(rows));
+            chainedAquifer = gpunoise$prefillC2meFluidStatuses(cache, queries, fluidStatuses,
+                    c2meGlobalFluidLevels, queries.size(), true);
+            nearestBatches.add(CompletableFuture.completedFuture(chainedAquifer.nearestRows()));
         } else {
             if (c2meAquifer && queries.size() > 0) {
                 gpunoise$prefillC2meFluidStatuses(cache, queries, fluidStatuses,
-                        c2meGlobalFluidLevels, substanceWriter, 0);
+                        c2meGlobalFluidLevels, 0, false);
             }
             for (int offset = submittedNearestQueries; offset < queries.size();
                     offset += gpunoise$nearestQueriesPerDispatch) {
@@ -505,6 +506,10 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             }
         }
         CompletableFuture.allOf(nearestBatches.toArray(CompletableFuture[]::new)).join();
+        int directPendingRows = pending.size();
+        int[] decisionChainRows = chainedAquifer == null ? new int[0] : chainedAquifer.decisionRows();
+        boolean decisionChainActive = decisionChainRows.length == queries.size() * 3;
+        boolean[] decisionChainEligible = decisionChainActive ? new boolean[queries.size()] : null;
 
         int nearestParitySamples = 0;
         int nearestParityMismatches = 0;
@@ -540,6 +545,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                     + ", gpu=[" + first + "," + second + "," + third + "," + fourth + ","
                                     + distance0 + "," + distance1 + "," + distance2 + "," + distance3 + "]";
                         }
+                        pending.add(queries.index(query), null,
+                                new DensityFunction.SinglePointContext(queryX, queryY, queryZ),
+                                queryDensity, null);
                         continue;
                     }
                 }
@@ -549,7 +557,13 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         || fourth < 0 || fourth >= GpuAquiferNearestThree.CANDIDATES
                         || first == second || first == third || first == fourth
                         || second == third || second == fourth || third == fourth
-                        || distance0 < 0 || distance1 < 0 || distance2 < 0 || distance3 < 0) continue;
+                        || distance0 < 0 || distance1 < 0 || distance2 < 0 || distance3 < 0) {
+                    pending.add(queries.index(query), null,
+                            gpunoise$verifyAquifer
+                                    ? new DensityFunction.SinglePointContext(queryX, queryY, queryZ) : null,
+                            queryDensity, null);
+                    continue;
+                }
                 Aquifer.FluidStatus status0 = gpunoise$getCachedAquiferStatus(cache, fluidStatuses, queryCenters[first]);
                 Aquifer.FluidStatus status1 = gpunoise$getCachedAquiferStatus(cache, fluidStatuses, queryCenters[second]);
                 Aquifer.FluidStatus status2 = gpunoise$getCachedAquiferStatus(cache, fluidStatuses, queryCenters[third]);
@@ -571,15 +585,18 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         distance0, distance1, distance2, distance3,
                         kind0, kind1, kind2, kind3, statusMask,
                         0, false, queryBelowIsLava, c2meAquifer, Block.getId(nearestState)) : null;
-                substanceWriter.addAquifer(queryDensity, queryBarrier, queryY,
-                        level0, level1, level2, level3,
-                        distance0, distance1, distance2, distance3,
-                        kind0, kind1, kind2, kind3, statusMask,
-                        queryBelowIsLava, c2meAquifer, Block.getId(nearestState));
+                if (!decisionChainActive) {
+                    substanceWriter.addAquifer(queryDensity, queryBarrier, queryY,
+                            level0, level1, level2, level3,
+                            distance0, distance1, distance2, distance3,
+                            kind0, kind1, kind2, kind3, statusMask,
+                            queryBelowIsLava, c2meAquifer, Block.getId(nearestState));
+                }
                 pending.add(queries.index(query), nearestState,
                         gpunoise$verifyAquifer
                                 ? new DensityFunction.SinglePointContext(queryX, queryY, queryZ) : null,
                         queryDensity, diagnosticInput);
+                if (decisionChainActive) decisionChainEligible[query] = true;
             }
         }
         if (gpunoise$verifyAquifer) {
@@ -591,7 +608,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         }
         GpuTerrainProfiler.recordAquiferPhase(GpuTerrainProfiler.AQUIFER_NEAREST_STATUS,
                 nearestStatusStart);
-        if (substanceWriter.size() != pending.size()) {
+        if (decisionChainActive
+                ? pending.size() != directPendingRows + queries.size()
+                : substanceWriter.size() != pending.size()) {
             throw new IllegalStateException("aquifer GPU rows lost their ordered chunk metadata");
         }
 
@@ -664,6 +683,61 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 acceptedDecisions++;
             }
         }
+        if (decisionChainActive) {
+            if (outputOffset != directPendingRows) {
+                throw new IllegalStateException("aquifer direct-fluid rows lost their ordered decision metadata");
+            }
+            for (int query = 0; query < queries.size(); query++) {
+                if (!decisionChainEligible[query]) continue;
+                int base = query * 3;
+                int action = decisionChainRows[base];
+                if (action == GpuAquiferSubstance.CPU_FALLBACK) continue;
+                if (action != GpuAquiferSubstance.RETURN_DEFAULT
+                        && action != GpuAquiferSubstance.RETURN_STATE) continue;
+                boolean scheduleFluidUpdate = decisionChainRows[base + 1] != 0;
+                int pendingRow = directPendingRows + query;
+                BlockState state = action == GpuAquiferSubstance.RETURN_STATE
+                        ? Block.stateById(decisionChainRows[base + 2]) : null;
+                if (action == GpuAquiferSubstance.RETURN_STATE && state == null) continue;
+                if (gpunoise$verifyAquifer) {
+                    DensityFunction.FunctionContext context = pending.context(pendingRow);
+                    int reference = GpuAquiferSubstance.evaluatePacked(pending.gpuInput(pendingRow));
+                    int referenceAction = GpuAquiferSubstance.outputAction(reference);
+                    BlockState referenceState = referenceAction == GpuAquiferSubstance.RETURN_STATE
+                            ? Block.stateById(GpuAquiferSubstance.outputStateId(reference)) : null;
+                    boolean referenceSchedule = GpuAquiferSubstance.outputSchedulesFluidUpdate(reference);
+                    decisionReferenceSamples++;
+                    if (gpunoise$isTraceAquiferBlock(context.blockX(), context.blockY(), context.blockZ())) {
+                        dev.gpunoise.GpuNoise.LOGGER.info(
+                                "GPU_AQUIFER_TRACE_PARITY block=({}, {}, {}) density={} "
+                                        + "referenceState={} gpuState={} referenceSchedule={} gpuSchedule={} "
+                                        + "referenceAction={} gpuAction={}",
+                                context.blockX(), context.blockY(), context.blockZ(), pending.density(pendingRow),
+                                referenceState, state, referenceSchedule, scheduleFluidUpdate,
+                                referenceAction, action);
+                    }
+                    if (referenceAction == GpuAquiferSubstance.CPU_FALLBACK
+                            || !Objects.equals(referenceState, state)
+                            || referenceSchedule != scheduleFluidUpdate) {
+                        decisionReferenceMismatches++;
+                        if (substanceFirstMismatch == null) {
+                            substanceFirstMismatch = "query=(" + context.blockX() + ","
+                                    + context.blockY() + "," + context.blockZ()
+                                    + "), density=" + pending.density(pendingRow)
+                                    + ", referenceState=" + referenceState + ", gpuState=" + state
+                                    + ", referenceSchedule=" + referenceSchedule
+                                    + ", gpuSchedule=" + scheduleFluidUpdate
+                                    + ", referenceAction=" + referenceAction + ", gpuAction=" + action
+                                    + ", gpuInput=" + pending.gpuInput(pendingRow);
+                        }
+                        continue;
+                    }
+                }
+                decisions.set(pending.index(pendingRow), state,
+                        pending.density(pendingRow), scheduleFluidUpdate);
+                acceptedDecisions++;
+            }
+        }
         GpuTerrainProfiler.recordAquiferPhase(GpuTerrainProfiler.AQUIFER_TABLE_RESOLVE,
                 tableResolveStart);
         gpunoise$decisions = decisions;
@@ -679,7 +753,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     decisionReferenceSamples, decisionReferenceMismatches,
                     substanceFirstMismatch == null ? "none" : substanceFirstMismatch);
         }
-        long cumulativeGpuRows = gpunoise$terrainDecisionQueryCount.addAndGet(substanceWriter.size());
+        int submittedDecisionRows = substanceWriter.size()
+                + (decisionChainActive ? queries.size() : 0);
+        long cumulativeGpuRows = gpunoise$terrainDecisionQueryCount.addAndGet(submittedDecisionRows);
         long cumulativePositive = gpunoise$terrainDecisionPositiveCount.addAndGet(positiveDensityDecisions);
         if (cumulativePositive > 0
                 && gpunoise$terrainDecisionBatchLogged.compareAndSet(false, true)) {
@@ -690,7 +766,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                             + "directGlobalFluidQueries={}, javaReferenceSamples={}, javaReferenceMismatches={}",
                     cumulativePositive, cumulativeGpuRows,
                     queries.size() * 4L, fluidStatuses.size(),
-                    acceptedDecisions, substanceWriter.size() - acceptedDecisions,
+                    acceptedDecisions, submittedDecisionRows - acceptedDecisions,
                     directGlobalFluidDecisions,
                     decisionReferenceSamples, decisionReferenceMismatches);
         }
@@ -732,12 +808,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     }
 
     @org.spongepowered.asm.mixin.Unique
-    private int[] gpunoise$prefillC2meFluidStatuses(GpuChunkDensityCache cache,
-                                                    AquiferQueries queries,
-                                                    FluidStatusCache statusCache,
-                                                    Map<Integer, Aquifer.FluidStatus> fluidLevelSampler,
-                                                    GpuAquiferSubstance.BatchWriter substanceWriter,
-                                                    int nearestCount) {
+    private GpuAquiferPrefillResult gpunoise$prefillC2meFluidStatuses(GpuChunkDensityCache cache,
+                                                                       AquiferQueries queries,
+                                                                       FluidStatusCache statusCache,
+                                                                       Map<Integer, Aquifer.FluidStatus> fluidLevelSampler,
+                                                                       int nearestCount,
+                                                                       boolean decisionChain) {
         long prefillStart = GpuTerrainProfiler.beginPhase();
         int javaFallbacks = 0;
         int[][] offsets = {
@@ -828,8 +904,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     int stateId = Block.getId(fluidType);
                     int level = gpunoise$fluidLevel(precomputed);
                     int kind = gpunoise$fluidKind(fluidType);
-                    substanceWriter.registerChainOutputState(stateId);
-                    substanceWriter.registerChainOutputState(Block.getId(Blocks.AIR.defaultBlockState()));
                     statusWriter.add(centerY, level, kind, stateId, 0,
                             0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
                             surfaces, globalLevels, globalKinds, globalStateIds,
@@ -840,9 +914,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         fluidLevelSampler, cache, centerY);
                 BlockState defaultFluidType =
                         ((AquiferFluidStatusAccessor) (Object) defaultStatus).gpunoise$fluidType();
-                substanceWriter.registerChainOutputState(Block.getId(defaultFluidType));
-                substanceWriter.registerChainOutputState(Block.getId(Blocks.AIR.defaultBlockState()));
-                substanceWriter.registerChainOutputState(Block.getId(Blocks.LAVA.defaultBlockState()));
                 for (int sample = 0; sample < offsets.length; sample++) {
                     int surfaceX = Math.floorDiv(centerX + (offsets[sample][0] << 4), 4) * 4;
                     int surfaceZ = Math.floorDiv(centerZ + (offsets[sample][1] << 4), 4) * 4;
@@ -855,7 +926,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     BlockState sampledType =
                             ((AquiferFluidStatusAccessor) (Object) sampled).gpunoise$fluidType();
                     globalStateIds[sample] = Block.getId(sampledType);
-                    substanceWriter.registerChainOutputState(globalStateIds[sample]);
                     BlockState sampledState = sampled.at(surfaceY);
                     globalKinds[sample] = sampledState.isAir() ? GpuAquiferFluidStatus.AIR
                             : sampledState.is(Blocks.WATER) ? GpuAquiferFluidStatus.WATER
@@ -889,7 +959,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             combined = nearestRecords != null && statusRecords != null
                     && centers.size() <= GpuAquiferFluidStatus.MAX_PREFILL_CENTERS
                     ? GpuTerrainRuntime.submitAquiferPrefill(nearestRecords, nearestCount,
-                            statusRecords, centers.size()).toCompletableFuture().join()
+                            statusRecords, centers.size(), decisionChain).toCompletableFuture().join()
                     : null;
             nearestRows = combined == null && nearestRecords != null
                     ? gpunoise$submitNearestBatch(nearestRecords, nearestCount).join()
@@ -950,7 +1020,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             throw failure;
         }
         GpuTerrainProfiler.recordAquiferStatusPrefill(prefillStart, centers.size(), javaFallbacks);
-        return nearestRows;
+        return new GpuAquiferPrefillResult(nearestRows == null ? new int[0] : nearestRows,
+                outputs, combined == null ? new int[0] : combined.decisionRows());
     }
 
     @org.spongepowered.asm.mixin.Unique

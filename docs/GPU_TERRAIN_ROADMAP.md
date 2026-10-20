@@ -365,28 +365,20 @@ concurrency is feeding the device often enough to make this useful.
 
 ### Aquifer CPU/GPU synchronization boundary
 
-The C2ME aquifer path currently has two GPU submissions per chunk decision
-batch. The first Vulkan command buffer dispatches nearest-center selection and
-fluid-status prefill, then performs one final readback. Java maps statuses to
-Minecraft block states, resolves center references, and packs substance rows;
-the second Vulkan command buffer evaluates those rows and reads back compact
-decisions. The standalone vanilla aquifer path skips fluid-status prefill but
-still reads nearest-center rows before Java packs the substance inputs. This
-means input staging and Minecraft state resolution, rather than shader
-execution alone, determine whether the stages can be fused.
+The C2ME aquifer path now dispatches nearest-center ranking, fluid-status
+prefill, and substance decisions in one Vulkan command buffer, with one fence
+and readback after the compute chain. A shader-write to shader-read barrier
+orders the stages; Java no longer maps the nearest/status outputs and uploads
+new substance records between those stages. The CPU still reads nearest rows
+for per-query parity checks and fluid-status rows to reconstruct Minecraft's
+status cache. The standalone vanilla path still uses separate nearest and
+substance submissions, so the same fusion remains future work there.
 
-The next synchronization reduction is a GPU-resident decision chain: upload
-query metadata, center/status inputs, and chunk-local state mappings once;
-dispatch nearest-center ranking; make its output visible to subsequent compute
-stages with a shader-write to shader-read barrier; resolve center statuses and
-evaluate substance decisions without mapping intermediate buffers to Java;
-then read back only compact final decisions and any rows explicitly marked for
-vanilla fallback. The status contract must carry exact block-state IDs as well
-as fluid kinds and levels, because `OTHER_FLUID` cannot preserve custom fluid
-identity or status equality. Cached statuses and shared-center indices must
-refer to stable rows in the same upload. Any unsupported fluid picker,
-uncertain float boundary, state-palette overflow, or failed parity check must
-mark only affected rows for exact vanilla evaluation.
+The chained status contract carries exact block-state IDs as well as fluid
+kinds and levels, preserving custom fluid identity and equality semantics.
+Cached statuses and shared-center indices refer to stable rows in the combined
+upload. Unsupported status inputs and uncertain float boundaries produce
+per-query CPU fallback actions; Minecraft continues to own the chunk writer.
 
 The fluid-status ABI now includes exact default, neighbor, and lava state IDs
 in both its input records and five-word output rows. Java cache reconstruction
@@ -394,21 +386,15 @@ uses the returned state ID, and the Mesa smoke fixture includes a custom state
 ID so the new field is parity-checked before the decision-chain shader consumes
 it.
 
-Nearest-query records now also carry packed density and barrier floats plus
-below-lava and C2ME mode bits. Their center records reserve a stable status-row
-index, and coalescing preserves all of that metadata. Fluid-status records can
-carry an exact precomputed cache row; the shader copies its level, state ID, and
-kind through without recomputing terrain roots. The next integration step is
-to stage every neighborhood status row, populate those indices, and consume
-nearest/status outputs in a final decision dispatch before the sole readback.
-
-Do not enable this chain until the CPU reference and Lavapipe fixtures compare
-all four ranked centers, selected states, status-equality cases, fluid update
-flags, custom-fluid IDs, palette overflow, and fallback rows. The current
-two-submission path remains the correctness reference while the chained ABI
-and shader are introduced. This work reduces one intermediate device-to-host
-readback and one host-to-device upload; it does not change Minecraft's CPU
-chunk writer.
+Nearest-query records carry packed density and barrier floats plus below-lava
+and C2ME mode bits. Center records carry stable status-row indices, and
+coalescing rebases those indices while merging compatible chunks. Fluid-status
+records can carry exact cached rows, and the decision shader consumes nearest
+results and status outputs directly. A Mesa smoke fixture compares the chained
+action, update flag, and raw state ID against the Java reference. Runtime
+parity verification remains available for per-query nearest and decision
+comparisons. The change removes an intermediate host readback and upload from
+the C2ME path; it does not change Minecraft's CPU chunk writer.
 
 The terrain roots batcher now reuses a bounded pool of direct metadata buffers
 until each asynchronous Vulkan submission completes. The scheduler uses the

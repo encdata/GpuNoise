@@ -171,7 +171,6 @@ public final class GpuAquiferSubstance {
         private final int rowsPerBuffer;
         private final List<ByteBuffer> completed = new ArrayList<>();
         private final StatePalette palette = new StatePalette();
-        private final StatePalette chainPalette = new StatePalette();
         private ByteBuffer current;
         private int size;
         private boolean finished;
@@ -191,10 +190,6 @@ public final class GpuAquiferSubstance {
         public int size() { return size; }
         public int outputPaletteSize() { return palette.size; }
         public int stateIdForOutputSlot(int slot) { return palette.stateId(slot); }
-        /** Registers a possible fluid state for a chained aquifer decision dispatch. */
-        public int registerChainOutputState(int stateId) { return chainPalette.slot(stateId); }
-        public int[] chainOutputStateIds() { return chainPalette.snapshot(); }
-
         public void add(Input input) {
             if (input == null) throw new NullPointerException("input");
             write(input.density, input.barrier, input.y, input.level0, input.level1,

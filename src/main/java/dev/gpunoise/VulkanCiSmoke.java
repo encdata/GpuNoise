@@ -1068,6 +1068,83 @@ public final class VulkanCiSmoke {
                     throw new IllegalStateException("combined C2ME aquifer prefill changed status output at int " + index);
                 }
             }
+            java.util.Map<Long, Integer> chainStatusRows = new java.util.HashMap<>();
+            List<int[]> chainStatusCenters = new java.util.ArrayList<>();
+            for (int query = 0; query < queryCount; query++) {
+                for (int[] center : centers[query]) {
+                    long key = net.minecraft.core.BlockPos.asLong(center[0], center[1], center[2]);
+                    if (!chainStatusRows.containsKey(key)) {
+                        chainStatusRows.put(key, chainStatusCenters.size());
+                        chainStatusCenters.add(center);
+                    }
+                }
+            }
+            int chainWaterStateId = net.minecraft.world.level.block.Block.getId(
+                    Blocks.WATER.defaultBlockState());
+            int[] chainLevels = new int[chainStatusCenters.size()];
+            GpuAquiferFluidStatus.Input[] chainStatusInputs =
+                    new GpuAquiferFluidStatus.Input[chainStatusCenters.size()];
+            for (int row = 0; row < chainStatusInputs.length; row++) {
+                int level = 100 + row % 5;
+                chainLevels[row] = level;
+                chainStatusInputs[row] = new GpuAquiferFluidStatus.Input(
+                        chainStatusCenters.get(row)[1], level, GpuAquiferFluidStatus.WATER,
+                        chainWaterStateId, 0, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                        new float[GpuAquiferFluidStatus.SURFACE_SAMPLES],
+                        new int[GpuAquiferFluidStatus.GLOBAL_LEVEL_SAMPLES],
+                        new int[GpuAquiferFluidStatus.GLOBAL_LEVEL_SAMPLES],
+                        new int[GpuAquiferFluidStatus.GLOBAL_LEVEL_SAMPLES],
+                        true, level, chainWaterStateId, GpuAquiferFluidStatus.WATER);
+            }
+            AquiferQueries chainQueries = new AquiferQueries(queryCount);
+            for (int query = 0; query < queryCount; query++) {
+                GpuAquiferSubstance.Input seed = substanceCases[query];
+                chainQueries.add(query, queries[query][0], queries[query][1], queries[query][2],
+                        seed.density(), seed.barrier(), (query & 1) != 0, true, centers[query]);
+            }
+            ByteBuffer chainNearest = GpuAquiferNearestThree.pack(chainQueries, 0, queryCount, center ->
+                    chainStatusRows.get(net.minecraft.core.BlockPos.asLong(
+                            center[0], center[1], center[2])));
+            GpuAquiferPrefillResult chainResult = ring.submitAquiferPrefill(chainNearest, queryCount,
+                    GpuAquiferFluidStatus.pack(chainStatusInputs), chainStatusInputs.length, true)
+                    .get(60, TimeUnit.SECONDS);
+            if (chainResult.decisionRows().length != queryCount * 3) {
+                throw new IllegalStateException("GPU aquifer chain returned a mismatched decision-row count");
+            }
+            for (int query = 0; query < queryCount; query++) {
+                int[] nearest = GpuAquiferNearestThree.select(queries[query], centers[query]);
+                int[] levels = new int[4];
+                for (int rank = 0; rank < 4; rank++) {
+                    int[] center = centers[query][nearest[rank]];
+                    levels[rank] = chainLevels[chainStatusRows.get(
+                            net.minecraft.core.BlockPos.asLong(center[0], center[1], center[2]))];
+                }
+                int equalityMask = 0;
+                if (levels[0] == levels[1]) equalityMask |= 1;
+                if (levels[0] == levels[2]) equalityMask |= 1 << 1;
+                if (levels[0] == levels[3]) equalityMask |= 1 << 2;
+                if (levels[1] == levels[2]) equalityMask |= 1 << 3;
+                if (levels[1] == levels[3]) equalityMask |= 1 << 4;
+                if (levels[2] == levels[3]) equalityMask |= 1 << 5;
+                GpuAquiferSubstance.Input referenceInput = new GpuAquiferSubstance.Input(
+                        chainQueries.density(query), chainQueries.barrier(query), chainQueries.y(query),
+                        levels[0], levels[1], levels[2], levels[3], nearest[4], nearest[5],
+                        nearest[6], nearest[7], GpuAquiferSubstance.WATER, GpuAquiferSubstance.WATER,
+                        GpuAquiferSubstance.WATER, GpuAquiferSubstance.WATER, equalityMask,
+                        0, false, chainQueries.belowIsLava(query), true, chainWaterStateId);
+                int[] expectedDecision = GpuAquiferSubstance.evaluate(referenceInput);
+                int base = query * 3;
+                int[] actualDecision = chainResult.decisionRows();
+                if (actualDecision[base] != expectedDecision[0]
+                        || actualDecision[base + 1] != expectedDecision[2]
+                        || actualDecision[base + 2] != expectedDecision[1]) {
+                    throw new IllegalStateException("GPU chained aquifer decision mismatch at query " + query
+                            + ": expected=" + java.util.Arrays.toString(expectedDecision)
+                            + ", actual=[" + actualDecision[base] + ","
+                            + actualDecision[base + 1] + "," + actualDecision[base + 2] + "]");
+                }
+            }
+            System.out.println("Vulkan CI smoke: GPU-resident nearest/status/substance chain parity passed");
             var combinedAquiferFutureA = ring.submitAquiferPrefill(
                     combinedNearest, 1, GpuAquiferFluidStatus.pack(fluidStatusCases),
                     fluidStatusCases.length);

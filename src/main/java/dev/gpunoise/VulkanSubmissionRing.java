@@ -627,7 +627,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
         int batchRowCount = totalRows;
         List<NearestPayload> payloads = new ArrayList<>(requests.size());
         for (AquiferNearestRequest request : requests)
-            payloads.add(new NearestPayload(request.records, request.count));
+            payloads.add(new NearestPayload(request.records, request.count, 0));
         ByteBuffer combined;
         try {
             combined = combineNearestPayloads(payloads);
@@ -715,7 +715,13 @@ final class VulkanSubmissionRing implements AutoCloseable {
                         + payload.count * GpuAquiferNearestThree.QUERY_RECORD_BYTES;
                 source.position(centersOffset);
                 source.limit(centersOffset + groups * GpuAquiferNearestThree.CENTER_RECORD_BYTES);
-                combined.put(source);
+                while (source.remaining() >= GpuAquiferNearestThree.CENTER_RECORD_BYTES) {
+                    for (int center = 0; center < GpuAquiferNearestThree.CANDIDATES; center++) {
+                        combined.putInt(source.getInt()).putInt(source.getInt()).putInt(source.getInt());
+                        int statusRow = source.getInt();
+                        combined.putInt(statusRow < 0 ? -1 : statusRow + payload.statusRowOffset);
+                    }
+                }
                 groupOffset += groups;
             }
             return combined.flip();
@@ -741,6 +747,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                         && statusRows < GpuAquiferFluidStatus.MAX_PREFILL_CENTERS) {
                     AquiferPrefillRequest next = pendingAquiferPrefill.peek();
                     if (next == null || next.future.isDone() || !validPrefill(next)
+                            || next.decisionChain != first.decisionChain
                             || next.nearestCount > GpuAquiferNearestThree.MAX_QUERIES - nearestRows
                             || next.statusCount > GpuAquiferFluidStatus.MAX_PREFILL_CENTERS - statusRows)
                         break;
@@ -762,7 +769,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
         if (requests.size() == 1) {
             try {
                 slot.submitAquiferPrefillAsync(first.nearestRecords, first.nearestCount,
-                        first.statusRecords, first.statusCount).whenComplete((rows, failure) -> {
+                        first.statusRecords, first.statusCount, first.decisionChain)
+                        .whenComplete((rows, failure) -> {
                     if (failure == null) GpuTerrainProfiler.recordAquiferNearestBatch(first.nearestCount);
                     completeOnDispatchWorker(first.future, rows, failure);
                 });
@@ -776,8 +784,12 @@ final class VulkanSubmissionRing implements AutoCloseable {
         int batchNearestRows = nearestRows;
         int batchStatusRows = statusRows;
         List<NearestPayload> nearestPayloads = new ArrayList<>(requests.size());
-        for (AquiferPrefillRequest request : requests)
-            nearestPayloads.add(new NearestPayload(request.nearestRecords, request.nearestCount));
+        int statusRowOffset = 0;
+        for (AquiferPrefillRequest request : requests) {
+            nearestPayloads.add(new NearestPayload(
+                    request.nearestRecords, request.nearestCount, statusRowOffset));
+            statusRowOffset += request.statusCount;
+        }
         ByteBuffer mergedNearest;
         try {
             mergedNearest = combineNearestPayloads(nearestPayloads);
@@ -803,7 +815,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 mergedStatus.put(request.statusRecords.duplicate());
             mergedStatus.flip();
             slot.submitAquiferPrefillAsync(mergedNearest, batchNearestRows,
-                    mergedStatus, batchStatusRows).whenComplete((rows, failure) -> {
+                    mergedStatus, batchStatusRows, first.decisionChain).whenComplete((rows, failure) -> {
                 GpuAquiferInputBufferPool.release(mergedNearest);
                 GpuAquiferInputBufferPool.release(mergedStatus);
                 if (failure != null) {
@@ -814,7 +826,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 if (rows == null || rows.nearestRows().length
                         != batchNearestRows * GpuAquiferNearestThree.OUTPUT_INTS
                         || rows.fluidStatusRows().length
-                        != batchStatusRows * GpuAquiferFluidStatus.OUTPUT_INTS) {
+                        != batchStatusRows * GpuAquiferFluidStatus.OUTPUT_INTS
+                        || rows.decisionRows().length
+                        != (first.decisionChain ? batchNearestRows * 3 : 0)) {
                     IllegalStateException invalid = new IllegalStateException(
                             "Vulkan combined aquifer prefill returned a mismatched row count");
                     for (AquiferPrefillRequest request : requests)
@@ -830,9 +844,12 @@ final class VulkanSubmissionRing implements AutoCloseable {
                             * GpuAquiferNearestThree.OUTPUT_INTS;
                     int statusEnd = statusOffset + request.statusCount
                             * GpuAquiferFluidStatus.OUTPUT_INTS;
+                    int decisionStart = nearestOffset / GpuAquiferNearestThree.OUTPUT_INTS * 3;
+                    int decisionEnd = decisionStart + request.nearestCount * 3;
                     GpuAquiferPrefillResult chunkResult = new GpuAquiferPrefillResult(
                             java.util.Arrays.copyOfRange(rows.nearestRows(), nearestOffset, nearestEnd),
-                            java.util.Arrays.copyOfRange(rows.fluidStatusRows(), statusOffset, statusEnd));
+                            java.util.Arrays.copyOfRange(rows.fluidStatusRows(), statusOffset, statusEnd),
+                            java.util.Arrays.copyOfRange(rows.decisionRows(), decisionStart, decisionEnd));
                     completeOnDispatchWorker(request.future, chunkResult, null);
                     nearestOffset = nearestEnd;
                     statusOffset = statusEnd;
@@ -1141,9 +1158,16 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     CompletableFuture<GpuAquiferPrefillResult> submitAquiferPrefill(
             ByteBuffer nearestRecords, int nearestCount, ByteBuffer statusRecords, int statusCount) {
+        return submitAquiferPrefill(nearestRecords, nearestCount, statusRecords, statusCount, false);
+    }
+
+    CompletableFuture<GpuAquiferPrefillResult> submitAquiferPrefill(
+            ByteBuffer nearestRecords, int nearestCount, ByteBuffer statusRecords, int statusCount,
+            boolean decisionChain) {
         CompletableFuture<GpuAquiferPrefillResult> future = new CompletableFuture<>();
         enqueue(pendingAquiferPrefill, () -> new AquiferPrefillRequest(nearestRecords.duplicate(), nearestCount,
-                statusRecords.duplicate(), statusCount, future, System.nanoTime()), future, "aquifer prefill");
+                statusRecords.duplicate(), statusCount, decisionChain, future, System.nanoTime()),
+                future, "aquifer prefill");
         return future;
     }
 
@@ -1336,9 +1360,10 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                              long enqueuedNanos) implements DispatchRequest {}
     private record AquiferPrefillRequest(ByteBuffer nearestRecords, int nearestCount,
                                          ByteBuffer statusRecords, int statusCount,
+                                         boolean decisionChain,
                                          CompletableFuture<GpuAquiferPrefillResult> future, long enqueuedNanos)
             implements DispatchRequest {}
-    private record NearestPayload(ByteBuffer records, int count) {}
+    private record NearestPayload(ByteBuffer records, int count, int statusRowOffset) {}
     @FunctionalInterface
     private interface SlotOperation<T> {
         T call(PersistentVulkanNormalNoiseEngine slot) throws Exception;

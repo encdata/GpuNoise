@@ -1,0 +1,197 @@
+#version 450
+layout(local_size_x = 64) in;
+
+// Reads the original nearest-query upload, the nearest-rank results, and the
+// exact fluid-status rows produced earlier in the same command buffer.
+layout(std430, set = 0, binding = 0) readonly buffer Inputs { uint words[]; };
+layout(std430, set = 0, binding = 1) buffer Scratch { int values[]; };
+layout(push_constant) uniform Parameters {
+    uint queryCount;
+    uint statusCount;
+    uint statusBaseInt;
+    uint decisionBaseInt;
+};
+
+const uint RETURN_DEFAULT = 0u;
+const uint RETURN_STATE = 1u;
+const uint CPU_FALLBACK = 2u;
+const uint FLAG_CPU_FALLBACK = 1u;
+const uint FLAG_BELOW_LAVA = 1u;
+const uint FLAG_C2ME_AQUIFER = 2u;
+const uint AIR = 0u;
+const uint WATER = 1u;
+const uint LAVA = 2u;
+const float PRECISION_EPSILON = 5.0e-3;
+const float FLOWING_UPDATE_SIMILARITY = 1.0 - float(12 * 12 - 10 * 10) / 25.0;
+
+void emit(uint query, uint action, uint schedule, int stateId) {
+    uint base = decisionBaseInt + query * 3u;
+    values[base] = int(action);
+    values[base + 1u] = int(schedule);
+    values[base + 2u] = stateId;
+}
+
+float similarity(int firstDistance, int secondDistance) {
+    return 1.0 - float(abs(secondDistance - firstDistance)) / 25.0;
+}
+
+float pressure(int y, int levelA, int levelB, uint kindA, uint kindB, float barrier) {
+    if ((kindA == LAVA && kindB == WATER) || (kindA == WATER && kindB == LAVA)) return 2.0;
+    int levelDistance = abs(levelA - levelB);
+    if (levelDistance == 0) return 0.0;
+    float midpointDelta = float(y) + 0.5 - 0.5 * float(levelA + levelB);
+    float adjustment = 0.5 * float(levelDistance) - abs(midpointDelta);
+    if (midpointDelta > 0.0)
+        adjustment = adjustment > 0.0 ? adjustment / 1.5 : adjustment / 2.5;
+    else {
+        float shifted = 3.0 + adjustment;
+        adjustment = shifted > 0.0 ? shifted / 3.0 : shifted / 10.0;
+    }
+    float barrierValue = adjustment < -2.0 || adjustment > 2.0 ? 0.0 : barrier;
+    return 2.0 * (barrierValue + adjustment);
+}
+
+bool loadStatus(uint row, int y, out int level, out int fluidStateId,
+                out uint kindAtY, out int stateIdAtY, out bool hasFluid) {
+    if (row >= statusCount) return false;
+    uint base = statusBaseInt + row * 5u;
+    level = values[base];
+    uint flags = uint(values[base + 2u]);
+    if ((flags & FLAG_CPU_FALLBACK) != 0u) return false;
+    fluidStateId = values[base + 3u];
+    kindAtY = uint(values[base + 4u]);
+    hasFluid = y <= level;
+    stateIdAtY = hasFluid ? fluidStateId : int(AIR);
+    if (!hasFluid) kindAtY = AIR;
+    return fluidStateId >= 0;
+}
+
+void main() {
+    uint query = gl_GlobalInvocationID.x;
+    if (query >= queryCount) return;
+    if (words[0] != queryCount) {
+        emit(query, CPU_FALLBACK, 0u, 0);
+        return;
+    }
+
+    uint queryBase = 2u + query * 7u;
+    int y = int(words[queryBase + 1u]);
+    float density = uintBitsToFloat(words[queryBase + 4u]);
+    float barrier = uintBitsToFloat(words[queryBase + 5u]);
+    uint flags = words[queryBase + 6u];
+    bool belowIsLava = (flags & FLAG_BELOW_LAVA) != 0u;
+    bool c2meAquifer = (flags & FLAG_C2ME_AQUIFER) != 0u;
+    uint group = words[queryBase + 3u];
+    uint groupCount = words[1];
+    if (group >= groupCount || isnan(density) || isinf(density)
+            || abs(density) <= PRECISION_EPSILON || isnan(barrier) || isinf(barrier)) {
+        emit(query, CPU_FALLBACK, 0u, 0);
+        return;
+    }
+    if (density > 0.0) {
+        emit(query, RETURN_DEFAULT, 0u, 0);
+        return;
+    }
+
+    uint centerBase = 2u + queryCount * 7u + group * 48u;
+    uint nearestBase = query * 8u;
+    int center0 = values[nearestBase];
+    int center1 = values[nearestBase + 1u];
+    int center2 = values[nearestBase + 2u];
+    int center3 = values[nearestBase + 3u];
+    int distance0 = values[nearestBase + 4u];
+    int distance1 = values[nearestBase + 5u];
+    int distance2 = values[nearestBase + 6u];
+    int distance3 = values[nearestBase + 7u];
+    if (center0 < 0 || center0 >= 12 || center1 < 0 || center1 >= 12
+            || center2 < 0 || center2 >= 12 || center3 < 0 || center3 >= 12
+            || distance0 < 0 || distance1 < 0 || distance2 < 0 || distance3 < 0) {
+        emit(query, CPU_FALLBACK, 0u, 0);
+        return;
+    }
+
+    int centerIndices[4] = int[4](center0, center1, center2, center3);
+    int levels[4];
+    int stateIds[4];
+    int selectedStateIds[4];
+    uint kinds[4];
+    bool hasFluid[4];
+    for (int i = 0; i < 4; i++) {
+        uint statusRow = words[centerBase + uint(centerIndices[i]) * 4u + 3u];
+        if (!loadStatus(statusRow, y, levels[i], stateIds[i], kinds[i],
+                selectedStateIds[i], hasFluid[i])) {
+            emit(query, CPU_FALLBACK, 0u, 0);
+            return;
+        }
+    }
+
+    int nearestStateId = selectedStateIds[0];
+    float similarity01 = similarity(distance0, distance1);
+    float similarity02 = similarity(distance0, distance2);
+    float similarity12 = similarity(distance1, distance2);
+    if (similarity01 <= 0.0) {
+        emit(query, RETURN_STATE,
+                similarity01 >= FLOWING_UPDATE_SIMILARITY
+                        && (!c2meAquifer || levels[0] != levels[1] || stateIds[0] != stateIds[1])
+                        ? 1u : 0u,
+                nearestStateId);
+        return;
+    }
+    if (kinds[0] == WATER && belowIsLava) {
+        emit(query, RETURN_STATE, 1u, nearestStateId);
+        return;
+    }
+
+    float contribution01 = similarity01 * pressure(y, levels[0], levels[1],
+            kinds[0], kinds[1], barrier);
+    float firstResult = density + contribution01;
+    if (abs(firstResult) <= PRECISION_EPSILON) {
+        emit(query, CPU_FALLBACK, 0u, 0);
+        return;
+    }
+    if (firstResult > 0.0) {
+        emit(query, RETURN_DEFAULT, 0u, 0);
+        return;
+    }
+    if (similarity02 > 0.0) {
+        float contribution02 = similarity01 * similarity02 * pressure(y,
+                levels[0], levels[2], kinds[0], kinds[2], barrier);
+        float secondResult = density + contribution02;
+        if (abs(secondResult) <= PRECISION_EPSILON) {
+            emit(query, CPU_FALLBACK, 0u, 0);
+            return;
+        }
+        if (secondResult > 0.0) {
+            emit(query, RETURN_DEFAULT, 0u, 0);
+            return;
+        }
+    }
+    if (similarity12 > 0.0) {
+        float contribution12 = similarity01 * similarity12 * pressure(y,
+                levels[1], levels[2], kinds[1], kinds[2], barrier);
+        float thirdResult = density + contribution12;
+        if (abs(thirdResult) <= PRECISION_EPSILON) {
+            emit(query, CPU_FALLBACK, 0u, 0);
+            return;
+        }
+        if (thirdResult > 0.0) {
+            emit(query, RETURN_DEFAULT, 0u, 0);
+            return;
+        }
+    }
+    if (!c2meAquifer) {
+        emit(query, RETURN_STATE, 1u, nearestStateId);
+        return;
+    }
+
+    bool mayFlow01 = levels[0] != levels[1] || stateIds[0] != stateIds[1];
+    bool mayFlow12 = similarity12 >= FLOWING_UPDATE_SIMILARITY
+            && (levels[1] != levels[2] || stateIds[1] != stateIds[2]);
+    bool mayFlow02 = similarity02 >= FLOWING_UPDATE_SIMILARITY
+            && (levels[0] != levels[2] || stateIds[0] != stateIds[2]);
+    bool schedule = mayFlow01 || mayFlow12 || mayFlow02
+            || (similarity02 >= FLOWING_UPDATE_SIMILARITY
+            && similarity(distance0, distance3) >= FLOWING_UPDATE_SIMILARITY
+            && (levels[0] != levels[3] || stateIds[0] != stateIds[3]));
+    emit(query, RETURN_STATE, schedule ? 1u : 0u, nearestStateId);
+}
