@@ -42,8 +42,10 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.Objects;
@@ -111,6 +113,10 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             Math.min(8L, Long.getLong("gpunoise.aquiferDecisionConcurrency", 3L)));
 
     @org.spongepowered.asm.mixin.Unique
+    private static final int gpunoise$aquiferDecisionQueueCapacity = (int) Math.max(16L,
+            Math.min(1024L, Long.getLong("gpunoise.aquiferDecisionQueueCapacity", 128L)));
+
+    @org.spongepowered.asm.mixin.Unique
     private static final int gpunoise$nearestQueriesPerDispatch = Math.min(
             GpuAquiferNearestThree.MAX_QUERIES, 16_384);
 
@@ -123,12 +129,13 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             new Semaphore(gpunoise$aquiferDecisionConcurrency, true);
 
     @org.spongepowered.asm.mixin.Unique
-    private static final ExecutorService gpunoise$aquiferDecisionExecutor = Executors.newFixedThreadPool(
-            gpunoise$aquiferDecisionConcurrency, r -> {
+    private static final ExecutorService gpunoise$aquiferDecisionExecutor = new ThreadPoolExecutor(
+            gpunoise$aquiferDecisionConcurrency, gpunoise$aquiferDecisionConcurrency,
+            0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(gpunoise$aquiferDecisionQueueCapacity), r -> {
                 Thread thread = new Thread(r, "GPU aquifer decision build");
                 thread.setDaemon(true);
                 return thread;
-            });
+            }, new ThreadPoolExecutor.AbortPolicy());
 
     @org.spongepowered.asm.mixin.Unique
     private static final boolean gpunoise$verifyAquifer = Boolean.getBoolean("gpunoise.verifyAquiferGpu");
