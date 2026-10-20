@@ -171,20 +171,34 @@ double javaDoubleToInt(double value){
     if(value<=-2147483648.0)return -2147483648.0;
     return double(int(value));
 }
+bool negativeFloat(float value){return (floatBitsToUint(value)&0x80000000u)!=0u;}
+float signedZero32(bool negative){return uintBitsToFloat(negative?0x80000000u:0u);}
 double javaFloatOperation(uint operation,double leftValue,double rightValue){
     float left=float(leftValue);
-    if(operation==6u)return double(-left);
+    if(operation==6u)return double(uintBitsToFloat(floatBitsToUint(left)^0x80000000u));
     if(operation==7u){uint magnitudeBits=floatBitsToUint(left),signBits=floatBitsToUint(float(rightValue));return double(uintBitsToFloat((magnitudeBits&0x7fffffffu)|(signBits&0x80000000u)));}
     float right=float(rightValue);
     precise float result=0.0;
-    if(operation==1u)result=left+right;
-    else if(operation==2u)result=left-right;
-    else if(operation==3u)result=left*right;
+    if(operation==1u){
+        result=left+right;
+        if(result==0.0){double exact=double(left)+double(right);result=signedZero32(exact<0.0||(exact==0.0&&negativeFloat(left)&&negativeFloat(right)));}
+    }
+    else if(operation==2u){
+        result=left-right;
+        if(result==0.0){double exact=double(left)-double(right);result=signedZero32(exact<0.0||(exact==0.0&&negativeFloat(left)&&!negativeFloat(right)));}
+    }
+    else if(operation==3u){
+        result=left*right;
+        // Preserve Java's signed zero even when the shader compiler enables
+        // arithmetic optimizations that canonicalize a zero product.
+        if(result==0.0)result=uintBitsToFloat((floatBitsToUint(left)^floatBitsToUint(right))&0x80000000u);
+    }
     else if(operation==4u)result=left/right;
     else if(operation==5u){
         if(isnan(left)||isnan(right)||isinf(left)||right==0.0)result=uintBitsToFloat(0x7fc00000u);
         else if(isinf(right))result=left;
         else result=float(double(left)-trunc(double(left)/double(right))*double(right));
+        if(result==0.0)result=signedZero32(negativeFloat(left));
     }
     else if(operation==8u){
         if(isnan(left)||isnan(right))result=uintBitsToFloat(0x7fc00000u);
@@ -196,6 +210,7 @@ double javaFloatOperation(uint operation,double leftValue,double rightValue){
         else if(left==0.0&&right==0.0)result=(((floatBitsToUint(left)&floatBitsToUint(right))&0x80000000u)!=0u)?-0.0:0.0;
         else result=left>right?left:right;
     }
+    if(operation==4u&&result==0.0)result=signedZero32(negativeFloat(left)!=negativeFloat(right));
     return double(result);
 }
 double javaNumericCast(uint operation,double value){
