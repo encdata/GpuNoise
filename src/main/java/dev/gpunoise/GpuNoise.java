@@ -275,6 +275,10 @@ public final class GpuNoise {
                 LOGGER.warn("GPU terrain graph unavailable; vanilla terrain remains enabled: {}", terrainFailure.getMessage());
             }
             if (installedGraph != null) {
+                if (overworld.getChunkSource().getGenerator() instanceof NoiseBasedChunkGenerator noiseGenerator
+                        && noiseGenerator.getBiomeSource() instanceof net.minecraft.world.level.biome.MultiNoiseBiomeSource multiNoise) {
+                    GpuTerrainRuntime.installBiomeSearchTree(multiNoise);
+                }
                 LOGGER.info("GPU terrain graph installed with {} terrain/aquifer roots.", GpuTerrainRoots.COUNT);
             }
         } catch (RuntimeException unsupported) {

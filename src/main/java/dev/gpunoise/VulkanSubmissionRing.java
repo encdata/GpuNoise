@@ -1120,6 +1120,14 @@ final class VulkanSubmissionRing implements AutoCloseable {
         return submitBlocking("ore vein decisions", slot -> slot.submitOreVeinDecisions(input, count));
     }
 
+    CompletableFuture<int[]> submitBiomeSearch(ByteBuffer targets, GpuBiomeSearchTree tree, int count) {
+        if (tree == null) return CompletableFuture.failedFuture(
+                new IllegalArgumentException("multi-noise biome tree is required"));
+        ByteBuffer queryData = targets.duplicate();
+        return submitBlocking("multi-noise biome search", slot -> slot.submitBiomeSearch(
+                queryData, tree, count));
+    }
+
     CompletableFuture<int[]> submitAquiferFluidStatus(ByteBuffer records, int count) {
         CompletableFuture<int[]> future = new CompletableFuture<>();
         enqueue(pendingAquiferFluidStatus,

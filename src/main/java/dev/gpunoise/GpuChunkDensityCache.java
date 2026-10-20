@@ -453,6 +453,15 @@ public final class GpuChunkDensityCache {
     public double aquiferDepth(int x, int y, int z) { return rootDensity(x, y, z, GpuTerrainRoots.DEPTH); }
     public double climate(int x, int y, int z, int root) { return rootDensity(x, y, z, root); }
 
+    public boolean supportsBiomeClimateRoots() {
+        return supportsRoot(GpuTerrainRoots.TEMPERATURE)
+                && supportsRoot(GpuTerrainRoots.VEGETATION)
+                && supportsRoot(GpuTerrainRoots.CONTINENTS)
+                && supportsRoot(GpuTerrainRoots.EROSION)
+                && supportsRoot(GpuTerrainRoots.DEPTH)
+                && supportsRoot(GpuTerrainRoots.RIDGES);
+    }
+
     /** Uses the exact candidate coordinates already declared by a strict chunk dependency. */
     public CompletionStage<int[]> selectNearestAquiferCenters(PositionalRandomFactory factory,
                                                                int[][] blockQueries) {

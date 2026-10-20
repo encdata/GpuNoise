@@ -39,9 +39,12 @@ public final class GpuOreVeinDecisions {
         RandomSource random = randomFactory.at(x, y, z);
         target.putFloat(veinToggle).putFloat(veinRidged).putFloat(veinGap).putInt(y)
                 .putFloat(random.nextFloat()).putFloat(random.nextFloat()).putFloat(random.nextFloat())
-                .putInt(Block.getId(Blocks.COPPER_ORE)).putInt(Block.getId(Blocks.RAW_COPPER_BLOCK))
-                .putInt(Block.getId(Blocks.GRANITE)).putInt(Block.getId(Blocks.DEEPSLATE_IRON_ORE))
-                .putInt(Block.getId(Blocks.RAW_IRON_BLOCK)).putInt(Block.getId(Blocks.TUFF));
+                .putInt(Block.getId(Blocks.COPPER_ORE.defaultBlockState()))
+                .putInt(Block.getId(Blocks.RAW_COPPER_BLOCK.defaultBlockState()))
+                .putInt(Block.getId(Blocks.GRANITE.defaultBlockState()))
+                .putInt(Block.getId(Blocks.DEEPSLATE_IRON_ORE.defaultBlockState()))
+                .putInt(Block.getId(Blocks.RAW_IRON_BLOCK.defaultBlockState()))
+                .putInt(Block.getId(Blocks.TUFF.defaultBlockState()));
     }
 
     /** CPU reference used for Vulkan parity checks and threshold fallback. */

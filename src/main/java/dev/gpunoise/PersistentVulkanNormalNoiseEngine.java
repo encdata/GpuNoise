@@ -34,6 +34,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             (long) GpuAquiferSubstance.MAX_QUERIES * GpuAquiferSubstance.OUTPUT_INTS)
             + (long) GpuAquiferFluidStatus.MAX_PREFILL_CENTERS * GpuAquiferFluidStatus.OUTPUT_INTS)
             * Integer.BYTES;
+    private static final long BIOME_TREE_BUFFER_BYTES = 8L * 1024L * 1024L;
     // interpolationOutput stores the interleaved per-block terrain roots.
     static final int INTERPOLATION_OUTPUT_FLOATS = INTERPOLATION_OUTPUT_MIB * 1024 * 1024 / Float.BYTES;
     private static final int MAX_INTERPOLATORS = 16;
@@ -49,7 +50,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private final NativeBuffer graphCoordinates, graphNodes, graphSplinePoints, graphBlendedMetadata,
             graphRoots, graphMthSinTable, interpolatedInputs, interpolatorMap;
     private final NativeBuffer interpolationMetadata, interpolationOutput, aquiferPressureInputs,
-            aquiferNearestInputs, aquiferNearestOutput;
+            aquiferNearestInputs, aquiferNearestOutput, biomeTreeBuffer;
     private final long shader, descriptorLayout, pipelineLayout, pipeline, descriptorPool, descriptorSet, commandPool;
     private long graphShader, gridShader, graphPipeline, gridPipeline;
     private long blockGraphShader, blockGraphPipeline;
@@ -60,6 +61,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private int blockGraphRegisterVariant;
     private boolean blockGraphFastMathVariant;
     private GpuDensityGraph compiledBlockGraphVariant;
+    private GpuBiomeSearchTree uploadedBiomeTree;
     private final long interpolationShader, interpolationDescriptorLayout, interpolationPipelineLayout,
             interpolationPipeline, interpolationDescriptorPool, interpolationDescriptorSet;
     private final long aquiferPressureShader, aquiferPressureDescriptorLayout, aquiferPressurePipelineLayout,
@@ -69,6 +71,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private final long aquiferSubstanceShader, aquiferSubstancePipelineLayout, aquiferSubstancePipeline;
     private final long oreVeinShader, oreVeinPipelineLayout, oreVeinPipeline;
     private final long aquiferFluidStatusShader, aquiferFluidStatusPipelineLayout, aquiferFluidStatusPipeline;
+    private final long biomeSearchShader, biomeSearchDescriptorLayout, biomeSearchPipelineLayout,
+            biomeSearchPipeline, biomeSearchDescriptorPool, biomeSearchDescriptorSet;
     private final boolean ownsDevice;
     /** Vulkan requires host-side external synchronization for queue operations. */
     private final Object queueSubmitLock;
@@ -166,6 +170,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             aquiferPressureInputs = hostVisibleBuffer((long) CAPACITY * GpuAquiferPressure.RECORD_BYTES, stack);
             aquiferNearestInputs = hostVisibleBuffer(AQUIFER_INPUT_BYTES, stack);
             aquiferNearestOutput = buffer(AQUIFER_OUTPUT_BYTES, stack);
+            biomeTreeBuffer = hostVisibleBuffer(BIOME_TREE_BUFFER_BYTES, stack);
             permutations = deviceLocalBuffer(8 * 1024 * 1024L, stack); octaves = deviceLocalBuffer(8 * 1024 * 1024L, stack); samplerMetadata = deviceLocalBuffer(64 * 1024L, stack);
             shader = shader(stack); descriptorLayout = descriptorLayout(stack); pipelineLayout = pipelineLayout(stack);
             pipeline = pipeline(stack); descriptorPool = descriptorPool(stack); descriptorSet = descriptorSet(stack);
@@ -206,6 +211,13 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             aquiferFluidStatusShader = loadShader(stack, "/assets/gpunoise/shaders/aquifer_fluid_status.comp.spv", "aquifer fluid-status shader");
             aquiferFluidStatusPipelineLayout = aquiferFluidStatusPipelineLayout(stack);
             aquiferFluidStatusPipeline = aquiferPipeline(aquiferFluidStatusShader, aquiferFluidStatusPipelineLayout, stack, "aquifer fluid-status pipeline");
+            biomeSearchShader = loadShader(stack, "/assets/gpunoise/shaders/biome_multinoise.comp.spv", "multi-noise biome shader");
+            biomeSearchDescriptorLayout = biomeSearchDescriptorLayout(stack);
+            biomeSearchPipelineLayout = biomeSearchPipelineLayout(stack);
+            biomeSearchPipeline = aquiferPipeline(biomeSearchShader, biomeSearchPipelineLayout, stack, "multi-noise biome pipeline");
+            biomeSearchDescriptorPool = biomeSearchDescriptorPool(stack);
+            biomeSearchDescriptorSet = biomeSearchDescriptorSet(stack);
+            biomeSearchDescriptors(stack);
             mapPersistentBuffers(stack);
             put(graphMthSinTable, GpuDensityGraphBuffer.mthSinTableBytes(), stack);
         } catch (Throwable failure) {
@@ -242,6 +254,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             aquiferPressureInputs = hostVisibleBuffer((long) CAPACITY * GpuAquiferPressure.RECORD_BYTES, stack);
             aquiferNearestInputs = hostVisibleBuffer(AQUIFER_INPUT_BYTES, stack);
             aquiferNearestOutput = buffer(AQUIFER_OUTPUT_BYTES, stack);
+            biomeTreeBuffer = hostVisibleBuffer(BIOME_TREE_BUFFER_BYTES, stack);
             permutations = deviceLocalBuffer(8 * 1024 * 1024L, stack);
             octaves = deviceLocalBuffer(8 * 1024 * 1024L, stack);
             samplerMetadata = deviceLocalBuffer(64 * 1024L, stack);
@@ -284,6 +297,13 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             aquiferFluidStatusShader = loadShader(stack, "/assets/gpunoise/shaders/aquifer_fluid_status.comp.spv", "aquifer fluid-status shader");
             aquiferFluidStatusPipelineLayout = aquiferFluidStatusPipelineLayout(stack);
             aquiferFluidStatusPipeline = aquiferPipeline(aquiferFluidStatusShader, aquiferFluidStatusPipelineLayout, stack, "aquifer fluid-status pipeline");
+            biomeSearchShader = loadShader(stack, "/assets/gpunoise/shaders/biome_multinoise.comp.spv", "multi-noise biome shader");
+            biomeSearchDescriptorLayout = biomeSearchDescriptorLayout(stack);
+            biomeSearchPipelineLayout = biomeSearchPipelineLayout(stack);
+            biomeSearchPipeline = aquiferPipeline(biomeSearchShader, biomeSearchPipelineLayout, stack, "multi-noise biome pipeline");
+            biomeSearchDescriptorPool = biomeSearchDescriptorPool(stack);
+            biomeSearchDescriptorSet = biomeSearchDescriptorSet(stack);
+            biomeSearchDescriptors(stack);
             mapPersistentBuffers(stack);
             put(graphMthSinTable, GpuDensityGraphBuffer.mthSinTableBytes(), stack);
         } catch (Throwable failure) {
@@ -1158,6 +1178,58 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         }
     }
 
+    /** Runs OCL's compact multi-noise tree search for a packed terrain region. */
+    synchronized int[] submitBiomeSearch(ByteBuffer targets, GpuBiomeSearchTree tree, int count) throws Exception {
+        if (hasInFlightWork()) throw new IllegalStateException("Vulkan slot is still in flight");
+        if (tree == null) throw new IllegalArgumentException("multi-noise biome tree is required");
+        ByteBuffer nodes = tree.packedNodes();
+        int nodeCount = tree.nodeCount();
+        int maxDepth = tree.maxDepth();
+        if (count <= 0 || count > CAPACITY || targets.remaining() != (long) count * 16L
+                || nodes.remaining() > BIOME_TREE_BUFFER_BYTES
+                || nodeCount < 2 || nodeCount * (long) GpuBiomeSearchTree.NODE_BYTES > nodes.remaining()
+                || maxDepth < 1 || maxDepth >= 64) {
+            throw new IllegalArgumentException("invalid multi-noise biome batch");
+        }
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            put(aquiferNearestInputs, targets, stack);
+            if (uploadedBiomeTree != tree) {
+                put(biomeTreeBuffer, nodes, stack);
+                uploadedBiomeTree = tree;
+            }
+            check(vkResetCommandBuffer(commandBuffer, 0), "reset biome search command buffer");
+            check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()),
+                    "begin biome search command buffer");
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, biomeSearchPipeline);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                    biomeSearchPipelineLayout, 0, stack.longs(biomeSearchDescriptorSet), null);
+            ByteBuffer push = stack.malloc(12).order(ByteOrder.nativeOrder())
+                    .putInt(count).putInt(nodeCount).putInt(maxDepth).flip();
+            vkCmdPushConstants(commandBuffer, biomeSearchPipelineLayout,
+                    VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
+            vkCmdDispatch(commandBuffer, (count + 63) / 64, 1, 1);
+            VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
+                    .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
+                    .buffer(interpolationOutput.buffer).size((long) count * Integer.BYTES);
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_PIPELINE_STAGE_HOST_BIT, 0, null, barrier, null);
+            check(vkEndCommandBuffer(commandBuffer), "end biome search command buffer");
+            synchronized (queueSubmitLock) {
+                check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default()
+                        .pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit biome search");
+            }
+            check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait biome search");
+            check(vkResetFences(device, fence), "reset biome search fence");
+            IntBuffer values = persistentMappings.get(interpolationOutput)
+                    .duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
+            values.clear();
+            values.limit(count);
+            int[] output = new int[count];
+            values.get(output);
+            return output;
+        }
+    }
+
     private static int[] unpackAquiferSubstanceRows(int[] words, int rows) {
         if (words.length != GpuAquiferSubstance.shaderOutputWordCount(rows))
             throw new IllegalArgumentException("packed aquifer output word count does not match row count");
@@ -1471,7 +1543,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         NativeBuffer[] buffers = {coordinates, results, permutations, octaves, samplerMetadata,
                 graphCoordinates, graphNodes, graphSplinePoints, graphBlendedMetadata, graphRoots,
                 interpolatorMap, interpolationMetadata, interpolationOutput, aquiferPressureInputs,
-                aquiferNearestInputs, aquiferNearestOutput};
+                aquiferNearestInputs, aquiferNearestOutput, biomeTreeBuffer};
         for (NativeBuffer buffer : buffers) {
             if (buffer.hostVisible) {
                 persistentMappings.put(buffer, buffer.map(device, stack).order(ByteOrder.nativeOrder()));
@@ -1705,6 +1777,11 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long aquiferNearestPipeline(MemoryStack s){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(aquiferNearestShader).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(aquiferNearestPipelineLayout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),"aquifer nearest-three pipeline");return h.get(0);}
     private long aquiferNearestDescriptorPool(MemoryStack s){VkDescriptorPoolSize.Buffer z=VkDescriptorPoolSize.calloc(1,s).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(2);VkDescriptorPoolCreateInfo i=VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(z);LongBuffer h=s.longs(0);check(vkCreateDescriptorPool(device,i,null,h),"aquifer nearest-three pool");return h.get(0);}
     private long aquiferNearestDescriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(aquiferNearestDescriptorPool).pSetLayouts(s.longs(aquiferNearestDescriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"aquifer nearest-three set");return h.get(0);}
+    private long biomeSearchDescriptorLayout(MemoryStack s){VkDescriptorSetLayoutBinding.Buffer b=VkDescriptorSetLayoutBinding.calloc(3,s);for(int i=0;i<3;i++)b.get(i).binding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);VkDescriptorSetLayoutCreateInfo i=VkDescriptorSetLayoutCreateInfo.calloc(s).sType$Default().pBindings(b);LongBuffer h=s.longs(0);check(vkCreateDescriptorSetLayout(device,i,null,h),"biome search layout");return h.get(0);}
+    private long biomeSearchPipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(12);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(biomeSearchDescriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"biome search pipeline layout");return h.get(0);}
+    private long biomeSearchDescriptorPool(MemoryStack s){VkDescriptorPoolSize.Buffer z=VkDescriptorPoolSize.calloc(1,s).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(3);VkDescriptorPoolCreateInfo i=VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(z);LongBuffer h=s.longs(0);check(vkCreateDescriptorPool(device,i,null,h),"biome search pool");return h.get(0);}
+    private long biomeSearchDescriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(biomeSearchDescriptorPool).pSetLayouts(s.longs(biomeSearchDescriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"biome search set");return h.get(0);}
+    private void biomeSearchDescriptors(MemoryStack s){NativeBuffer[] bs={aquiferNearestInputs,biomeTreeBuffer,interpolationOutput};VkWriteDescriptorSet.Buffer w=VkWriteDescriptorSet.calloc(bs.length,s);for(int i=0;i<bs.length;i++){VkDescriptorBufferInfo.Buffer bi=VkDescriptorBufferInfo.calloc(1,s).buffer(bs[i].buffer).range(bs[i].size);w.get(i).sType$Default().dstSet(biomeSearchDescriptorSet).dstBinding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bi);}vkUpdateDescriptorSets(device,w,null);}
     private void aquiferNearestDescriptors(MemoryStack s){NativeBuffer[] bs={aquiferNearestInputs,aquiferNearestOutput};VkWriteDescriptorSet.Buffer w=VkWriteDescriptorSet.calloc(2,s);for(int i=0;i<2;i++){VkDescriptorBufferInfo.Buffer bi=VkDescriptorBufferInfo.calloc(1,s).buffer(bs[i].buffer).range(bs[i].size);w.get(i).sType$Default().dstSet(aquiferNearestDescriptorSet).dstBinding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bi);}vkUpdateDescriptorSets(device,w,null);}
     private long aquiferSubstancePipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(4);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(aquiferNearestDescriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"aquifer substance pipeline layout");return h.get(0);}
     private long aquiferFluidStatusPipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(12);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(aquiferNearestDescriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"aquifer fluid-status pipeline layout");return h.get(0);}
@@ -1805,5 +1882,74 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         inFlightAquiferRowStage = null;
         if (unfinishedAquiferRows != null) unfinishedAquiferRows.completeExceptionally(
                 new IllegalStateException("GPU engine closed before aquifer decision completion was observed"));
-        for(NativeBuffer buffer:persistentMappings.keySet())buffer.unmap(device);vkDestroyFence(device,fence,null);if(timestampQueryPool!=0L)vkDestroyQueryPool(device,timestampQueryPool,null);vkDestroyCommandPool(device,commandPool,null);vkDestroyDescriptorPool(device,descriptorPool,null);vkDestroyPipeline(device,pipeline,null);vkDestroyPipelineLayout(device,pipelineLayout,null);vkDestroyDescriptorSetLayout(device,descriptorLayout,null);vkDestroyShaderModule(device,shader,null);vkDestroyPipeline(device,graphPipeline,null);vkDestroyPipeline(device,gridPipeline,null);vkDestroyPipeline(device,blockGraphPipeline,null);vkDestroyShaderModule(device,blockGraphShader,null);vkDestroyPipelineLayout(device,graphPipelineLayout,null);vkDestroyDescriptorSetLayout(device,graphDescriptorLayout,null);vkDestroyDescriptorPool(device,graphDescriptorPool,null);vkDestroyShaderModule(device,graphShader,null);vkDestroyShaderModule(device,gridShader,null);vkDestroyPipeline(device,interpolationPipeline,null);vkDestroyPipelineLayout(device,interpolationPipelineLayout,null);vkDestroyDescriptorSetLayout(device,interpolationDescriptorLayout,null);vkDestroyDescriptorPool(device,interpolationDescriptorPool,null);vkDestroyShaderModule(device,interpolationShader,null);vkDestroyPipeline(device,aquiferPressurePipeline,null);vkDestroyPipelineLayout(device,aquiferPressurePipelineLayout,null);vkDestroyDescriptorSetLayout(device,aquiferPressureDescriptorLayout,null);vkDestroyDescriptorPool(device,aquiferPressureDescriptorPool,null);vkDestroyShaderModule(device,aquiferPressureShader,null);vkDestroyPipeline(device,aquiferNearestPipeline,null);vkDestroyPipelineLayout(device,aquiferNearestPipelineLayout,null);vkDestroyDescriptorSetLayout(device,aquiferNearestDescriptorLayout,null);vkDestroyDescriptorPool(device,aquiferNearestDescriptorPool,null);vkDestroyShaderModule(device,aquiferNearestShader,null);vkDestroyPipeline(device,aquiferSubstancePipeline,null);vkDestroyPipelineLayout(device,aquiferSubstancePipelineLayout,null);vkDestroyShaderModule(device,aquiferSubstanceShader,null);vkDestroyPipeline(device,oreVeinPipeline,null);vkDestroyPipelineLayout(device,oreVeinPipelineLayout,null);vkDestroyShaderModule(device,oreVeinShader,null);vkDestroyPipeline(device,aquiferFluidStatusPipeline,null);vkDestroyPipelineLayout(device,aquiferFluidStatusPipelineLayout,null);vkDestroyShaderModule(device,aquiferFluidStatusShader,null);coordinates.destroy(device);graphCoordinates.destroy(device);graphNodes.destroy(device);graphSplinePoints.destroy(device);graphBlendedMetadata.destroy(device);graphRoots.destroy(device);graphMthSinTable.destroy(device);interpolatedInputs.destroy(device);interpolatorMap.destroy(device);interpolationMetadata.destroy(device);interpolationOutput.destroy(device);aquiferPressureInputs.destroy(device);aquiferNearestInputs.destroy(device);aquiferNearestOutput.destroy(device);results.destroy(device);permutations.destroy(device);octaves.destroy(device);samplerMetadata.destroy(device);if(ownsDevice){vkDestroyDevice(device,null);vkDestroyInstance(instance,null);}}
+        for (NativeBuffer buffer : persistentMappings.keySet()) buffer.unmap(device);
+        vkDestroyFence(device, fence, null);
+        if (timestampQueryPool != 0L) vkDestroyQueryPool(device, timestampQueryPool, null);
+        vkDestroyCommandPool(device, commandPool, null);
+        vkDestroyDescriptorPool(device, descriptorPool, null);
+        vkDestroyPipeline(device, pipeline, null);
+        vkDestroyPipelineLayout(device, pipelineLayout, null);
+        vkDestroyDescriptorSetLayout(device, descriptorLayout, null);
+        vkDestroyShaderModule(device, shader, null);
+        vkDestroyPipeline(device, graphPipeline, null);
+        vkDestroyPipeline(device, gridPipeline, null);
+        vkDestroyPipeline(device, blockGraphPipeline, null);
+        vkDestroyShaderModule(device, blockGraphShader, null);
+        vkDestroyPipelineLayout(device, graphPipelineLayout, null);
+        vkDestroyDescriptorSetLayout(device, graphDescriptorLayout, null);
+        vkDestroyDescriptorPool(device, graphDescriptorPool, null);
+        vkDestroyShaderModule(device, graphShader, null);
+        vkDestroyPipeline(device, interpolationPipeline, null);
+        vkDestroyPipelineLayout(device, interpolationPipelineLayout, null);
+        vkDestroyDescriptorSetLayout(device, interpolationDescriptorLayout, null);
+        vkDestroyDescriptorPool(device, interpolationDescriptorPool, null);
+        vkDestroyShaderModule(device, interpolationShader, null);
+        vkDestroyPipeline(device, aquiferPressurePipeline, null);
+        vkDestroyPipelineLayout(device, aquiferPressurePipelineLayout, null);
+        vkDestroyDescriptorSetLayout(device, aquiferPressureDescriptorLayout, null);
+        vkDestroyDescriptorPool(device, aquiferPressureDescriptorPool, null);
+        vkDestroyShaderModule(device, aquiferPressureShader, null);
+        vkDestroyPipeline(device, aquiferNearestPipeline, null);
+        vkDestroyPipelineLayout(device, aquiferNearestPipelineLayout, null);
+        vkDestroyDescriptorSetLayout(device, aquiferNearestDescriptorLayout, null);
+        vkDestroyDescriptorPool(device, aquiferNearestDescriptorPool, null);
+        vkDestroyShaderModule(device, aquiferNearestShader, null);
+        vkDestroyPipeline(device, aquiferSubstancePipeline, null);
+        vkDestroyPipelineLayout(device, aquiferSubstancePipelineLayout, null);
+        vkDestroyShaderModule(device, aquiferSubstanceShader, null);
+        vkDestroyPipeline(device, oreVeinPipeline, null);
+        vkDestroyPipelineLayout(device, oreVeinPipelineLayout, null);
+        vkDestroyShaderModule(device, oreVeinShader, null);
+        vkDestroyPipeline(device, aquiferFluidStatusPipeline, null);
+        vkDestroyPipelineLayout(device, aquiferFluidStatusPipelineLayout, null);
+        vkDestroyShaderModule(device, aquiferFluidStatusShader, null);
+        vkDestroyPipeline(device, biomeSearchPipeline, null);
+        vkDestroyPipelineLayout(device, biomeSearchPipelineLayout, null);
+        vkDestroyDescriptorSetLayout(device, biomeSearchDescriptorLayout, null);
+        vkDestroyDescriptorPool(device, biomeSearchDescriptorPool, null);
+        vkDestroyShaderModule(device, biomeSearchShader, null);
+        coordinates.destroy(device);
+        graphCoordinates.destroy(device);
+        graphNodes.destroy(device);
+        graphSplinePoints.destroy(device);
+        graphBlendedMetadata.destroy(device);
+        graphRoots.destroy(device);
+        graphMthSinTable.destroy(device);
+        interpolatedInputs.destroy(device);
+        interpolatorMap.destroy(device);
+        interpolationMetadata.destroy(device);
+        interpolationOutput.destroy(device);
+        aquiferPressureInputs.destroy(device);
+        aquiferNearestInputs.destroy(device);
+        aquiferNearestOutput.destroy(device);
+        biomeTreeBuffer.destroy(device);
+        results.destroy(device);
+        permutations.destroy(device);
+        octaves.destroy(device);
+        samplerMetadata.destroy(device);
+        if (ownsDevice) {
+            vkDestroyDevice(device, null);
+            vkDestroyInstance(instance, null);
+        }
+    }
 }

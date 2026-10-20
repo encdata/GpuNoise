@@ -267,6 +267,7 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
         # aquifer staging costs during correctness runs. These diagnostics do
         # not calculate or assert a chunks-per-second result.
         command.append("-Dgpunoise.profileTerrain=true")
+        command.append("-Dgpunoise.verifyBiomeGpu=true")
         # Benchmark the production cell-grid mode by default. Full-block
         # materialization is an explicit diagnostic because it adds output
         # transfer work that the normal runtime configuration does not use.
@@ -571,6 +572,8 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                     raise RuntimeError("GPU terrain did not consume a Vulkan ore-vein block decision")
                 if "GPU OreVeinifier parity mismatch" in run_log:
                     raise RuntimeError("Vulkan OreVeinifier decision differed from Minecraft's Java rule")
+            if "GPU multi-noise biome table applied to chunk" not in run_log:
+                raise RuntimeError("GPU multi-noise biome IDs were not applied during worldgen")
             batch_window = GPU_BATCH_WINDOW.search(run_log)
             if (batch_window is None or int(batch_window.group(1)) != BATCH_WINDOW_MS
                     or int(batch_window.group(2)) != BATCH_TARGET_CHUNKS

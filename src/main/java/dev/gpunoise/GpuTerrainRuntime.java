@@ -18,6 +18,12 @@ import net.minecraft.world.level.StructureManager;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.levelgen.synth.NormalNoise;
 import net.minecraft.world.level.levelgen.NoiseRouter;
+import net.minecraft.world.level.biome.MultiNoiseBiomeSource;
+import net.minecraft.core.QuartPos;
+import net.minecraft.core.Holder;
+import net.minecraft.world.level.biome.Biome;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 /** Runtime bridge used by the vanilla DensityFunctions.Noise fill hook. */
 public final class GpuTerrainRuntime {
@@ -33,11 +39,13 @@ public final class GpuTerrainRuntime {
     private static volatile GpuChunkFillCoordinator chunkFillCoordinator;
     private static volatile GpuFusedChunkBatchScheduler fusedChunkScheduler;
     private static volatile GpuTerrainRootsBatchScheduler terrainRootsScheduler;
+    private static volatile GpuBiomeSearchBatchScheduler biomeSearchScheduler;
     private static volatile GpuTerrainGraphProvider terrainProvider;
     private static volatile VulkanSubmissionRing terrainRing;
     private static volatile GpuDensityGraph terrainGraph;
     /** The exact router used to build and parity-check terrainGraph. */
     private static volatile NoiseRouter terrainRouter;
+    private static volatile GpuBiomeSearchTree biomeSearchTree;
     /** GPU-interpolated block densities; disable with gpunoise.fullBlockOutput=false. */
     private static final boolean FULL_BLOCK_OUTPUT = Boolean.parseBoolean(
             System.getProperty("gpunoise.fullBlockOutput", "true"));
@@ -274,6 +282,134 @@ public final class GpuTerrainRuntime {
         }).toCompletableFuture();
     }
 
+    public static void installBiomeSearchTree(MultiNoiseBiomeSource source) {
+        GpuBiomeSearchTree candidate = GpuBiomeSearchTree.compile(source);
+        biomeSearchTree = candidate;
+        if (candidate == null) {
+            GpuNoise.LOGGER.info("GPU multi-noise biome search unavailable for the active biome source.");
+        } else {
+            GpuNoise.LOGGER.info("GPU multi-noise biome tree ready: {} nodes, {} biome mappings, depth {}.",
+                    candidate.nodeCount(), candidate.biomeCount(), candidate.maxDepth());
+        }
+    }
+
+    /** Prepares a chunk's quart biome IDs from the GPU climate roots and OCL-style tree search. */
+    public static java.util.concurrent.CompletableFuture<Void> prepareGpuBiomeRegion(
+            GpuChunkDensityCache cache, RandomState randomState, ChunkAccess chunk) {
+        GpuBiomeSearchTree tree = biomeSearchTree;
+        VulkanSubmissionRing ring = terrainRing;
+        if (tree == null || ring == null || cache == null || !cache.supportsBiomeClimateRoots()
+                || chunk.isUpgrading()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        int height = chunk.getHeightAccessorForGeneration().getSectionsCount() * 4;
+        if (height <= 0 || (long) height * 16L > PersistentVulkanNormalNoiseEngine.CAPACITY) {
+            return CompletableFuture.completedFuture(null);
+        }
+        int minBiomeX = QuartPos.fromBlock(chunk.getPos().getMinBlockX());
+        int minBiomeY = QuartPos.fromBlock(chunk.getMinBuildHeight());
+        int minBiomeZ = QuartPos.fromBlock(chunk.getPos().getMinBlockZ());
+        int sampleCount = height * 16;
+        float[] xs = new float[sampleCount];
+        float[] ys = new float[sampleCount];
+        float[] zs = new float[sampleCount];
+        int sample = 0;
+        for (int y = 0; y < height; y++) {
+            int blockY = QuartPos.toBlock(minBiomeY + y);
+            for (int z = 0; z < 4; z++) {
+                int blockZ = QuartPos.toBlock(minBiomeZ + z);
+                for (int x = 0; x < 4; x++) {
+                    int blockX = QuartPos.toBlock(minBiomeX + x);
+                    // The graph's float coordinate ABI is exact only inside this
+                    // range. Preserve vanilla biome selection beyond it.
+                    if (Math.abs((long) blockX) >= (1L << 24) || Math.abs((long) blockY) >= (1L << 24)
+                            || Math.abs((long) blockZ) >= (1L << 24)) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+                    xs[sample] = blockX;
+                    ys[sample] = blockY;
+                    zs[sample] = blockZ;
+                    sample++;
+                }
+            }
+        }
+        GpuBiomeSearchBatchScheduler scheduler = biomeSearchScheduler;
+        if (scheduler == null) return CompletableFuture.completedFuture(null);
+        return submitTerrainRootsDirect(xs, ys, zs, sampleCount).thenCompose(climateRoots -> {
+            int[] climateRootIds = {GpuTerrainRoots.TEMPERATURE, GpuTerrainRoots.VEGETATION,
+                    GpuTerrainRoots.CONTINENTS, GpuTerrainRoots.EROSION,
+                    GpuTerrainRoots.DEPTH, GpuTerrainRoots.RIDGES};
+            for (int root : climateRootIds) {
+                if (root >= climateRoots.roots()) return CompletableFuture.completedFuture(null);
+            }
+            ByteBuffer targets = ByteBuffer.allocateDirect(sampleCount * 16).order(ByteOrder.nativeOrder());
+            boolean verifyGpu = Boolean.getBoolean("gpunoise.verifyBiomeGpu");
+            NoiseRouter javaRouter = verifyGpu ? randomState.router() : null;
+            long[] javaTargets = verifyGpu ? new long[sampleCount * 6] : null;
+            for (int i = 0; i < sampleCount; i++) {
+                float temperature = climateRoots.valueAt(i, GpuTerrainRoots.TEMPERATURE);
+                float vegetation = climateRoots.valueAt(i, GpuTerrainRoots.VEGETATION);
+                float continents = climateRoots.valueAt(i, GpuTerrainRoots.CONTINENTS);
+                float erosion = climateRoots.valueAt(i, GpuTerrainRoots.EROSION);
+                float depth = climateRoots.valueAt(i, GpuTerrainRoots.DEPTH);
+                float ridges = climateRoots.valueAt(i, GpuTerrainRoots.RIDGES);
+                if (!Float.isFinite(temperature) || !Float.isFinite(vegetation)
+                        || !Float.isFinite(continents) || !Float.isFinite(erosion)
+                        || !Float.isFinite(depth) || !Float.isFinite(ridges)) {
+                    return CompletableFuture.completedFuture(null);
+                }
+                if (verifyGpu) {
+                    DensityFunction.FunctionContext context = new DensityFunction.SinglePointContext(
+                            (int) xs[i], (int) ys[i], (int) zs[i]);
+                    int targetOffset = i * 6;
+                    javaTargets[targetOffset] = net.minecraft.world.level.biome.Climate.quantizeCoord(
+                            (float) javaRouter.temperature().compute(context));
+                    javaTargets[targetOffset + 1] = net.minecraft.world.level.biome.Climate.quantizeCoord(
+                            (float) javaRouter.vegetation().compute(context));
+                    javaTargets[targetOffset + 2] = net.minecraft.world.level.biome.Climate.quantizeCoord(
+                            (float) javaRouter.continents().compute(context));
+                    javaTargets[targetOffset + 3] = net.minecraft.world.level.biome.Climate.quantizeCoord(
+                            (float) javaRouter.erosion().compute(context));
+                    javaTargets[targetOffset + 4] = net.minecraft.world.level.biome.Climate.quantizeCoord(
+                            (float) javaRouter.depth().compute(context));
+                    javaTargets[targetOffset + 5] = net.minecraft.world.level.biome.Climate.quantizeCoord(
+                            (float) javaRouter.ridges().compute(context));
+                }
+                GpuBiomeSearchTree.putTarget(targets, temperature, vegetation, continents,
+                        erosion, depth, ridges);
+            }
+            targets.flip();
+            ByteBuffer parityTargets = targets.asReadOnlyBuffer().order(ByteOrder.nativeOrder());
+            return scheduler.submit(targets, tree, sampleCount).thenAccept(ids -> {
+                @SuppressWarnings("unchecked")
+                Holder<Biome>[] mapped = (Holder<Biome>[]) new Holder<?>[ids.length];
+                ByteBuffer verify = parityTargets.duplicate().order(ByteOrder.nativeOrder());
+                for (int i = 0; i < ids.length; i++) {
+                    if (verifyGpu) {
+                        short[] target = new short[7];
+                        for (int dim = 0; dim < 7; dim++) target[dim] = verify.getShort();
+                        verify.getShort();
+                        int expected = tree.search(target);
+                        boolean vanillaMatches = tree.matchesVanilla(javaTargets, i * 6, ids[i]);
+                        if (ids[i] != expected || !vanillaMatches) {
+                            GpuNoise.LOGGER.error("GPU biome search parity mismatch at row {}: Vulkan={}, Java={}; "
+                                    + "vanillaTreeMatches={}; discarding this chunk's GPU biome table.",
+                                    i, ids[i], expected, vanillaMatches);
+                            return;
+                        }
+                    }
+                    mapped[i] = tree.biome(ids[i]);
+                    if (mapped[i] == null) return;
+                }
+                GpuBiomeRegionResults.publish(chunk.getPos().x, chunk.getPos().z, minBiomeY, height, mapped);
+            });
+        }).exceptionally(failure -> {
+            GpuNoise.LOGGER.debug("GPU multi-noise biome batch unavailable; biome search remains Java: {}",
+                    failure.toString());
+            return null;
+        }).toCompletableFuture();
+    }
+
     public static void markGpuCacheUsed(GpuChunkDensityCache cache) {
         // GPU values are read for almost every generated block, but the
         // statistic is per cache. The cache keeps a plain fast flag and only
@@ -341,6 +477,7 @@ public final class GpuTerrainRuntime {
         if (terrainScheduler != null) terrainScheduler.close();
         if (terrainProvider != null) terrainProvider.close();
         if (terrainRootsScheduler != null) terrainRootsScheduler.close();
+        if (biomeSearchScheduler != null) biomeSearchScheduler.close();
         terrainRing = submissionRing;
         terrainGraph = graph;
         terrainRouter = router;
@@ -350,6 +487,7 @@ public final class GpuTerrainRuntime {
         GpuNoise.LOGGER.info("GPU terrain graph: nodes={}, registers={}, block pass skips {} marker-only nodes",
                 graph.nodes().size(), graph.registerCount(), skippedBlockNodes);
         terrainRootsScheduler = new GpuTerrainRootsBatchScheduler();
+        biomeSearchScheduler = new GpuBiomeSearchBatchScheduler(terrainRing);
         terrainProvider = null;
         terrainScheduler = null;
         chunkFillCoordinator = null;
@@ -1125,16 +1263,20 @@ public final class GpuTerrainRuntime {
         if (chunkFillCoordinator != null) chunkFillCoordinator.close();
         if (fusedChunkScheduler != null) fusedChunkScheduler.close();
         if (terrainRootsScheduler != null) terrainRootsScheduler.close();
+        if (biomeSearchScheduler != null) biomeSearchScheduler.close();
         if (terrainProvider != null) terrainProvider.close();
         VulkanSubmissionRing ring = submissionRing;
         terrainRing = null;
         terrainGraph = null;
         terrainRouter = null;
+        biomeSearchTree = null;
+        GpuBiomeRegionResults.clear();
         submissionRing = null;
         terrainScheduler = null;
         chunkFillCoordinator = null;
         fusedChunkScheduler = null;
         terrainRootsScheduler = null;
+        biomeSearchScheduler = null;
         terrainProvider = null;
         verifiedTerrainRootMask = 0;
         verifiedTerrainBlockRootMask = 0;

@@ -45,7 +45,8 @@ abstract class NoiseChunkGeneratorBiomeMixin {
             // visible there and could remain attached to this worker. The
             // authoritative fillFromNoise path binds around doFill itself;
             // biome sampling safely uses vanilla when no cache is attached.
-            return original.call(randomState, blender, structures, chunk);
+            return GpuTerrainRuntime.prepareGpuBiomeRegion(cache, randomState, chunk)
+                    .thenCompose(ignored -> original.call(randomState, blender, structures, chunk));
         }, net.minecraft.Util.backgroundExecutor());
     }
 }

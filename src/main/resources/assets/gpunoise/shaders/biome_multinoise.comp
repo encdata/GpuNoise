@@ -1,0 +1,91 @@
+#version 450
+layout(local_size_x = 64) in;
+
+// The node words match GpuBiomeSearchTree: four uint metadata words followed
+// by seven packed signed-short [min,max] pairs, then a trailing child-index
+// array addressed by metadata.y.
+layout(std430, set = 0, binding = 0) readonly buffer Targets { uint words[]; };
+layout(std430, set = 0, binding = 1) readonly buffer Tree { uint words[]; };
+layout(std430, set = 0, binding = 2) writeonly buffer Results { uint biomeIds[]; };
+layout(push_constant) uniform Parameters { uint queryCount; uint nodeCount; uint maxDepth; };
+
+uint unpackShort(uint packed, bool upperHalf) {
+    uint raw = upperHalf ? packed >> 16u : packed & 0xffffu;
+    return raw >= 32768u ? raw - 65536u : raw;
+}
+
+uvec2 addSquare(uvec2 sum, int delta) {
+    uint magnitude = uint(abs(delta));
+    uint square = magnitude * magnitude;
+    uint next = sum.x + square;
+    return uvec2(next, sum.y + uint(next < sum.x));
+}
+
+bool lessDistance(uvec2 left, uvec2 right) {
+    return left.y < right.y || (left.y == right.y && left.x < right.x);
+}
+
+uvec2 nodeDistance(uint node, int target[7]) {
+    uint base = node * 12u;
+    uvec2 result = uvec2(0u);
+    for (uint dim = 0u; dim < 7u; ++dim) {
+        uint packed = Tree.words[base + 4u + dim];
+        int minimum = int(unpackShort(packed, false));
+        int maximum = int(unpackShort(packed, true));
+        int value = target[dim];
+        int delta = value < minimum ? minimum - value : (value > maximum ? value - maximum : 0);
+        result = addSquare(result, delta);
+    }
+    return result;
+}
+
+uint searchTree(uint query) {
+    int target[7];
+    uint targetBase = query * 4u;
+    for (uint dim = 0u; dim < 6u; ++dim) {
+        uint packed = Targets.words[targetBase + (dim >> 1u)];
+        target[dim] = int(unpackShort(packed, (dim & 1u) != 0u));
+    }
+    target[6] = 0;
+
+    uint stackNodes[64];
+    uint stackIter[64];
+    uint top = 1u;
+    stackNodes[0] = 1u;
+    stackIter[0] = 0u;
+    uint bestNode = 1u;
+    uvec2 bestDistance = uvec2(0xffffffffu);
+    while (top > 0u) {
+        uint current = stackNodes[top - 1u];
+        uint currentBase = current * 12u;
+        uint childIndex = stackIter[top - 1u];
+        uint childCount = Tree.words[currentBase + 2u];
+        uint childStart = Tree.words[currentBase + 1u];
+        if (childIndex >= childCount) {
+            --top;
+            continue;
+        }
+        stackIter[top - 1u] = childIndex + 1u;
+        uint child = Tree.words[childStart + childIndex];
+        if (child == 0u || child >= nodeCount) continue;
+        uvec2 distance = nodeDistance(child, target);
+        if (!lessDistance(distance, bestDistance)) continue;
+        uint childBase = child * 12u;
+        if (Tree.words[childBase] == 1u) {
+            if (top >= min(maxDepth + 1u, 64u)) return 0xffffffffu;
+            stackNodes[top] = child;
+            stackIter[top] = 0u;
+            ++top;
+        } else {
+            bestDistance = distance;
+            bestNode = child;
+        }
+    }
+    return Tree.words[bestNode * 12u + 3u];
+}
+
+void main() {
+    uint query = gl_GlobalInvocationID.x;
+    if (query >= queryCount) return;
+    biomeIds[query] = searchTree(query);
+}

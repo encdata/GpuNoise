@@ -19,6 +19,13 @@
     "AquiferFluidStatusAccessor",
     "AquiferGpuInputsMixin",
     "OreVeinifierGpuMixin",
+    "MultiNoiseBiomeSourceAccess",
+    "ClimateParameterListAccess",
+    "ClimateRTreeAccess",
+    "ClimateRTreeNodeAccess",
+    "ClimateRTreeSubTreeAccess",
+    "ClimateRTreeLeafAccess",
+    "ChunkAccessBiomeFillMixin",
     "NoiseChunkGeneratorWriteMixin",
     "C2meCompiledDensityFunctionMixin",
     "ClientCompileStatusMixin"
