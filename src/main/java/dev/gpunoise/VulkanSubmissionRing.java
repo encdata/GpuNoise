@@ -350,6 +350,17 @@ final class VulkanSubmissionRing implements AutoCloseable {
             }
             return;
         }
+        if (nearest != null) {
+            try {
+                slot.submitAquiferNearestThreeAsync(nearest.records, nearest.count)
+                        .whenComplete((result, failure) ->
+                                completeOnDispatchWorker(nearest.future, result, failure));
+            } catch (Throwable failure) {
+                nearest.future.completeExceptionally(new IllegalStateException(
+                        "GPU ring aquifer nearest-three submission failed", failure));
+            }
+            return;
+        }
         synchronousSlots.add(slot);
         try {
             dispatchWorkers.execute(() -> {
