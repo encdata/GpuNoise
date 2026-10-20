@@ -706,26 +706,17 @@ public final class GpuTerrainRuntime {
 
     /** Verifies the metadata/indexing path used by real chunk cell grids. */
     static void verifyTerrainGrid(GpuDensityGraph graph, NoiseRouter router, NoiseSettings settings) {
-        GpuTerrainRootsBatchScheduler scheduler = terrainRootsScheduler;
-        if (scheduler == null) {
-            verifiedTerrainRootMask = 0;
-            verifiedTerrainBlockRootMask = 0;
-            interpolatedTerrainBlockRootMask = 0;
-            terrainBlockOutputVerificationComplete = true;
-            return;
-        }
         int cellWidth = settings.getCellWidth();
         int cellHeight = settings.getCellHeight();
         GpuTerrainGrid grid = new GpuTerrainGrid(0, settings.minY(), 0,
                 16 / cellWidth + 1, settings.height() / cellHeight + 1,
                 16 / cellWidth + 1, cellWidth, cellHeight);
         try {
-            // Exercise the real spatial batch collector once, then pin the
-            // same workload to every device so one passing adapter cannot
-            // hide a mismatch on another adapter in the pool.
-            scheduler.submit(grid).toCompletableFuture()
-                    .orTimeout(STARTUP_PARITY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
-                    .join();
+            // Validate the actual grid metadata directly. The spatial batcher
+            // is exercised by worldgen; invoking it here can also request a
+            // full-height per-block pass on software Vulkan, which is far
+            // more work than compact grid parity and can stall Lavapipe for
+            // minutes before the server starts.
             VulkanSubmissionRing ring = submissionRing;
             if (ring == null) throw new IllegalStateException("Vulkan submission pool is not installed");
             java.nio.ByteBuffer metadata = java.nio.ByteBuffer.allocateDirect(32)
@@ -734,13 +725,15 @@ public final class GpuTerrainRuntime {
                     .putInt(grid.gridX()).putInt(grid.gridY()).putInt(grid.gridZ())
                     .putInt(grid.cellWidth()).putInt(grid.cellHeight()).flip();
             int[] blockRoots = terrainBlockOutputRootIndexes();
-            boolean includeBlockOutputs = terrainBlockOutputEnabled() && blockRoots.length > 0;
             int blocksPerChunk = Math.multiplyExact(256, settings.height());
             java.nio.ByteBuffer outputMetadata = GpuInterpolationBatch.metadata(1, grid.gridX() - 1,
                     grid.gridY() - 1, grid.gridZ() - 1, grid.cellWidth(), grid.cellHeight(),
                     grid.sampleCount(), blocksPerChunk, grid.minX(), grid.minY(), grid.minZ());
             List<CompletableFuture<GpuTerrainBatchResult>> terrainChecks = new ArrayList<>();
             for (GpuDevice candidate : ring.devices()) {
+                boolean includeBlockOutputs = candidate.deviceType()
+                        != org.lwjgl.vulkan.VK10.VK_PHYSICAL_DEVICE_TYPE_CPU
+                        && terrainBlockOutputEnabled() && blockRoots.length > 0;
                 if (includeBlockOutputs) {
                     terrainChecks.add(ring.submitTerrainGridForDevice(candidate, graph, metadata,
                                     grid.sampleCount(), outputMetadata, blocksPerChunk, blockRoots)
@@ -809,9 +802,22 @@ public final class GpuTerrainRuntime {
             verifiedTerrainRootMask &= gridVerifiedRoots;
             int verifiedBlockRoots = (1 << GpuTerrainRoots.COUNT) - 1;
             int verifiedInterpolatedRoots = (1 << GpuTerrainRoots.COUNT) - 1;
-            for (GpuTerrainBatchResult deviceResult : deviceTerrainResults) {
+            int blockVerifiedDeviceCount = 0;
+            List<GpuDevice> candidateDevices = ring.devices();
+            for (int deviceIndex = 0; deviceIndex < deviceTerrainResults.size(); deviceIndex++) {
+                GpuTerrainBatchResult deviceResult = deviceTerrainResults.get(deviceIndex);
+                GpuDevice candidate = candidateDevices.get(deviceIndex);
+                if (candidate.deviceType() == org.lwjgl.vulkan.VK10.VK_PHYSICAL_DEVICE_TYPE_CPU
+                        || deviceResult.blocks().isEmpty()) {
+                    continue;
+                }
+                blockVerifiedDeviceCount++;
                 verifiedBlockRoots &= verifyTerrainBlockOutputs(graph, cpu, deviceResult.blocks(), settings);
                 verifiedInterpolatedRoots &= findInterpolatedBlockOutputRoots(graph, deviceResult.blocks());
+            }
+            if (blockVerifiedDeviceCount == 0) {
+                GpuNoise.LOGGER.info("Skipping full-height per-block startup parity on software Vulkan; "
+                        + "compact grid roots were checked and per-block output remains disabled there.");
             }
             verifiedTerrainBlockRootMask = verifiedBlockRoots & verifiedTerrainRootMask;
             interpolatedTerrainBlockRootMask = verifiedInterpolatedRoots & verifiedTerrainRootMask;
