@@ -706,7 +706,10 @@ final class VulkanSubmissionRing implements AutoCloseable {
                     combined.putInt(source.getInt(queryOffset))
                             .putInt(source.getInt(queryOffset + Integer.BYTES))
                             .putInt(source.getInt(queryOffset + Integer.BYTES * 2))
-                            .putInt(source.getInt(queryOffset + Integer.BYTES * 3) + groupOffset);
+                            .putInt(source.getInt(queryOffset + Integer.BYTES * 3) + groupOffset)
+                            .putInt(source.getInt(queryOffset + Integer.BYTES * 4))
+                            .putInt(source.getInt(queryOffset + Integer.BYTES * 5))
+                            .putInt(source.getInt(queryOffset + Integer.BYTES * 6));
                 }
                 int centersOffset = sourcePosition + GpuAquiferNearestThree.HEADER_BYTES
                         + payload.count * GpuAquiferNearestThree.QUERY_RECORD_BYTES;

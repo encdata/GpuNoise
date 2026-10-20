@@ -789,8 +789,19 @@ public final class VulkanCiSmoke {
                 columnarQueries.add(query, queries[query][0], queries[query][1], queries[query][2],
                         query * 0.125, -query * 0.25, (query & 1) != 0, centers[query]);
             }
-            if (!nearestInput.equals(GpuAquiferNearestThree.pack(columnarQueries, 0, queryCount))) {
-                throw new IllegalStateException("columnar aquifer staging changed nearest-center packing");
+            ByteBuffer seededNearest = GpuAquiferNearestThree.pack(columnarQueries, 0, queryCount)
+                    .order(ByteOrder.nativeOrder());
+            int firstSeed = GpuAquiferNearestThree.HEADER_BYTES;
+            if (seededNearest.getFloat(firstSeed + 4 * Integer.BYTES) != 0.0f
+                    || seededNearest.getFloat(firstSeed + 5 * Integer.BYTES) != 0.0f
+                    || seededNearest.getInt(firstSeed + 6 * Integer.BYTES) != 0
+                    || seededNearest.getFloat(firstSeed + GpuAquiferNearestThree.QUERY_RECORD_BYTES
+                            + 4 * Integer.BYTES) != 0.125f
+                    || seededNearest.getFloat(firstSeed + GpuAquiferNearestThree.QUERY_RECORD_BYTES
+                            + 5 * Integer.BYTES) != -0.25f
+                    || seededNearest.getInt(firstSeed + GpuAquiferNearestThree.QUERY_RECORD_BYTES
+                            + 6 * Integer.BYTES) != 1) {
+                throw new IllegalStateException("columnar nearest staging lost decision seed metadata");
             }
             ByteBuffer queuedGridMetadata = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder());
             queuedGridMetadata.putInt(-16).putInt(-8).putInt(32)

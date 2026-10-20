@@ -15,7 +15,9 @@ public final class GpuAquiferNearestThree {
     // Vanilla visits grid X offsets 0..1, Y offsets -1..1, Z offsets 0..1.
     public static final int CANDIDATES = 12;
     public static final int HEADER_BYTES = 2 * Integer.BYTES;
-    public static final int QUERY_RECORD_BYTES = 4 * Integer.BYTES;
+    /** xyz + center-group index + density/barrier float bits + flags. */
+    public static final int QUERY_RECORD_WORDS = 7;
+    public static final int QUERY_RECORD_BYTES = QUERY_RECORD_WORDS * Integer.BYTES;
     public static final int CENTER_RECORD_BYTES = 4 * Integer.BYTES * CANDIDATES;
     /** Maximum-size query plus one unique center neighborhood per query. */
     public static final int RECORD_BYTES = QUERY_RECORD_BYTES + CENTER_RECORD_BYTES;
@@ -60,7 +62,7 @@ public final class GpuAquiferNearestThree {
         packed.putInt(queries.length).putInt(uniqueCenters.size());
         for (int i = 0; i < queries.length; i++) {
             packed.putInt(queries[i][0]).putInt(queries[i][1]).putInt(queries[i][2])
-                    .putInt(queryCenterIndices[i]);
+                    .putInt(queryCenterIndices[i]).putFloat(0.0f).putFloat(0.0f).putInt(0);
         }
         for (int[][] neighborhood : uniqueCenters) {
             for (int[] center : neighborhood) {
@@ -103,7 +105,9 @@ public final class GpuAquiferNearestThree {
         for (int index = offset; index < offset + count; index++) {
             AquiferQuery query = queries.get(index);
             packed.putInt(query.x).putInt(query.y).putInt(query.z)
-                    .putInt(queryCenterIndices[index - offset]);
+                    .putInt(queryCenterIndices[index - offset])
+                    .putFloat((float) query.density).putFloat((float) query.barrier)
+                    .putInt(query.belowIsLava ? 1 : 0);
         }
         for (int[][] neighborhood : uniqueCenters) {
             for (int[] center : neighborhood) {
@@ -156,7 +160,8 @@ public final class GpuAquiferNearestThree {
         for (int i = 0; i < count; i++) {
             int row = offset + i;
             packed.putInt(queries.x(row)).putInt(queries.y(row)).putInt(queries.z(row))
-                    .putInt(queryCenterIndices[i]);
+                    .putInt(queryCenterIndices[i]).putFloat((float) queries.density(row))
+                    .putFloat((float) queries.barrier(row)).putInt(queries.belowIsLava(row) ? 1 : 0);
         }
         for (int[][] neighborhood : uniqueCenters) {
             for (int[] center : neighborhood) {
