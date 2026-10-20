@@ -322,6 +322,19 @@ tasks.named('jar', Jar).configure {
     }
 }
 
+// The loader shell already contains its complete embedded mod payload. Copy
+// it as the distributable instead of using NeoForge's jarJar task, which
+// would unpack the payload dependencies a second time into the shell.
+def universalArtifact = tasks.register('universalArtifact', Copy) {
+    dependsOn tasks.named('jar')
+    from(tasks.named('jar').flatMap { it.archiveFile })
+    into(layout.buildDirectory.dir('libs'))
+    rename { "${mod_id}-${version}-all.jar" }
+}
+tasks.named('assemble') {
+    dependsOn universalArtifact
+}
+
 // This block of code expands all declared replace properties in the specified resource targets.
 // A missing property will result in an error. Properties are expanded using ${} Groovy notation.
 // When "copyIdeResources" is enabled, this will also run before the game launches in IDE environments.
