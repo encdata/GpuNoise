@@ -328,8 +328,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
         switch (requestClass) {
             case GRAPH_ROOTS -> {
                 GraphRootsRequest request = pendingGraphRoots.poll();
-                if (request == null) return false;
-                if (request.future.isDone()) return false;
+                if (request == null || request.future.isDone()) return request != null;
                 recordQueueWait(request.enqueuedNanos, requestClass);
                 try {
                     slot.submitGraphRootsAsync(request.graph, request.x, request.y, request.z, request.sampleCount)
@@ -473,9 +472,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
     CompletableFuture<float[]> submitInterpolation(float[] corners, ByteBuffer metadata,
                                                     int chunkCount, int blocksPerChunk,
                                                     int rootStride, int outputStride) {
-        ByteBuffer inputMetadata = metadata.duplicate();
-        float[] inputCorners = corners.clone();
-        return submitBlocking("interpolation", slot -> slot.submitInterpolation(inputCorners, inputMetadata,
+        return submitBlocking("interpolation", slot -> slot.submitInterpolation(corners.clone(), snapshot(metadata),
                 chunkCount, blocksPerChunk, rootStride, outputStride));
     }
 
@@ -595,10 +592,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     CompletableFuture<GpuFusedResult> submitGraphInterpolated(GpuDensityGraph graph, float[] x, float[] y, float[] z,
                                                         int sampleCount, ByteBuffer metadata, int chunkCount, int blocksPerChunk) {
-        ByteBuffer inputMetadata = metadata.duplicate();
-        float[] inputX = x.clone(), inputY = y.clone(), inputZ = z.clone();
         return submitBlocking("fused terrain", slot ->
-                slot.submitGraphInterpolated(graph, inputX, inputY, inputZ, sampleCount, inputMetadata, chunkCount, blocksPerChunk));
+                slot.submitGraphInterpolated(graph, x.clone(), y.clone(), z.clone(), sampleCount,
+                        snapshot(metadata), chunkCount, blocksPerChunk));
     }
 
     /** Own the small metadata payload until the queued dispatch has consumed it. */
