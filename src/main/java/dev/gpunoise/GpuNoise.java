@@ -131,36 +131,38 @@ public final class GpuNoise {
             }
             var router = server.overworld().getChunkSource().randomState().router();
             GpuDensityGraph installedGraph = null;
-            // The complete router is useful for a startup parity diagnostic,
-            // but it is not the active terrain contract. Mods may add custom
-            // functions to unrelated roots (veins, aquifer helpers, etc.).
-            // Do not disable supported terrain roots merely because that
-            // diagnostic graph cannot represent an unrelated custom branch.
-            try {
-                GpuDensityGraph fullGraph = GpuDensityGraphLowerer.lower(GpuDensityGraphCompiler.compile(router));
-                GpuDensityGraphBuffer.Packed packedGraph = GpuDensityGraphBuffer.pack(fullGraph);
-                LOGGER.info("GPU density graph discovered: {} nodes, {} router roots, {} noise samplers; packed {} bytes for GPU lowering.",
-                        fullGraph.nodes().size(), fullGraph.routerRootCount(), fullGraph.noises().size(),
-                        packedGraph.nodes().capacity());
-                boolean softwareVulkan = device.deviceType()
-                        == org.lwjgl.vulkan.VK10.VK_PHYSICAL_DEVICE_TYPE_CPU;
-                if (device.shaderFloat64() && !softwareVulkan) {
-                    VulkanBootstrapThread.callUnchecked(() -> {
-                        GpuTerrainRuntime.verifyGraph(fullGraph, router);
-                        return null;
-                    });
-                    VulkanBootstrapThread.callUnchecked(() -> {
-                        GpuTerrainRuntime.verifyTerrainGraph(fullGraph, router);
-                        return null;
-                    });
-                } else if (softwareVulkan) {
-                    LOGGER.info("Full-router parity diagnostics skipped on the software Vulkan device; "
-                            + "compact terrain-root and cell-grid parity checks remain enabled.");
-                } else {
-                    LOGGER.info("Full-router parity diagnostics skipped: selected GPU lacks shaderFloat64.");
+            boolean softwareVulkan = device.deviceType()
+                    == org.lwjgl.vulkan.VK10.VK_PHYSICAL_DEVICE_TYPE_CPU;
+            // The complete router is useful as an optional diagnostic, but it
+            // is not the active terrain contract. Mods may add unrelated or
+            // unsupported roots, and interpreting them on software Vulkan can
+            // hold up server startup. The compact terrain graph below remains
+            // responsible for deciding which GPU roots pass parity.
+            if (softwareVulkan) {
+                LOGGER.info("Skipping full-router compilation and parity diagnostics on the software Vulkan device; "
+                        + "compact terrain-root and cell-grid checks remain enabled.");
+            } else {
+                try {
+                    GpuDensityGraph fullGraph = GpuDensityGraphLowerer.lower(GpuDensityGraphCompiler.compile(router));
+                    GpuDensityGraphBuffer.Packed packedGraph = GpuDensityGraphBuffer.pack(fullGraph);
+                    LOGGER.info("GPU density graph discovered: {} nodes, {} router roots, {} noise samplers; packed {} bytes for GPU lowering.",
+                            fullGraph.nodes().size(), fullGraph.routerRootCount(), fullGraph.noises().size(),
+                            packedGraph.nodes().capacity());
+                    if (device.shaderFloat64()) {
+                        VulkanBootstrapThread.callUnchecked(() -> {
+                            GpuTerrainRuntime.verifyGraph(fullGraph, router);
+                            return null;
+                        });
+                        VulkanBootstrapThread.callUnchecked(() -> {
+                            GpuTerrainRuntime.verifyTerrainGraph(fullGraph, router);
+                            return null;
+                        });
+                    } else {
+                        LOGGER.info("Full-router parity diagnostics skipped: selected GPU lacks shaderFloat64.");
+                    }
+                } catch (RuntimeException diagnosticFailure) {
+                    LOGGER.info("GPU full-router parity diagnostic skipped: {}", diagnosticFailure.getMessage());
                 }
-            } catch (RuntimeException diagnosticFailure) {
-                LOGGER.info("GPU full-router parity diagnostic skipped: {}", diagnosticFailure.getMessage());
             }
 
             try {
