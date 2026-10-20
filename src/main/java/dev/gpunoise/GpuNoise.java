@@ -24,16 +24,12 @@ public final class GpuNoise {
     public static final String MOD_ID = "gpunoise";
     public static final Logger LOGGER = LogUtils.getLogger();
     private GpuDevice warmedDevice;
+    private boolean worldGraphSetupAttempted;
 
     public GpuNoise(IEventBus modEventBus, ModContainer modContainer) {
-        // Deliberately server-side only: no client/rendering hooks are registered.
-        // Probe and allocate the Vulkan runtime while mods are still being
-        // registered.  Waiting for ServerStarting is too late: NeoForge may
-        // already have begun preparing the spawn region by then.
-        // Config values are not loaded until after mod construction. Use the
-        // safe automatic preference for this early probe; the configured
-        // preference is applied by the pre-worldgen retry if needed.
-        warmGpuBeforeWorldgen(GpuNoiseConfig.GpuVendorPreference.AUTO);
+        // Defer Vulkan probing until ServerAboutToStart. That event still
+        // precedes spawn generation, while an integrated client can render
+        // its loading screen and show the terrain setup status.
         NeoForge.EVENT_BUS.addListener(this::onServerAboutToStart);
         NeoForge.EVENT_BUS.addListener(this::onServerStarting);
         NeoForge.EVENT_BUS.addListener(this::onServerStarted);
@@ -44,6 +40,8 @@ public final class GpuNoise {
     private void onServerStopping(ServerStoppingEvent event) {
         GpuTerrainRuntime.stop();
         warmedDevice = null;
+        worldGraphSetupAttempted = false;
+        GpuCompileStatus.clear();
     }
 
     private void onServerStarted(ServerStartedEvent event) {
@@ -59,11 +57,13 @@ public final class GpuNoise {
     }
 
     private void onServerAboutToStart(ServerAboutToStartEvent event) {
+        GpuCompileStatus.begin("Preparing the world terrain pipeline");
         if (Boolean.getBoolean("gpunoise.vulkanSmoke")) {
             VulkanCiSmoke.prepareTranslatorIntegration();
         }
         if (Boolean.getBoolean("gpunoise.forceCpuTerrain")) {
             LOGGER.info("GPU terrain graph setup skipped for the forced-CPU reference run.");
+            GpuCompileStatus.clear();
             return;
         }
         if (warmedDevice == null) {
@@ -76,9 +76,12 @@ public final class GpuNoise {
 
     private void onServerStarting(ServerStartingEvent event) {
         if (Boolean.getBoolean("gpunoise.forceCpuTerrain")) return;
+        GpuCompileStatus.begin("Preparing the world terrain pipeline");
         if (warmedDevice == null) warmGpuBeforeWorldgen(GpuNoiseConfig.GPU_VENDOR.get());
-        if (warmedDevice == null || event.getServer().overworld() == null
-                || GpuTerrainRuntime.terrainInputsAvailable()) return;
+        if (worldGraphSetupAttempted || warmedDevice == null || event.getServer().overworld() == null) {
+            GpuCompileStatus.clear();
+            return;
+        }
         installWorldGraph(event.getServer());
     }
 
@@ -86,6 +89,7 @@ public final class GpuNoise {
         if (warmedDevice != null) return;
         if (!GpuTerrainRuntime.c2meDfcAvailable()) {
             LOGGER.info("GPU Noise inactive: C2ME DFC is not installed; using vanilla world generation.");
+            GpuCompileStatus.clear();
             return;
         }
         // Integrated servers already receive LWJGL from Minecraft. The slim
@@ -94,15 +98,19 @@ public final class GpuNoise {
         // bindings become a clean no-op instead of a server crash.
         if (!vulkanBindingsPresent()) {
             LOGGER.info("GPU Noise inactive: Vulkan/LWJGL bindings are not available; vanilla terrain remains unchanged.");
+            GpuCompileStatus.clear();
             return;
         }
+        GpuCompileStatus.update("Finding a Vulkan compute device");
         var candidates = GpuProbe.findPreferredDevices(preference);
         if (candidates.isEmpty()) {
             LOGGER.info("GPU Noise inactive: no supported server GPU detected; vanilla terrain remains unchanged.");
+            GpuCompileStatus.clear();
             return;
         }
         java.util.ArrayList<GpuDevice> usableDevices = new java.util.ArrayList<>(candidates.size());
         for (GpuDevice candidate : candidates) {
+            GpuCompileStatus.update("Checking Vulkan device: " + candidate.name());
             if (!VulkanComputeProbe.verify(candidate)) {
                 LOGGER.warn("Vulkan compute setup failed on {}; trying the next supported device.", candidate.name());
                 continue;
@@ -111,6 +119,7 @@ public final class GpuNoise {
         }
         if (usableDevices.isEmpty() || !GpuTerrainRuntime.start(usableDevices)) {
             LOGGER.info("GPU Noise inactive: no discovered GPU could create a Vulkan compute device; vanilla terrain remains unchanged.");
+            GpuCompileStatus.clear();
             return;
         }
 
@@ -118,6 +127,7 @@ public final class GpuNoise {
         if (device == null) {
             LOGGER.error("GPU Vulkan device pool started without a primary device; disabling GPU terrain.");
             GpuTerrainRuntime.stop();
+            GpuCompileStatus.clear();
             return;
         }
         warmedDevice = device;
@@ -126,8 +136,11 @@ public final class GpuNoise {
     }
 
     private void installWorldGraph(MinecraftServer server) {
+        if (worldGraphSetupAttempted) return;
+        worldGraphSetupAttempted = true;
         GpuDevice device = warmedDevice;
         try {
+            GpuCompileStatus.update("Translating the active terrain generator");
             if (!(server.overworld().getChunkSource().getGenerator()
                     instanceof NoiseBasedChunkGenerator)) {
                 LOGGER.info("GPU terrain skipped: overworld generator is not NoiseBasedChunkGenerator.");
@@ -147,6 +160,7 @@ public final class GpuNoise {
                         + "compact terrain-root and cell-grid checks remain enabled.");
             } else {
                 try {
+                    GpuCompileStatus.update("Compiling the terrain density graph");
                     GpuDensityGraph fullGraph = GpuDensityGraphLowerer.lower(GpuDensityGraphCompiler.compile(router));
                     GpuDensityGraphBuffer.Packed packedGraph = GpuDensityGraphBuffer.pack(fullGraph);
                     LOGGER.info("GPU density graph discovered: {} nodes, {} router roots, {} noise samplers; packed {} bytes for GPU lowering.",
@@ -170,6 +184,7 @@ public final class GpuNoise {
             }
 
             try {
+                GpuCompileStatus.update("Compiling terrain and aquifer roots");
                 GpuDensityGraph sourceTerrainGraph = GpuDensityGraphCompiler.compileTerrain(router);
                 GpuDensityGraph terrainGraph = GpuDensityGraphLowerer.lower(sourceTerrainGraph);
                 final GpuDensityGraph validationGraph = terrainGraph;
@@ -182,6 +197,7 @@ public final class GpuNoise {
                 }
                 LOGGER.info("GPU terrain runtime graph: {} nodes, {} required terrain/aquifer roots.",
                         terrainGraph.nodes().size(), terrainGraph.routerRootCount());
+                GpuCompileStatus.update("Checking GPU terrain parity");
                 VulkanBootstrapThread.callUnchecked(() -> {
                     GpuTerrainRuntime.verifyCompactTerrainGraph(validationGraph, router);
                     return null;
@@ -193,6 +209,7 @@ public final class GpuNoise {
                                 .clampToHeightAccessor(server.overworld())
                         : null;
                 if (terrainSettings != null) {
+                    GpuCompileStatus.update("Checking terrain grid and world height");
                     VulkanBootstrapThread.callUnchecked(() -> {
                         GpuTerrainRuntime.verifyTerrainGrid(validationGraph, router, terrainSettings);
                         return null;
@@ -232,14 +249,20 @@ public final class GpuNoise {
             }
         } catch (RuntimeException unsupported) {
             LOGGER.warn("GPU density graph batch is not enabled yet", unsupported);
+        } finally {
+            GpuCompileStatus.clear();
         }
-        VulkanBootstrapThread.callUnchecked(() -> {
-            VulkanNoiseParityProbe.run(device);
-            return null;
-        });
-
-        LOGGER.info("GPU Noise selected {} ({}) using {} preference. Terrain uses global GPU graph batches; leaf noise hook is disabled.",
-                device.name(), device.vendorName(), GpuNoiseConfig.GPU_VENDOR.get());
+        try {
+            GpuCompileStatus.update("Checking Vulkan noise output");
+            VulkanBootstrapThread.callUnchecked(() -> {
+                VulkanNoiseParityProbe.run(device);
+                return null;
+            });
+            LOGGER.info("GPU Noise selected {} ({}) using {} preference. Terrain uses global GPU graph batches; leaf noise hook is disabled.",
+                    device.name(), device.vendorName(), GpuNoiseConfig.GPU_VENDOR.get());
+        } finally {
+            GpuCompileStatus.clear();
+        }
     }
 
     private static boolean vulkanBindingsPresent() {

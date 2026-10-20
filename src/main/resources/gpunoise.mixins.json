@@ -19,7 +19,8 @@
     "AquiferFluidStatusAccessor",
     "AquiferGpuInputsMixin",
     "NoiseChunkGeneratorWriteMixin",
-    "C2meCompiledDensityFunctionMixin"
+    "C2meCompiledDensityFunctionMixin",
+    "ClientCompileStatusMixin"
   ],
   "injectors": {
     "defaultRequire": 1

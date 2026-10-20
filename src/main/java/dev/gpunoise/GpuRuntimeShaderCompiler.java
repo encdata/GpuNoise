@@ -17,6 +17,7 @@ final class GpuRuntimeShaderCompiler {
     static ByteBuffer compileResource(String resource, String programName, Map<String, String> definitions,
                                       GpuDensityGraph graph, GpuDensityGraphBuffer.Packed packed,
                                       boolean blockProgram) {
+        GpuCompileStatus.update("Compiling Vulkan shader: " + programName);
         long started = System.nanoTime();
         String source = GpuDensityGraphShaderGenerator.specialize(readResource(resource), packed, blockProgram);
         List<String> customTypes = graph.customDensityFunctionTypes();

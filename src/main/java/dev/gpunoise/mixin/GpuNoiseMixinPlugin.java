@@ -3,6 +3,8 @@ package dev.gpunoise.mixin;
 import org.objectweb.asm.tree.ClassNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
 import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
+import net.neoforged.api.distmarker.Dist;
+import net.neoforged.fml.loading.FMLEnvironment;
 
 import java.util.List;
 import java.util.Set;
@@ -19,6 +21,9 @@ public final class GpuNoiseMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
+        if (mixinClassName.endsWith("ClientCompileStatusMixin")) {
+            return FMLEnvironment.dist == Dist.CLIENT;
+        }
         // Apply the normal Minecraft accessors as well as the optional C2ME
         // integration. Mixin itself resolves this target through ModLauncher's
         // transforming classloader; probing it with Class.forName here can use
