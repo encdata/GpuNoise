@@ -19,6 +19,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  */
 final class VulkanSubmissionRing implements AutoCloseable {
     private static final int MAX_SLOT_COUNT = 2;
+    private static final QueueClass[] QUEUE_CLASSES = QueueClass.values();
     // Terrain callers block on their futures after submitting. Poll more
     // frequently while a graph dispatch is in flight, then back off while idle
     // so low handoff latency does not become constant CPU wakeup overhead.
@@ -43,6 +44,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
     private long queueDispatchSamples;
     private long totalQueueWaitNanos;
     private long maxQueueWaitNanos;
+    private final long[] queueClassSamples = new long[QUEUE_CLASSES.length];
+    private final long[] queueClassWaitNanos = new long[QUEUE_CLASSES.length];
+    private final long[] queueClassMaxWaitNanos = new long[QUEUE_CLASSES.length];
     /** Next request class to inspect; prevents a busy producer class starving terrain. */
     private int nextQueueClass;
     private final ScheduledExecutorService completion = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -195,16 +199,28 @@ final class VulkanSubmissionRing implements AutoCloseable {
         }
     }
 
-    private void recordQueueWait(long enqueuedNanos) {
+    private void recordQueueWait(long enqueuedNanos, QueueClass requestClass) {
         if (!GpuTerrainProfiler.enabled() || enqueuedNanos == 0L) return;
         long waitNanos = Math.max(0L, System.nanoTime() - enqueuedNanos);
         totalQueueWaitNanos += waitNanos;
         maxQueueWaitNanos = Math.max(maxQueueWaitNanos, waitNanos);
+        int classIndex = requestClass.ordinal();
+        queueClassSamples[classIndex]++;
+        queueClassWaitNanos[classIndex] += waitNanos;
+        queueClassMaxWaitNanos[classIndex] = Math.max(queueClassMaxWaitNanos[classIndex], waitNanos);
         long samples = ++queueDispatchSamples;
         if ((samples & 127L) == 0L) {
             GpuNoise.LOGGER.info("GPU Vulkan submission queue: dispatches={}, avgQueueWaitMs={}, maxQueueWaitMs={}, slots={}",
                     samples, totalQueueWaitNanos / (double) samples / 1_000_000.0,
                     maxQueueWaitNanos / 1_000_000.0, slots.length);
+            for (int i = 0; i < QUEUE_CLASSES.length; i++) {
+                long classSamples = queueClassSamples[i];
+                if (classSamples == 0L) continue;
+                GpuNoise.LOGGER.info("GPU Vulkan queue class {}: dispatches={}, avgQueueWaitMs={}, maxQueueWaitMs={}",
+                        QUEUE_CLASSES[i], classSamples,
+                        queueClassWaitNanos[i] / (double) classSamples / 1_000_000.0,
+                        queueClassMaxWaitNanos[i] / 1_000_000.0);
+            }
         }
     }
 
@@ -241,9 +257,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
     private synchronized void drainGraphRoots() {
         for (PersistentVulkanNormalNoiseEngine slot : slots) {
             if (slot == null || slot.hasInFlightWork() || synchronousSlots.contains(slot)) continue;
-            for (int attempt = 0; attempt < QueueClass.values().length; attempt++) {
-                QueueClass requestClass = QueueClass.values()[nextQueueClass];
-                nextQueueClass = (nextQueueClass + 1) % QueueClass.values().length;
+            for (int attempt = 0; attempt < QUEUE_CLASSES.length; attempt++) {
+                QueueClass requestClass = QUEUE_CLASSES[nextQueueClass];
+                nextQueueClass = (nextQueueClass + 1) % QUEUE_CLASSES.length;
                 if (dispatchNext(slot, requestClass)) break;
             }
         }
@@ -260,7 +276,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
             case GRAPH_ROOTS -> {
                 GraphRootsRequest request = pendingGraphRoots.poll();
                 if (request == null) return false;
-                recordQueueWait(request.enqueuedNanos);
+                recordQueueWait(request.enqueuedNanos, requestClass);
                 try {
                     slot.submitGraphRootsAsync(request.graph, request.x, request.y, request.z, request.sampleCount)
                             .whenComplete((values, failure) -> completeOnDispatchWorker(request.future, values, failure));
@@ -271,7 +287,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
             case GRAPH_GRIDS -> {
                 GraphRootsGridRequest grid = pendingGraphGrids.poll();
                 if (grid == null) return false;
-                recordQueueWait(grid.enqueuedNanos);
+                recordQueueWait(grid.enqueuedNanos, requestClass);
                 try {
                     slot.submitGraphRootsGridAsync(grid.graph, grid.metadata, grid.chunkCount, grid.samplesPerChunk)
                             .whenComplete((values, failure) -> completeOnDispatchWorker(grid.future, values, failure));
@@ -282,7 +298,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
             case FULL_TERRAIN -> {
                 TerrainGridRequest terrain = pendingTerrainGrids.poll();
                 if (terrain == null) return false;
-                recordQueueWait(terrain.enqueuedNanos);
+                recordQueueWait(terrain.enqueuedNanos, requestClass);
                 try {
                     slot.submitGraphGridInterpolated(terrain.graph, terrain.gridMetadata,
                                     terrain.chunkCount, terrain.samplesPerChunk,
@@ -296,7 +312,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
             case BLOCKING -> {
                 BlockingRequest<?> blocking = pendingBlocking.poll();
                 if (blocking == null) return false;
-                recordQueueWait(blocking.enqueuedNanos);
+                recordQueueWait(blocking.enqueuedNanos, requestClass);
                 runBlocking(blocking, slot);
             }
             case AQUIFER -> {
@@ -310,7 +326,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 long enqueued = prefill != null ? prefill.enqueuedNanos
                         : nearest != null ? nearest.enqueuedNanos
                         : substance != null ? substance.enqueuedNanos : fluidStatus.enqueuedNanos;
-                recordQueueWait(enqueued);
+                recordQueueWait(enqueued, requestClass);
                 dispatchAquifer(slot, prefill, nearest, substance, fluidStatus);
             }
         }
