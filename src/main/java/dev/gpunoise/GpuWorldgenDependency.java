@@ -1,9 +1,7 @@
 package dev.gpunoise;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.nio.ByteBuffer;
@@ -14,12 +12,12 @@ import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 /** Exact GPU coordinate dependencies for one chunk-generation task. */
 public final class GpuWorldgenDependency {
     private final List<Page> pages;
-    private final Map<Coordinate, Sample> index;
+    private final CoordinateIndex index;
     private volatile CompletableFuture<Void> submitted;
 
-    private GpuWorldgenDependency(List<Page> pages, Map<Coordinate, Sample> index) {
+    private GpuWorldgenDependency(List<Page> pages, CoordinateIndex index) {
         this.pages = List.copyOf(pages);
-        this.index = Map.copyOf(index);
+        this.index = index;
     }
 
     /** Submits every page once. Callers share the same completion future. */
@@ -37,14 +35,14 @@ public final class GpuWorldgenDependency {
 
     /** Returns NaN until completed or when the exact coordinate was not declared. */
     public double valueAt(int root, int x, int y, int z) {
-        Sample sample = index.get(new Coordinate(x, y, z));
-        if (sample == null) return Double.NaN;
-        GpuTerrainRootsResult roots = pages.get(sample.page).result;
+        int sample = index.find(x, y, z);
+        if (sample < 0) return Double.NaN;
+        GpuTerrainRootsResult roots = pages.get(index.page(sample)).result;
         if (roots == null || root < 0 || root >= roots.roots()) return Double.NaN;
-        return roots.valueAt(sample.index, root);
+        return roots.valueAt(index.pageSample(sample), root);
     }
 
-    public boolean contains(int x, int y, int z) { return index.containsKey(new Coordinate(x, y, z)); }
+    public boolean contains(int x, int y, int z) { return index.find(x, y, z) >= 0; }
     public int samples() { return index.size(); }
     public int pages() { return pages.size(); }
 
@@ -188,14 +186,17 @@ public final class GpuWorldgenDependency {
 
     public static final class Builder {
         private final List<PageBuilder> pages = new ArrayList<>();
-        private final Map<Coordinate, Sample> index = new HashMap<>();
+        private final CoordinateIndex index = new CoordinateIndex();
+        private boolean built;
 
         public Builder add(int x, int y, int z) {
-            Coordinate point = new Coordinate(x, y, z);
-            if (index.containsKey(point)) return this;
+            if (built) throw new IllegalStateException("GPU worldgen dependency builder is already built");
+            if (index.find(x, y, z) >= 0) return this;
             PageBuilder page = pages.isEmpty() || pages.getLast().size() == PersistentVulkanNormalNoiseEngine.CAPACITY
                     ? addPage() : pages.getLast();
-            index.put(point, new Sample(pages.size() - 1, page.add(point)));
+            int pageIndex = pages.size() - 1;
+            int pageSample = page.add(x, y, z);
+            index.add(x, y, z, pageIndex, pageSample);
             return this;
         }
 
@@ -218,9 +219,11 @@ public final class GpuWorldgenDependency {
         }
 
         public GpuWorldgenDependency build() {
+            if (built) throw new IllegalStateException("GPU worldgen dependency builder is already built");
             if (pages.isEmpty()) throw new IllegalStateException("GPU worldgen dependency has no samples");
             List<Page> result = new ArrayList<>(pages.size());
             for (PageBuilder page : pages) result.add(page.build());
+            built = true;
             return new GpuWorldgenDependency(result, index);
         }
 
@@ -232,16 +235,108 @@ public final class GpuWorldgenDependency {
     }
 
     private static final class PageBuilder {
-        private final List<Coordinate> points = new ArrayList<>();
-        int add(Coordinate point) { points.add(point); return points.size() - 1; }
-        int size() { return points.size(); }
-        Page build() {
-            float[] x = new float[points.size()], y = new float[points.size()], z = new float[points.size()];
-            for (int i = 0; i < points.size(); i++) {
-                Coordinate point = points.get(i);
-                x[i] = point.x; y[i] = point.y; z[i] = point.z;
+        private int[] x = new int[64];
+        private int[] y = new int[64];
+        private int[] z = new int[64];
+        private int size;
+
+        int add(int blockX, int blockY, int blockZ) {
+            if (size == x.length) {
+                int capacity = Math.min(PersistentVulkanNormalNoiseEngine.CAPACITY,
+                        Math.max(size + 1, size + (size >> 1)));
+                x = Arrays.copyOf(x, capacity);
+                y = Arrays.copyOf(y, capacity);
+                z = Arrays.copyOf(z, capacity);
             }
-            return new Page(x, y, z);
+            x[size] = blockX;
+            y[size] = blockY;
+            z[size] = blockZ;
+            return size++;
+        }
+
+        int size() { return size; }
+
+        Page build() {
+            float[] sampleX = new float[size], sampleY = new float[size], sampleZ = new float[size];
+            for (int i = 0; i < size; i++) {
+                sampleX[i] = x[i];
+                sampleY[i] = y[i];
+                sampleZ[i] = z[i];
+            }
+            return new Page(sampleX, sampleY, sampleZ);
+        }
+    }
+
+    /** Primitive tuple index for high-volume per-chunk coordinate dependencies. */
+    private static final class CoordinateIndex {
+        private static final int INITIAL_TABLE_CAPACITY = 256;
+        private int[] slots = new int[INITIAL_TABLE_CAPACITY];
+        private int[] x = new int[128];
+        private int[] y = new int[128];
+        private int[] z = new int[128];
+        private int[] pages = new int[128];
+        private int[] pageSamples = new int[128];
+        private int size;
+
+        int find(int blockX, int blockY, int blockZ) {
+            int slot = hash(blockX, blockY, blockZ) & (slots.length - 1);
+            while (true) {
+                int entry = slots[slot] - 1;
+                if (entry < 0) return -1;
+                if (x[entry] == blockX && y[entry] == blockY && z[entry] == blockZ) return entry;
+                slot = (slot + 1) & (slots.length - 1);
+            }
+        }
+
+        void add(int blockX, int blockY, int blockZ, int page, int sample) {
+            if ((size + 1) * 10 >= slots.length * 7) resizeTable();
+            if (size == x.length) resizeEntries();
+            int slot = hash(blockX, blockY, blockZ) & (slots.length - 1);
+            while (slots[slot] != 0) slot = (slot + 1) & (slots.length - 1);
+            x[size] = blockX;
+            y[size] = blockY;
+            z[size] = blockZ;
+            pages[size] = page;
+            pageSamples[size] = sample;
+            slots[slot] = ++size;
+        }
+
+        int page(int entry) { return pages[entry]; }
+        int pageSample(int entry) { return pageSamples[entry]; }
+        int size() { return size; }
+
+        private void resizeEntries() {
+            int capacity = Math.max(size + 1, size + (size >> 1));
+            x = Arrays.copyOf(x, capacity);
+            y = Arrays.copyOf(y, capacity);
+            z = Arrays.copyOf(z, capacity);
+            pages = Arrays.copyOf(pages, capacity);
+            pageSamples = Arrays.copyOf(pageSamples, capacity);
+        }
+
+        private void resizeTable() {
+            int[] previous = slots;
+            if (previous.length >= 1 << 30) throw new IllegalStateException("GPU dependency index capacity exceeded");
+            slots = new int[previous.length << 1];
+            int mask = slots.length - 1;
+            for (int encoded : previous) {
+                if (encoded == 0) continue;
+                int entry = encoded - 1;
+                int slot = hash(x[entry], y[entry], z[entry]) & mask;
+                while (slots[slot] != 0) slot = (slot + 1) & mask;
+                slots[slot] = encoded;
+            }
+        }
+
+        private static int hash(int x, int y, int z) {
+            int value = x * 0x9E3779B9;
+            value = Integer.rotateLeft(value ^ y * 0x85EBCA6B, 13) * 0xC2B2AE35;
+            value = Integer.rotateLeft(value ^ z * 0x27D4EB2F, 15) * 0x165667B1;
+            value ^= value >>> 16;
+            value *= 0x7FEB352D;
+            value ^= value >>> 15;
+            value *= 0x846CA68B;
+            return value ^ (value >>> 16);
         }
     }
 
@@ -262,7 +357,6 @@ public final class GpuWorldgenDependency {
         }
     }
 
-    private record Sample(int page, int index) { }
     private record NearestAquiferBatch(int offset, int count, ByteBuffer records) { }
     public record Coordinate(int x, int y, int z) { }
 }
