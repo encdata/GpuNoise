@@ -34,6 +34,10 @@ public final class GpuChunkDensityCache {
     // of volatile reads on every final-density lookup.
     private GpuTerrainRootsResult readyRoots;
     private GpuTerrainBlockResult readyBlocks;
+    /** Root-to-slab views are resolved once, off the per-block terrain hot path. */
+    private GpuTerrainBlockResult.RootView[] readyBlockRoots;
+    private GpuTerrainBlockResult.RootView fullFinalDensityBlockRoot;
+    private GpuTerrainBlockResult.RootView fullInitialDensityBlockRoot;
     private final AtomicBoolean consumed = new AtomicBoolean();
     // A cache is consumed by one NoiseChunk fill task. After the first
     // observation, keep the hot path entirely non-atomic.
@@ -160,15 +164,15 @@ public final class GpuChunkDensityCache {
             return Integer.MIN_VALUE;
         }
         GpuTerrainBlockResult blocks = completedBlocks();
-        if (blocks == null || blocks.isEmpty()
-                || blocks.outputIndexForRoot(GpuTerrainRoots.INITIAL_DENSITY) < 0) {
+        GpuTerrainBlockResult.RootView initialDensity = fullInitialDensityBlockRoot;
+        if (blocks == null || initialDensity == null) {
             return Integer.MIN_VALUE;
         }
         int rx = x - minX, rz = z - minZ;
+        if (rx >= 16 || rz >= 16) return Integer.MIN_VALUE;
         for (int y = minY + maxRelativeY - 1; y >= minY; y--) {
             int ry = y - minY;
-            if (!blocks.contains(rx, ry, rz)) return Integer.MIN_VALUE;
-            double density = blocks.valueAtUnchecked(rx, ry, rz, GpuTerrainRoots.INITIAL_DENSITY);
+            double density = initialDensity.valueAtUnchecked(rx, ry, rz);
             if (!Double.isFinite(density)
                     || Math.abs(density - 0.390625) <= GpuTerrainRuntime.GRAPH_PARITY_EPSILON) {
                 return Integer.MIN_VALUE;
@@ -214,8 +218,25 @@ public final class GpuChunkDensityCache {
         return result.thenAccept(values -> {
             readyRoots = values.corners();
             readyBlocks = values.blocks();
+            readyBlockRoots = createBlockRootViews(readyBlocks);
+            fullFinalDensityBlockRoot = fullBlockRoot(GpuTerrainRoots.FINAL_DENSITY);
+            fullInitialDensityBlockRoot = fullBlockRoot(GpuTerrainRoots.INITIAL_DENSITY);
             if (GpuTerrainRuntime.terrainBlockOutputEnabled()) validateBlockOutput();
         });
+    }
+
+    private static GpuTerrainBlockResult.RootView[] createBlockRootViews(GpuTerrainBlockResult blocks) {
+        if (blocks == null || blocks.isEmpty()) return null;
+        GpuTerrainBlockResult.RootView[] roots = new GpuTerrainBlockResult.RootView[ROOTS];
+        for (int root = 0; root < roots.length; root++) roots[root] = blocks.rootView(root);
+        return roots;
+    }
+
+    private GpuTerrainBlockResult.RootView fullBlockRoot(int root) {
+        GpuTerrainBlockResult.RootView[] roots = readyBlockRoots;
+        if (roots == null) return null;
+        GpuTerrainBlockResult.RootView view = roots[root];
+        return view != null && view.covers(16, maxRelativeY, 16) ? view : null;
     }
 
     public boolean matchesChunk(int minX, int minZ) {
@@ -243,20 +264,18 @@ public final class GpuChunkDensityCache {
         int rz = context.blockZ() - minZ;
         if ((rx | ry | rz) < 0 || rx > 16 || rz > 16 || ry > maxRelativeY) return Double.NaN;
         if (exact != null) return sampleExactRoot(rx, ry, rz, GpuTerrainRoots.FINAL_DENSITY);
-        GpuTerrainRootsResult ready = readyRoots;
-        if (ready == null) return Double.NaN;
         if (GpuTerrainRuntime.terrainBlockOutputEnabled()) {
-            GpuTerrainBlockResult blocks = readyBlocks;
-            if (blocks != null && !blocks.isEmpty()
-                    && blocks.outputIndexForRoot(GpuTerrainRoots.FINAL_DENSITY) >= 0
-                    && rx < 16 && ry < maxRelativeY && rz < 16) {
+            GpuTerrainBlockResult.RootView blocks = fullFinalDensityBlockRoot;
+            if (blocks != null && rx < 16 && ry < maxRelativeY && rz < 16) {
                 if (READ_STATS_ENABLED) {
                     long direct = blockReads.incrementAndGet();
                     if ((direct & 0x3ffffL) == 0L) logReadStatistics();
                 }
-                return blocks.finalValueAtUnchecked(rx, ry, rz);
+                return blocks.valueAtUnchecked(rx, ry, rz);
             }
         }
+        GpuTerrainRootsResult ready = readyRoots;
+        if (ready == null) return Double.NaN;
         boolean aligned = powerOfTwoCells
                 ? ((rx & (cellWidth - 1)) | (ry & (cellHeight - 1)) | (rz & (cellWidth - 1))) == 0
                 : rx % cellWidth == 0 && ry % cellHeight == 0 && rz % cellWidth == 0;
@@ -287,18 +306,18 @@ public final class GpuChunkDensityCache {
         int rz = z - minZ;
         if ((rx | ry | rz) < 0 || rx > 16 || rz > 16 || ry > maxRelativeY) return Double.NaN;
         if (exact != null) return sampleExactRoot(rx, ry, rz, GpuTerrainRoots.FINAL_DENSITY);
-        GpuTerrainRootsResult ready = readyRoots;
-        if (ready == null) return Double.NaN;
         if (FULL_BLOCK_OUTPUT) {
-            double blockValue = sampleBlockRoot(rx, ry, rz, GpuTerrainRoots.FINAL_DENSITY);
-            if (!Double.isNaN(blockValue)) {
+            GpuTerrainBlockResult.RootView blocks = fullFinalDensityBlockRoot;
+            if (blocks != null && rx < 16 && ry < maxRelativeY && rz < 16) {
                 if (READ_STATS_ENABLED) {
                     long direct = blockReads.incrementAndGet();
                     if ((direct & 0x3ffffL) == 0L) logReadStatistics();
                 }
-                return blockValue;
+                return blocks.valueAtUnchecked(rx, ry, rz);
             }
         }
+        GpuTerrainRootsResult ready = readyRoots;
+        if (ready == null) return Double.NaN;
         boolean aligned = powerOfTwoCells
                 ? ((rx & (cellWidth - 1)) | (ry & (cellHeight - 1)) | (rz & (cellWidth - 1))) == 0
                 : rx % cellWidth == 0 && ry % cellHeight == 0 && rz % cellWidth == 0;
@@ -332,10 +351,15 @@ public final class GpuChunkDensityCache {
     public double initialDensity(int x, int y, int z) {
         if (!supportsRoot(GpuTerrainRoots.INITIAL_DENSITY)) return Double.NaN;
         if (exact != null) return exact.valueAt(GpuTerrainRoots.INITIAL_DENSITY, x, y, z);
-        double blockValue = sampleBlockRoot(x - minX, y - minY, z - minZ,
-                GpuTerrainRoots.INITIAL_DENSITY);
+        int rx = x - minX, ry = y - minY, rz = z - minZ;
+        GpuTerrainBlockResult.RootView fullBlocks = fullInitialDensityBlockRoot;
+        if (fullBlocks != null && rx >= 0 && rx < 16 && ry >= 0 && ry < maxRelativeY
+                && rz >= 0 && rz < 16) {
+            return fullBlocks.valueAtUnchecked(rx, ry, rz);
+        }
+        double blockValue = sampleBlockRoot(rx, ry, rz, GpuTerrainRoots.INITIAL_DENSITY);
         if (!Double.isNaN(blockValue)) return blockValue;
-        return sampleRoot(readyRoots, x - minX, y - minY, z - minZ, GpuTerrainRoots.INITIAL_DENSITY);
+        return sampleRoot(readyRoots, rx, ry, rz, GpuTerrainRoots.INITIAL_DENSITY);
     }
 
     public boolean contains(int x, int y, int z) {
@@ -421,9 +445,11 @@ public final class GpuChunkDensityCache {
     }
 
     private double sampleBlockRoot(int rx, int ry, int rz, int root) {
-        GpuTerrainBlockResult blocks = readyBlocks;
-        if (blocks == null || !blocks.contains(rx, ry, rz)) return Double.NaN;
-        return blocks.valueAtUnchecked(rx, ry, rz, root);
+        GpuTerrainBlockResult.RootView[] roots = readyBlockRoots;
+        if (roots == null || root < 0 || root >= roots.length) return Double.NaN;
+        GpuTerrainBlockResult.RootView view = roots[root];
+        if (view == null || !view.contains(rx, ry, rz)) return Double.NaN;
+        return view.valueAtUnchecked(rx, ry, rz);
     }
 
     private double sampleRoot(int rx, int ry, int rz, int root) {
