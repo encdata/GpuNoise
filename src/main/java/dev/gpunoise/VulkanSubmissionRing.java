@@ -55,6 +55,12 @@ final class VulkanSubmissionRing implements AutoCloseable {
         thread.setDaemon(true);
         return thread;
     });
+    /** Command recording/submission may take CPU time; keep it off the fence poller. */
+    private final ExecutorService submissions = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "GPU Vulkan submit");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     VulkanSubmissionRing(GpuDevice device) throws Exception {
         int requestedSlots = requestedSlotCount(device);
@@ -104,8 +110,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 slot.pollGraphRootsCompletion();
                 graphInFlight |= slot.hasInFlightWork();
             }
-            drainGraphRoots();
-            // drainGraphRoots may have started the next queued submission.
+            // Submission setup is handled on its own executor. Fence polling
+            // must stay responsive even when command recording takes time.
+            scheduleDrain();
             for (PersistentVulkanNormalNoiseEngine slot : slots) {
                 if (slot != null) graphInFlight |= slot.hasInFlightWork();
             }
@@ -126,7 +133,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
     private void scheduleDrain() {
         if (!drainScheduled.compareAndSet(false, true)) return;
         try {
-            completion.execute(() -> {
+            submissions.execute(() -> {
                 try {
                     drainGraphRoots();
                 } finally {
@@ -507,6 +514,13 @@ final class VulkanSubmissionRing implements AutoCloseable {
             if (!completion.awaitTermination(30, TimeUnit.SECONDS)) completion.shutdownNow();
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
+        }
+        submissions.shutdown();
+        try {
+            if (!submissions.awaitTermination(30, TimeUnit.SECONDS)) submissions.shutdownNow();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            submissions.shutdownNow();
         }
         dispatchWorkers.shutdown();
         try {
