@@ -832,7 +832,8 @@ final class GpuDensityExpressionSmoke {
         DensityFunction zero = DensityFunctions.constant(0.0);
         DensityFunction sharedCombined = DensityFunctions.constant(8.0);
         int[] roots = new int[GpuTerrainRoots.COUNT];
-        java.util.Arrays.fill(roots, 5);
+        java.util.Arrays.fill(roots, 8);
+        roots[0] = 5;
         roots[1] = 7;
         roots[2] = 2;
         roots[3] = 8;
