@@ -787,9 +787,11 @@ public final class VulkanCiSmoke {
             GpuTerrainBlockResult overlappingBlocks = overlappingTerrain.get(60, TimeUnit.SECONDS).blocks();
             for (int blockX = 0; blockX < 16; blockX++) {
                 float actual = overlappingBlocks.valueAt(blockX, 0, 0, GpuTerrainRoots.FINAL_DENSITY);
-                if (Math.abs(actual - blockX * blockX) > 1.0e-5f) {
+                float worldX = blockX - 32.0f;
+                float expected = worldX * worldX;
+                if (Math.abs(actual - expected) > 1.0e-5f) {
                     throw new IllegalStateException("Queued terrain output was corrupted by in-flight graph work at X="
-                            + blockX + ": expected " + (blockX * blockX) + ", got " + actual);
+                            + blockX + ": expected " + expected + ", got " + actual);
                 }
             }
             GpuAquiferSubstance.Input weightedThirdPressureCase =
