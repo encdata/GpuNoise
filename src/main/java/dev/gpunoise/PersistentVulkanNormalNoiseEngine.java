@@ -6,6 +6,7 @@ import java.nio.FloatBuffer;
 import java.nio.LongBuffer;
 import java.nio.IntBuffer;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import org.lwjgl.PointerBuffer;
@@ -40,6 +41,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     static final int INTERPOLATION_OUTPUT_FLOATS = INTERPOLATION_OUTPUT_MIB * 1024 * 1024 / Float.BYTES;
     private static final int MAX_INTERPOLATORS = 16;
     private static final int MAX_GRAPH_OUTPUTS = 32;
+    /** Keep common parity/production root masks warm without retaining unbounded pipelines. */
+    private static final int MAX_CACHED_BLOCK_GRAPH_VARIANTS = 3;
     private static final int[] GRAPH_DESCRIPTOR_BINDINGS = {0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14};
     static final int INTERPOLATED_INPUT_FLOATS = CAPACITY * MAX_INTERPOLATORS;
     private final VkInstance instance;
@@ -63,6 +66,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private boolean blockGraphFastMathVariant;
     private GpuDensityGraph compiledBlockGraphVariant;
     private GpuDensityGraphBuffer.Packed compiledBlockGraphPacked;
+    private BlockGraphVariantKey activeBlockGraphVariantKey;
+    private final LinkedHashMap<BlockGraphVariantKey, BlockGraphProgram> cachedBlockGraphVariants =
+            new LinkedHashMap<>(8, 0.75f, true);
     private GpuBiomeSearchTree uploadedBiomeTree;
     private final long interpolationShader, interpolationDescriptorLayout, interpolationPipelineLayout,
             interpolationPipeline, interpolationDescriptorPool, interpolationDescriptorSet;
@@ -1848,14 +1854,19 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                                          MemoryStack stack) throws Exception {
         int required = packed.blockRegisterCount();
         int variant = required <= 32 ? 32 : required <= 64 ? 64 : required <= 128 ? 128 : 256;
+        BlockGraphVariantKey key = new BlockGraphVariantKey(graph, packed, variant, FAST_GRAPH_MATH);
         // A graph may have several block programs for different compact root
         // masks. They share the same router identity and register tier, but
         // their statically emitted instructions and register assignments can
         // differ. Reusing a pipeline across those packed programs pairs the
         // new root table with stale shader code and silently corrupts outputs.
-        if (graph == compiledBlockGraphVariant && packed == compiledBlockGraphPacked
-                && variant == blockGraphRegisterVariant
-                && FAST_GRAPH_MATH == blockGraphFastMathVariant) return;
+        if (key.equals(activeBlockGraphVariantKey)) return;
+        BlockGraphProgram cached = cachedBlockGraphVariants.remove(key);
+        if (cached != null) {
+            retainActiveBlockGraphVariant();
+            activateBlockGraphVariant(key, cached);
+            return;
+        }
         long nextShader = compileRuntimeShader("/assets/gpunoise/shaders/density_graph.comp",
                 "block density graph", FAST_GRAPH_MATH
                         ? Map.of("REGISTER_COUNT", Integer.toString(variant), "FAST_MATH", "1")
@@ -1867,14 +1878,40 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             vkDestroyShaderModule(device, nextShader, null);
             throw failure;
         }
-        vkDestroyPipeline(device, blockGraphPipeline, null);
-        vkDestroyShaderModule(device, blockGraphShader, null);
-        blockGraphShader = nextShader;
-        blockGraphPipeline = nextPipeline;
-        blockGraphRegisterVariant = variant;
-        blockGraphFastMathVariant = FAST_GRAPH_MATH;
-        compiledBlockGraphVariant = graph;
-        compiledBlockGraphPacked = packed;
+        retainActiveBlockGraphVariant();
+        activateBlockGraphVariant(key, new BlockGraphProgram(nextShader, nextPipeline));
+        evictBlockGraphVariants();
+    }
+
+    private void retainActiveBlockGraphVariant() {
+        if (activeBlockGraphVariantKey == null) {
+            vkDestroyPipeline(device, blockGraphPipeline, null);
+            vkDestroyShaderModule(device, blockGraphShader, null);
+            return;
+        }
+        cachedBlockGraphVariants.put(activeBlockGraphVariantKey,
+                new BlockGraphProgram(blockGraphShader, blockGraphPipeline));
+    }
+
+    private void activateBlockGraphVariant(BlockGraphVariantKey key, BlockGraphProgram program) {
+        blockGraphShader = program.shader();
+        blockGraphPipeline = program.pipeline();
+        blockGraphRegisterVariant = key.registerVariant();
+        blockGraphFastMathVariant = key.fastMath();
+        compiledBlockGraphVariant = key.graph();
+        compiledBlockGraphPacked = key.packed();
+        activeBlockGraphVariantKey = key;
+    }
+
+    private void evictBlockGraphVariants() {
+        while (cachedBlockGraphVariants.size() > MAX_CACHED_BLOCK_GRAPH_VARIANTS) {
+            Map.Entry<BlockGraphVariantKey, BlockGraphProgram> oldest =
+                    cachedBlockGraphVariants.entrySet().iterator().next();
+            BlockGraphProgram program = oldest.getValue();
+            cachedBlockGraphVariants.remove(oldest.getKey());
+            vkDestroyPipeline(device, program.pipeline(), null);
+            vkDestroyShaderModule(device, program.shader(), null);
+        }
     }
     private long graphDescriptorPool(MemoryStack s){VkDescriptorPoolSize.Buffer z=VkDescriptorPoolSize.calloc(1,s).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(GRAPH_DESCRIPTOR_BINDINGS.length);VkDescriptorPoolCreateInfo i=VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(z);LongBuffer h=s.longs(0);check(vkCreateDescriptorPool(device,i,null,h),"graph pool");return h.get(0);}
     private long graphDescriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(graphDescriptorPool).pSetLayouts(s.longs(graphDescriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"graph set");return h.get(0);}
@@ -1962,6 +1999,40 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         return Math.round(elapsedNanos);
     }
 
+    private static final class BlockGraphVariantKey {
+        private final GpuDensityGraph graph;
+        private final GpuDensityGraphBuffer.Packed packed;
+        private final int registerVariant;
+        private final boolean fastMath;
+
+        private BlockGraphVariantKey(GpuDensityGraph graph, GpuDensityGraphBuffer.Packed packed,
+                                     int registerVariant, boolean fastMath) {
+            this.graph = graph;
+            this.packed = packed;
+            this.registerVariant = registerVariant;
+            this.fastMath = fastMath;
+        }
+
+        GpuDensityGraph graph() { return graph; }
+        GpuDensityGraphBuffer.Packed packed() { return packed; }
+        int registerVariant() { return registerVariant; }
+        boolean fastMath() { return fastMath; }
+
+        @Override public boolean equals(Object other) {
+            return other instanceof BlockGraphVariantKey key
+                    && graph == key.graph && packed == key.packed
+                    && registerVariant == key.registerVariant && fastMath == key.fastMath;
+        }
+
+        @Override public int hashCode() {
+            int hash = 31 * System.identityHashCode(graph) + System.identityHashCode(packed);
+            hash = 31 * hash + registerVariant;
+            return 31 * hash + Boolean.hashCode(fastMath);
+        }
+    }
+
+    private record BlockGraphProgram(long shader, long pipeline) { }
+
     private long[] readTerrainGpuTimestamps(MemoryStack stack) {
         if (timestampQueryPool == 0L) return new long[]{-1L, -1L, -1L};
         ByteBuffer results = stack.malloc(6 * Long.BYTES).order(ByteOrder.nativeOrder());
@@ -2012,6 +2083,11 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         vkDestroyPipelineLayout(device, pipelineLayout, null);
         vkDestroyDescriptorSetLayout(device, descriptorLayout, null);
         vkDestroyShaderModule(device, shader, null);
+        for (BlockGraphProgram program : cachedBlockGraphVariants.values()) {
+            vkDestroyPipeline(device, program.pipeline(), null);
+            vkDestroyShaderModule(device, program.shader(), null);
+        }
+        cachedBlockGraphVariants.clear();
         vkDestroyPipeline(device, graphPipeline, null);
         vkDestroyPipeline(device, gridPipeline, null);
         vkDestroyPipeline(device, blockGraphPipeline, null);
