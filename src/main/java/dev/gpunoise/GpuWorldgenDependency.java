@@ -83,14 +83,15 @@ public final class GpuWorldgenDependency {
             batches.add(new NearestAquiferBatch(offset, batchCount,
                     GpuAquiferNearestThree.pack(queries, centers)));
         }
-        CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
-        for (NearestAquiferBatch batch : batches) {
-            chain = chain.thenCompose(ignored -> GpuTerrainRuntime
-                            .submitAquiferNearestThree(batch.records, batch.count).thenAccept(values ->
-                                    System.arraycopy(values, 0, output,
-                                            batch.offset * GpuAquiferNearestThree.OUTPUT_INTS, values.length)));
+        CompletableFuture<?>[] futures = new CompletableFuture<?>[batches.size()];
+        for (int i = 0; i < batches.size(); i++) {
+            NearestAquiferBatch batch = batches.get(i);
+            futures[i] = GpuTerrainRuntime.submitAquiferNearestThree(batch.records, batch.count)
+                    .thenAccept(values -> System.arraycopy(values, 0, output,
+                            batch.offset * GpuAquiferNearestThree.OUTPUT_INTS, values.length))
+                    .toCompletableFuture();
         }
-        return chain.thenApply(ignored -> output);
+        return CompletableFuture.allOf(futures).thenApply(ignored -> output);
     }
 
     /** Declares cell and preliminary-surface coordinates used by a chunk. */
