@@ -57,21 +57,22 @@ public final class GpuTerrainDecisionWriter {
                     noiseChunk.selectCellYZ(cellY, cellZ);
                     for (int inCellY = cellHeight - 1; inCellY >= 0; inCellY--) {
                         int y = minY + cellY * cellHeight + inCellY;
+                        double yProgress = (double) inCellY / cellHeight;
+                        boolean yInterpolationReady = false;
                         int nextSectionIndex = chunk.getSectionIndex(y);
                         if (nextSectionIndex != sectionIndex) {
                             sectionIndex = nextSectionIndex;
                             section = chunk.getSection(sectionIndex);
                         }
 
-                        noiseChunk.updateForY(y, (double) inCellY / cellHeight);
                         for (int inCellX = 0; inCellX < cellWidth; inCellX++) {
                             int x = startX + cellX * cellWidth + inCellX;
                             int localX = x & 15;
-                            noiseChunk.updateForX(x, (double) inCellX / cellWidth);
+                            double xProgress = (double) inCellX / cellWidth;
+                            boolean xInterpolationReady = false;
                             for (int inCellZ = 0; inCellZ < cellWidth; inCellZ++) {
                                 int z = startZ + cellZ * cellWidth + inCellZ;
                                 int localZ = z & 15;
-                                noiseChunk.updateForZ(z, (double) inCellZ / cellWidth);
 
                                 int decisionIndex = (y - minDecisionY) * 256
                                         + (z - startZ) * 16 + (x - startX);
@@ -101,8 +102,27 @@ public final class GpuTerrainDecisionWriter {
                                 // Minecraft's material-rule list (including
                                 // OreVeinifier) before using the default block.
                                 boolean gpuStateResolved = exactGpuDecision;
-                                BlockState state = gpuStateResolved
-                                        ? gpuState : noiseAccess.gpunoise$vanillaInterpolatedState();
+                                BlockState state;
+                                if (gpuStateResolved) {
+                                    // The Vulkan row already contains an exact
+                                    // density-matched aquifer state. Avoid
+                                    // walking every NoiseChunk interpolator for
+                                    // this block; initialize the interpolation
+                                    // context lazily only if a later block needs
+                                    // the full vanilla material-rule chain.
+                                    state = gpuState;
+                                } else {
+                                    if (!yInterpolationReady) {
+                                        noiseChunk.updateForY(y, yProgress);
+                                        yInterpolationReady = true;
+                                    }
+                                    if (!xInterpolationReady) {
+                                        noiseChunk.updateForX(x, xProgress);
+                                        xInterpolationReady = true;
+                                    }
+                                    noiseChunk.updateForZ(z, (double) inCellZ / cellWidth);
+                                    state = noiseAccess.gpunoise$vanillaInterpolatedState();
+                                }
                                 if (x == TRACE_X && y == TRACE_Y && z == TRACE_Z) {
                                     if (gpuStateResolved) {
                                         GpuNoise.LOGGER.info(
