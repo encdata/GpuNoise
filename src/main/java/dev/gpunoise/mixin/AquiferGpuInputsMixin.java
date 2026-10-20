@@ -257,6 +257,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         NeighborhoodCache neighborhoods = new NeighborhoodCache(Math.max(16, (height + 11) / 12 * 4));
         FluidStatusCache fluidStatuses = new FluidStatusCache(Math.max(16, (height + 11) / 12 * 4));
         Map<Integer, Aquifer.FluidStatus> c2meGlobalFluidLevels = c2meAquifer ? new HashMap<>() : null;
+        // Non-C2ME nearest-center selection is independent of the later
+        // center-status and substance passes. Dispatch full records as soon
+        // as they are packed so Vulkan can process them while this thread
+        // continues scanning the remaining block inputs.
+        List<CompletableFuture<int[]>> nearestBatches = new ArrayList<>();
+        int submittedNearestQueries = 0;
         // C2ME OCL evaluates these density roots on its device. Use the same
         // strict GPU root cache here; exact Java evaluation remains an explicit
         // diagnostic mode and the fallback for missing cache coordinates.
@@ -354,6 +360,15 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                             : globalFluidPicker.computeFluid(x, y - 1, z);
                     boolean belowIsLava = belowGlobal.at(y - 1).is(Blocks.LAVA);
                     queries.add(index, x, y, z, density, barrier, belowIsLava, centers);
+                    if (!c2meAquifer
+                            && queries.size() - submittedNearestQueries
+                                    >= GpuAquiferNearestThree.MAX_QUERIES) {
+                        int count = queries.size() - submittedNearestQueries;
+                        nearestBatches.add(GpuTerrainRuntime.submitAquiferNearestThree(
+                                GpuAquiferNearestThree.pack(queries, submittedNearestQueries, count), count)
+                                .toCompletableFuture());
+                        submittedNearestQueries += count;
+                    }
                 }
             }
         }
@@ -363,7 +378,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         // resolving block decisions. Mirror that bulk prefill: evaluate the
         // 13 surface probes, global fluid samples, and terrain roots together
         // on Vulkan, then retain the original Java statuses for custom fluids.
-        List<CompletableFuture<int[]>> nearestBatches = new ArrayList<>();
         long nearestStatusStart = GpuTerrainProfiler.beginAquiferPhase();
         boolean combineAquiferPasses = c2meAquifer && queries.size() > 0
                 && queries.size() <= GpuAquiferNearestThree.MAX_QUERIES;
@@ -377,7 +391,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 gpunoise$prefillC2meFluidStatuses(cache, queries, fluidStatuses,
                         c2meGlobalFluidLevels, null, 0);
             }
-            for (int offset = 0; offset < queries.size(); offset += GpuAquiferNearestThree.MAX_QUERIES) {
+            for (int offset = submittedNearestQueries; offset < queries.size();
+                    offset += GpuAquiferNearestThree.MAX_QUERIES) {
                 int count = Math.min(GpuAquiferNearestThree.MAX_QUERIES, queries.size() - offset);
                 nearestBatches.add(GpuTerrainRuntime.submitAquiferNearestThree(
                         GpuAquiferNearestThree.pack(queries, offset, count), count).toCompletableFuture());
