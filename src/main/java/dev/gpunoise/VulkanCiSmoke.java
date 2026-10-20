@@ -611,6 +611,13 @@ public final class VulkanCiSmoke {
             System.out.println("Vulkan CI smoke: parity-selected compact block output completed");
 
             GpuAquiferDecisionTable decisionTable = new GpuAquiferDecisionTable(-16, -64, 32, 16);
+            int maxPackedAquiferState = GpuAquiferSubstance.packOutput(
+                    GpuAquiferSubstance.RETURN_STATE, 0x1fff_ffff, true);
+            if (!GpuAquiferSubstance.isValidPackedOutput(maxPackedAquiferState)
+                    || GpuAquiferSubstance.outputStateId(maxPackedAquiferState) != 0x1fff_ffff
+                    || !GpuAquiferSubstance.outputSchedulesFluidUpdate(maxPackedAquiferState)) {
+                throw new IllegalStateException("Packed aquifer output lost high block-state ID bits");
+            }
             net.minecraft.world.level.block.state.BlockState solidState =
                     net.minecraft.world.level.block.Blocks.STONE.defaultBlockState();
             int decisionIndex = 3 * 256 + 2 * 16 + 15;
@@ -619,6 +626,9 @@ public final class VulkanCiSmoke {
             decisionTable.set(defaultIndex, null, 1.25, false);
             if (decisionTable.indexOfMatch(-1, -61, 34, -0.0) != decisionIndex
                     || decisionTable.indexOfMatch(-1, -61, 34, 0.0) != -1
+                    || !decisionTable.matchesDensity(decisionIndex, -0.0)
+                    || decisionTable.matchesDensity(decisionIndex, 0.0)
+                    || decisionTable.matchesDensity(-1, -0.0)
                     || decisionTable.state(decisionIndex) != solidState
                     || !decisionTable.schedulesFluidUpdate(decisionIndex)
                     || decisionTable.indexOfMatch(0, -61, 34, -0.0) != -1
@@ -916,7 +926,7 @@ public final class VulkanCiSmoke {
                             0, 0, 0, 0, 0, 0, 0, 0,
                             GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
                             GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
-                            0, 0, true, false, true, 0),
+                            0, 23, true, false, true, 0),
                     new GpuAquiferSubstance.Input(-0.4, 0.125, 19,
                             30, 21, 12, 8, 2, 7, 13, 24,
                             GpuAquiferSubstance.WATER, GpuAquiferSubstance.OTHER,
@@ -925,7 +935,7 @@ public final class VulkanCiSmoke {
             };
             GpuAquiferSubstance.BatchWriter substanceWriter = new GpuAquiferSubstance.BatchWriter(3, 2);
             substanceWriter.addPositiveDensity(0.25, 7, false);
-            substanceWriter.addDirectGlobalFluid(-1.0, -4, true);
+            substanceWriter.addDirectGlobalFluid(-1.0, -4, true, 23);
             List<ByteBuffer> stagedSubstanceBatches = new ArrayList<>(substanceWriter.drain());
             if (stagedSubstanceBatches.size() != 1
                     || stagedSubstanceBatches.get(0).remaining() != 2 * GpuAquiferSubstance.RECORD_BYTES) {
@@ -938,7 +948,8 @@ public final class VulkanCiSmoke {
                     aquiferSubstance.distance1(), aquiferSubstance.distance2(), aquiferSubstance.distance3(),
                     aquiferSubstance.kind0(), aquiferSubstance.kind1(), aquiferSubstance.kind2(),
                     aquiferSubstance.kind3(), aquiferSubstance.statusEqualityMask(),
-                    aquiferSubstance.belowIsLava(), aquiferSubstance.c2meAquifer());
+                    aquiferSubstance.belowIsLava(), aquiferSubstance.c2meAquifer(),
+                    aquiferSubstance.nearestStateId());
             ByteBuffer stagedRecords = ByteBuffer.allocateDirect(3 * GpuAquiferSubstance.RECORD_BYTES)
                     .order(java.nio.ByteOrder.nativeOrder());
             List<ByteBuffer> trailingSubstanceBatches = substanceWriter.finish();
@@ -1079,7 +1090,8 @@ public final class VulkanCiSmoke {
                 throw new IllegalStateException("Chunk-sized aquifer batch returned a truncated output");
             }
             for (int i = 0; i < chunkBatchSize; i++) {
-                if (chunkSubstanceResults[i] != GpuAquiferSubstance.packOutput(
+                int base = i * GpuAquiferSubstance.OUTPUT_INTS;
+                if (chunkSubstanceResults[base] != GpuAquiferSubstance.packOutput(
                         GpuAquiferSubstance.RETURN_DEFAULT, false)) {
                     throw new IllegalStateException("Chunk-sized aquifer decision mismatch at row " + i);
                 }
@@ -1087,8 +1099,9 @@ public final class VulkanCiSmoke {
             System.out.println("Vulkan CI smoke: full-chunk aquifer batch completed (147,456 blocks, one dispatch)");
             for (int i = 0; i < substanceCases.length; i++) {
                 int[] expected = GpuAquiferSubstance.evaluate(substanceCases[i]);
-                int expectedPacked = GpuAquiferSubstance.packOutput(expected[0], expected[2] != 0);
-                int actualPacked = substanceResults[i];
+                int expectedPacked = GpuAquiferSubstance.packOutput(
+                        expected[0], expected[1], expected[2] != 0);
+                int actualPacked = substanceResults[i * GpuAquiferSubstance.OUTPUT_INTS];
                 if (!GpuAquiferSubstance.isValidPackedOutput(actualPacked)
                         || actualPacked != expectedPacked) {
                     throw new IllegalStateException("Aquifer substance mismatch at case " + i
@@ -1103,8 +1116,9 @@ public final class VulkanCiSmoke {
                 throw new IllegalStateException("Vanilla second/third pressure contribution lost its nearest-similarity weight");
             }
             if (weightedThirdPressureIndex < 0
-                    || substanceResults[weightedThirdPressureIndex] != GpuAquiferSubstance.packOutput(
-                    GpuAquiferSubstance.RETURN_STATE, true)) {
+                    || substanceResults[weightedThirdPressureIndex * GpuAquiferSubstance.OUTPUT_INTS]
+                    != GpuAquiferSubstance.packOutput(
+                            GpuAquiferSubstance.RETURN_STATE, 417, true)) {
                 throw new IllegalStateException("Packed aquifer output lost the weighted second/third pressure decision");
             }
             if (GpuAquiferSubstance.evaluate(positiveDensityThresholdCase)[0]

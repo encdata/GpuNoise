@@ -11,12 +11,13 @@ import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.core.Holder;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.levelgen.NoiseSettings;
+import net.minecraft.world.level.levelgen.NoiseChunk;
+import net.minecraft.world.level.levelgen.Aquifer;
 import net.minecraft.SharedConstants;
 import net.neoforged.fml.ModList;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CancellationException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -31,6 +32,8 @@ import dev.gpunoise.GpuLevelChunkSectionAccess;
 import dev.gpunoise.GpuHeightmapAccess;
 import dev.gpunoise.GpuTerrainRuntime;
 import dev.gpunoise.GpuTerrainProfiler;
+import dev.gpunoise.GpuAquiferDecisionAccess;
+import dev.gpunoise.GpuAquiferDecisionTable;
 
 /**
  * Noisium-style worldgen write optimization. Noise generation owns the section
@@ -51,6 +54,12 @@ abstract class NoiseChunkGeneratorWriteMixin {
 
     @org.spongepowered.asm.mixin.Unique
     private static final AtomicBoolean gpunoise$loggedPaletteCompatibility = new AtomicBoolean();
+
+    @org.spongepowered.asm.mixin.Unique
+    private static final AtomicBoolean gpunoise$loggedDecisionWriter = new AtomicBoolean();
+
+    @org.spongepowered.asm.mixin.Unique
+    private static final AtomicBoolean gpunoise$loggedDecisionWriterFallback = new AtomicBoolean();
 
     @WrapMethod(method = "fillFromNoise")
     private CompletableFuture<ChunkAccess> gpunoise$asyncBatchFill(
@@ -84,6 +93,7 @@ abstract class NoiseChunkGeneratorWriteMixin {
             // fill exception could mix two terrain writers into one chunk.
             return prepared.handle((cache, failure) -> {
                 if (cancellationRequested.get()) {
+                    GpuTerrainRuntime.releaseGpuCache(cache);
                     return CompletableFuture.<ChunkAccess>failedFuture(
                             new CancellationException("chunk generation cancelled before CPU fill"));
                 }
@@ -93,16 +103,95 @@ abstract class NoiseChunkGeneratorWriteMixin {
                     return original.call(blender, randomState, structures, chunk);
                 }
                 return CompletableFuture.supplyAsync(
-                        () -> gpunoise$fillWithGpuReady(blender, randomState, structures, chunk,
-                                minCellY, cellCountY, cache), net.minecraft.Util.backgroundExecutor());
+                        () -> gpunoise$startGpuFill(blender, randomState, structures, chunk,
+                                minCellY, cellCountY, cache, cancellationRequested, original),
+                        net.minecraft.Util.backgroundExecutor()).thenCompose(stage -> stage);
             }).thenCompose(stage -> stage);
         }, interrupted -> cancellationRequested.set(true));
         return gpuFill;
     }
 
-    private ChunkAccess gpunoise$fillWithGpuReady(Blender blender, RandomState randomState, StructureManager structures,
-                                                  ChunkAccess chunk, int minCellY, int cellCountY,
-                                                  GpuChunkDensityCache cache) {
+    private CompletableFuture<ChunkAccess> gpunoise$startGpuFill(
+            Blender blender, RandomState randomState, StructureManager structures,
+            ChunkAccess chunk, int minCellY, int cellCountY, GpuChunkDensityCache cache,
+            AtomicBoolean cancellationRequested,
+            Operation<CompletableFuture<ChunkAccess>> original) {
+        if (cancellationRequested.get()) {
+            GpuTerrainRuntime.releaseGpuCache(cache);
+            return CompletableFuture.failedFuture(
+                    new CancellationException("chunk generation cancelled before NoiseChunk setup"));
+        }
+        NoiseChunk preparedNoiseChunk = null;
+        RuntimeException setupFailure = null;
+        try {
+            // NoiseChunk construction starts its asynchronous aquifer batch.
+            // Bind only for construction; do not occupy a worker while Vulkan
+            // evaluates the batch and completes its readback future.
+            GpuTerrainRuntime.bindFillCache(cache);
+            preparedNoiseChunk = chunk.getOrCreateNoiseChunk(existing ->
+                    gpunoise$createNoiseChunk(existing, structures, blender, randomState));
+        } catch (RuntimeException failure) {
+            setupFailure = failure;
+        } finally {
+            GpuTerrainRuntime.clearFillCache();
+        }
+        if (setupFailure == null && preparedNoiseChunk == null) {
+            setupFailure = new IllegalStateException("ChunkAccess returned a null NoiseChunk");
+        }
+        if (setupFailure != null) {
+            GpuTerrainRuntime.releaseGpuCache(cache);
+            GpuTerrainRuntime.markCpuFallbackChunk(chunk.getPos().x, chunk.getPos().z, setupFailure);
+            return original.call(blender, randomState, structures, chunk);
+        }
+        NoiseChunk noiseChunk = preparedNoiseChunk;
+
+        CompletableFuture<Void> decisionBuild = null;
+        Aquifer aquifer = noiseChunk.aquifer();
+        if (aquifer instanceof GpuAquiferDecisionAccess access) {
+            // A NoiseChunk may have been created by an earlier generation
+            // stage before this fill cache existed. Explicitly attach/start
+            // its decision build so the async continuation cannot race the
+            // first interpolation call and silently miss the GPU batch.
+            access.gpunoise$beginGpuDecisions(cache, noiseChunk);
+            decisionBuild = access.gpunoise$decisionBuild();
+        }
+        if (decisionBuild == null) {
+            return CompletableFuture.supplyAsync(
+                    () -> {
+                        if (cancellationRequested.get()) {
+                            GpuTerrainRuntime.releaseGpuCache(cache);
+                            throw new CancellationException(
+                                    "chunk generation cancelled before terrain writes");
+                        }
+                        return gpunoise$writeGpuFilled(blender, randomState, structures, chunk,
+                                minCellY, cellCountY, cache, noiseChunk,
+                                gpunoise$getPublishedDecisionTable(noiseChunk));
+                    },
+                    net.minecraft.Util.backgroundExecutor()).whenComplete((result, failure) -> {
+                if (failure != null) GpuTerrainRuntime.releaseGpuCache(cache);
+            });
+        }
+
+        long waitStart = decisionBuild.isDone() ? 0L : GpuTerrainProfiler.beginPhase();
+        return decisionBuild.handleAsync((ignored, failure) -> {
+            GpuTerrainProfiler.recordAquiferDecisionWait(waitStart);
+            if (cancellationRequested.get()) {
+                GpuTerrainRuntime.releaseGpuCache(cache);
+                throw new CancellationException("chunk generation cancelled before terrain writes");
+            }
+            return gpunoise$writeGpuFilled(blender, randomState, structures, chunk,
+                    minCellY, cellCountY, cache, noiseChunk,
+                    gpunoise$getPublishedDecisionTable(noiseChunk));
+        }, net.minecraft.Util.backgroundExecutor()).whenComplete((result, failure) -> {
+            if (failure != null) GpuTerrainRuntime.releaseGpuCache(cache);
+        });
+    }
+
+    private ChunkAccess gpunoise$writeGpuFilled(Blender blender, RandomState randomState,
+                                                StructureManager structures, ChunkAccess chunk,
+                                                int minCellY, int cellCountY,
+                                                GpuChunkDensityCache cache, NoiseChunk noiseChunk,
+                                                GpuAquiferDecisionTable decisions) {
         int minY = generatorSettings().value().noiseSettings().minY();
         int cellHeight = generatorSettings().value().noiseSettings().getCellHeight();
         int top = chunk.getSectionIndex(cellCountY * cellHeight - 1 + minY);
@@ -140,6 +229,22 @@ abstract class NoiseChunkGeneratorWriteMixin {
             state.debugVoidTerrainCached = true;
             long fillStart = GpuTerrainProfiler.beginFill();
             try {
+                if (decisions != null && decisions.validCount() > 0
+                        && decisions.coversChunk(chunk.getPos().getMinBlockX(), minCellY * cellHeight,
+                                chunk.getPos().getMinBlockZ(), cellCountY * cellHeight)) {
+                    if (gpunoise$loggedDecisionWriter.compareAndSet(false, true)) {
+                        dev.gpunoise.GpuNoise.LOGGER.info(
+                                "GPU terrain material decisions are available; using the hybrid decision-driven CPU fill writer.");
+                    }
+                    return dev.gpunoise.GpuTerrainDecisionWriter.write(chunk, noiseChunk, decisions,
+                            minCellY, cellCountY,
+                            generatorSettings().value().noiseSettings().getCellWidth(),
+                            cellHeight, generatorSettings().value().defaultBlock(), state);
+                }
+                if (gpunoise$loggedDecisionWriterFallback.compareAndSet(false, true)) {
+                    dev.gpunoise.GpuNoise.LOGGER.info(
+                            "GPU terrain material table is incomplete or unavailable; using vanilla block-state fill for this chunk.");
+                }
                 return gpunoise$doFill(blender, structures, randomState, chunk, minCellY, cellCountY);
             } finally {
                 dev.gpunoise.GpuTerrainDensityParity.reportChunk(
@@ -160,6 +265,25 @@ abstract class NoiseChunkGeneratorWriteMixin {
     @org.spongepowered.asm.mixin.gen.Invoker("doFill")
     protected abstract ChunkAccess gpunoise$doFill(Blender blender, StructureManager structures, RandomState randomState,
                                                   ChunkAccess chunk, int minCellY, int cellCountY);
+
+    @org.spongepowered.asm.mixin.gen.Invoker("createNoiseChunk")
+    protected abstract NoiseChunk gpunoise$createNoiseChunk(ChunkAccess chunk, StructureManager structures,
+                                                            Blender blender, RandomState randomState);
+
+    @org.spongepowered.asm.mixin.Unique
+    private GpuAquiferDecisionTable gpunoise$getPublishedDecisionTable(NoiseChunk noiseChunk) {
+        Aquifer aquifer = noiseChunk.aquifer();
+        if (!(aquifer instanceof GpuAquiferDecisionAccess access)) return null;
+        GpuAquiferDecisionTable decisions = access.gpunoise$decisionTable();
+        if (decisions == null) return null;
+        if (decisions.validCount() < decisions.capacity()
+                && gpunoise$loggedDecisionWriterFallback.compareAndSet(false, true)) {
+            dev.gpunoise.GpuNoise.LOGGER.info(
+                    "GPU terrain material table has {}/{} GPU decisions; using vanilla per-block material decisions for rejected rows.",
+                    decisions.validCount(), decisions.capacity());
+        }
+        return decisions;
+    }
 
     @Redirect(
             method = "doFill",

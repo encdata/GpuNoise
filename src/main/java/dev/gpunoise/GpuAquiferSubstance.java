@@ -7,9 +7,9 @@ import java.util.List;
 
 /** Packed contract and double-precision reference for vanilla aquifer results. */
 public final class GpuAquiferSubstance {
-    /** 17 words: density, barrier, y, levels, distances, kinds, status mask, flags. */
-    public static final int RECORD_BYTES = 68;
-    /** One packed uint per block: low two bits are action, bit two schedules fluid work. */
+    /** 18 words: aquifer inputs, flags, and the selected runtime block-state ID. */
+    public static final int RECORD_BYTES = 72;
+    /** One packed uint per block: action, fluid-tick bit, and 29-bit state ID. */
     public static final int OUTPUT_INTS = 1;
     /**
      * Substance evaluation is a compact one-dispatch pass over the full block
@@ -25,6 +25,8 @@ public final class GpuAquiferSubstance {
     public static final int CPU_FALLBACK = 2;
     private static final int OUTPUT_ACTION_MASK = 0x3;
     private static final int OUTPUT_SCHEDULE_FLUID_UPDATE = 1 << 2;
+    private static final int OUTPUT_STATE_SHIFT = 3;
+    private static final int MAX_STATE_ID = 0x1fff_ffff;
     // Matches the router parity gate while float64 classification is not yet
     // selected as a device capability variant.
     static final float PRECISION_EPSILON = 5.0e-3f;
@@ -34,12 +36,21 @@ public final class GpuAquiferSubstance {
     private GpuAquiferSubstance() {}
 
     static int packOutput(int action, boolean scheduleFluidUpdate) {
+        return packOutput(action, 0, scheduleFluidUpdate);
+    }
+
+    static int packOutput(int action, int stateId, boolean scheduleFluidUpdate) {
         if (action < RETURN_DEFAULT || action > CPU_FALLBACK)
             throw new IllegalArgumentException("invalid aquifer action " + action);
-        return action | (scheduleFluidUpdate ? OUTPUT_SCHEDULE_FLUID_UPDATE : 0);
+        if (stateId < 0 || stateId > MAX_STATE_ID)
+            throw new IllegalArgumentException("block-state ID cannot fit aquifer output: " + stateId);
+        return (stateId << OUTPUT_STATE_SHIFT) | action
+                | (scheduleFluidUpdate ? OUTPUT_SCHEDULE_FLUID_UPDATE : 0);
     }
 
     public static int outputAction(int packed) { return packed & OUTPUT_ACTION_MASK; }
+
+    public static int outputStateId(int packed) { return packed >>> OUTPUT_STATE_SHIFT; }
 
     public static boolean outputSchedulesFluidUpdate(int packed) {
         return (packed & OUTPUT_SCHEDULE_FLUID_UPDATE) != 0;
@@ -47,8 +58,7 @@ public final class GpuAquiferSubstance {
 
     public static boolean isValidPackedOutput(int packed) {
         int action = outputAction(packed);
-        return (packed & ~(OUTPUT_ACTION_MASK | OUTPUT_SCHEDULE_FLUID_UPDATE)) == 0
-                && action <= CPU_FALLBACK;
+        return action <= CPU_FALLBACK;
     }
 
     /** Returns true when GPU rounding can change the density sign decision. */
@@ -86,7 +96,8 @@ public final class GpuAquiferSubstance {
                 .putInt(input.level0).putInt(input.level1).putInt(input.level2).putInt(input.level3)
                 .putInt(input.distance0).putInt(input.distance1).putInt(input.distance2).putInt(input.distance3)
                 .putInt(input.kind0).putInt(input.kind1).putInt(input.kind2).putInt(input.kind3)
-                .putInt(input.statusEqualityMask).putInt(flags);
+                .putInt(input.statusEqualityMask).putInt(flags)
+                .putInt(input.directGlobalFluid ? input.globalStateId : input.nearestStateId);
     }
 
     /** Incremental direct-buffer staging for chunk-sized aquifer decisions. */
@@ -118,27 +129,30 @@ public final class GpuAquiferSubstance {
                     input.level2, input.level3, input.distance0, input.distance1,
                     input.distance2, input.distance3, input.kind0, input.kind1,
                     input.kind2, input.kind3, input.statusEqualityMask,
-                    input.directGlobalFluid, input.belowIsLava, input.c2meAquifer);
+                    input.directGlobalFluid, input.belowIsLava, input.c2meAquifer,
+                    input.directGlobalFluid ? input.globalStateId : input.nearestStateId);
         }
 
         public void addPositiveDensity(double density, int y, boolean c2meAquifer) {
             write(density, 0.0, y, 0, 0, 0, 0, 0, 0, 0, 0,
-                    OTHER, OTHER, OTHER, OTHER, 0, false, false, c2meAquifer);
+                    OTHER, OTHER, OTHER, OTHER, 0, false, false, c2meAquifer, 0);
         }
 
-        public void addDirectGlobalFluid(double density, int y, boolean c2meAquifer) {
+        public void addDirectGlobalFluid(double density, int y, boolean c2meAquifer, int stateId) {
             write(density, 0.0, y, 0, 0, 0, 0, 0, 0, 0, 0,
-                    OTHER, OTHER, OTHER, OTHER, 0, true, false, c2meAquifer);
+                    OTHER, OTHER, OTHER, OTHER, 0, true, false, c2meAquifer, stateId);
         }
 
         public void addAquifer(double density, double barrier, int y,
                         int level0, int level1, int level2, int level3,
                         int distance0, int distance1, int distance2, int distance3,
                         int kind0, int kind1, int kind2, int kind3,
-                        int statusEqualityMask, boolean belowIsLava, boolean c2meAquifer) {
+                        int statusEqualityMask, boolean belowIsLava, boolean c2meAquifer,
+                        int selectedStateId) {
             write(density, barrier, y, level0, level1, level2, level3,
                     distance0, distance1, distance2, distance3, kind0, kind1,
-                    kind2, kind3, statusEqualityMask, false, belowIsLava, c2meAquifer);
+                    kind2, kind3, statusEqualityMask, false, belowIsLava, c2meAquifer,
+                    selectedStateId);
         }
 
         public List<ByteBuffer> finish() {
@@ -166,7 +180,7 @@ public final class GpuAquiferSubstance {
                            int distance0, int distance1, int distance2, int distance3,
                            int kind0, int kind1, int kind2, int kind3,
                            int statusEqualityMask, boolean directGlobalFluid,
-                           boolean belowIsLava, boolean c2meAquifer) {
+                           boolean belowIsLava, boolean c2meAquifer, int selectedStateId) {
             if (finished) throw new IllegalStateException("aquifer batch writer is already finished");
             if (size >= expectedRows) throw new IllegalStateException("aquifer batch exceeded its chunk capacity");
             if (current == null || !current.hasRemaining()) {
@@ -185,44 +199,51 @@ public final class GpuAquiferSubstance {
                     .putInt(level0).putInt(level1).putInt(level2).putInt(level3)
                     .putInt(distance0).putInt(distance1).putInt(distance2).putInt(distance3)
                     .putInt(kind0).putInt(kind1).putInt(kind2).putInt(kind3)
-                    .putInt(statusEqualityMask).putInt(flags);
+                    .putInt(statusEqualityMask).putInt(flags).putInt(selectedStateId);
             size++;
         }
     }
 
-    /** Output words are action, state ID, and schedule-fluid-update. */
+    /** Reference words are action, state ID, and schedule-fluid-update. */
     public static int[] evaluate(Input input) {
-        if (!Double.isFinite(input.density)) return output(CPU_FALLBACK, 0, false);
-        if (nearDensityDecisionThreshold(input.density)) return output(CPU_FALLBACK, 0, false);
-        if (input.density > 0.0) return output(RETURN_DEFAULT, 0, false);
-        if (input.directGlobalFluid) return output(RETURN_STATE, input.globalStateId, false);
+        int packed = evaluatePacked(input);
+        return new int[]{outputAction(packed), outputStateId(packed),
+                outputSchedulesFluidUpdate(packed) ? 1 : 0};
+    }
+
+    /** Allocation-free Java reference for the runtime differential verifier. */
+    public static int evaluatePacked(Input input) {
+        if (!Double.isFinite(input.density)) return packOutput(CPU_FALLBACK, 0, false);
+        if (nearDensityDecisionThreshold(input.density)) return packOutput(CPU_FALLBACK, 0, false);
+        if (input.density > 0.0) return packOutput(RETURN_DEFAULT, 0, false);
+        if (input.directGlobalFluid) return packOutput(RETURN_STATE, input.globalStateId, false);
         if (!Double.isFinite(input.barrier))
-            return output(CPU_FALLBACK, 0, false);
+            return packOutput(CPU_FALLBACK, 0, false);
 
         double similarity01 = similarity(input.distance0, input.distance1);
         double similarity02 = similarity(input.distance0, input.distance2);
         double similarity12 = similarity(input.distance1, input.distance2);
         if (similarity01 <= 0.0) {
-            return output(RETURN_STATE, input.nearestStateId,
+            return packOutput(RETURN_STATE, input.nearestStateId,
                     similarity01 >= FLOWING_UPDATE_SIMILARITY
                             && (!input.c2meAquifer || !sameStatus(input, 0, 1)));
         }
         if (input.kind0 == WATER && input.belowIsLava)
-            return output(RETURN_STATE, input.nearestStateId, true);
+            return packOutput(RETURN_STATE, input.nearestStateId, true);
 
         double contribution01 = similarity01 * pressure(input.y, input.level0, input.level1,
                 input.kind0, input.kind1, input.barrier);
         double firstResult = input.density + contribution01;
-        if (nearThreshold(firstResult)) return output(CPU_FALLBACK, 0, false);
-        if (firstResult > 0.0) return output(RETURN_DEFAULT, 0, false);
+        if (nearThreshold(firstResult)) return packOutput(CPU_FALLBACK, 0, false);
+        if (firstResult > 0.0) return packOutput(RETURN_DEFAULT, 0, false);
 
         if (similarity02 > 0.0) {
             double contribution02 = similarity01 * similarity02
                     * pressure(input.y, input.level0, input.level2,
                             input.kind0, input.kind2, input.barrier);
             double secondResult = input.density + contribution02;
-            if (nearThreshold(secondResult)) return output(CPU_FALLBACK, 0, false);
-            if (secondResult > 0.0) return output(RETURN_DEFAULT, 0, false);
+            if (nearThreshold(secondResult)) return packOutput(CPU_FALLBACK, 0, false);
+            if (secondResult > 0.0) return packOutput(RETURN_DEFAULT, 0, false);
         }
 
         if (similarity12 > 0.0) {
@@ -230,10 +251,10 @@ public final class GpuAquiferSubstance {
                     * pressure(input.y, input.level1, input.level2,
                             input.kind1, input.kind2, input.barrier);
             double thirdResult = input.density + contribution12;
-            if (nearThreshold(thirdResult)) return output(CPU_FALLBACK, 0, false);
-            if (thirdResult > 0.0) return output(RETURN_DEFAULT, 0, false);
+            if (nearThreshold(thirdResult)) return packOutput(CPU_FALLBACK, 0, false);
+            if (thirdResult > 0.0) return packOutput(RETURN_DEFAULT, 0, false);
         }
-        if (!input.c2meAquifer) return output(RETURN_STATE, input.nearestStateId, true);
+        if (!input.c2meAquifer) return packOutput(RETURN_STATE, input.nearestStateId, true);
 
         boolean mayFlow01 = !sameStatus(input, 0, 1);
         boolean mayFlow12 = similarity12 >= FLOWING_UPDATE_SIMILARITY && !sameStatus(input, 1, 2);
@@ -242,7 +263,7 @@ public final class GpuAquiferSubstance {
                 || (similarity02 >= FLOWING_UPDATE_SIMILARITY
                 && similarity(input.distance0, input.distance3) >= FLOWING_UPDATE_SIMILARITY
                 && !sameStatus(input, 0, 3));
-        return output(RETURN_STATE, input.nearestStateId, schedule);
+        return packOutput(RETURN_STATE, input.nearestStateId, schedule);
     }
 
     static double similarity(int firstDistance, int secondDistance) {
@@ -267,10 +288,6 @@ public final class GpuAquiferSubstance {
 
     private static boolean nearThreshold(double value) {
         return Math.abs(value) <= PRECISION_EPSILON;
-    }
-
-    private static int[] output(int action, int stateId, boolean schedule) {
-        return new int[]{action, stateId, schedule ? 1 : 0};
     }
 
     private static boolean sameStatus(Input input, int first, int second) {

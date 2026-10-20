@@ -454,7 +454,8 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                 )
             if not gpu_counts:
                 raise RuntimeError("GPU server completed without reporting terrain cache state")
-            if "GPU aquifer inputs use Vulkan cache roots; parity verifier compares decisions against Java" not in run_log:
+            if ("GPU aquifer inputs use Vulkan cache roots; parity verifier compares GPU math with the Java "
+                    "double-precision decision reference" not in run_log):
                 raise RuntimeError("GPU aquifer decisions did not use the Vulkan terrain roots required for the C2ME path")
             density_differentials = re.findall(
                 r"GPU terrain density differential: chunks=(\d+), lastChunk=\((-?\d+),(-?\d+)\), "
@@ -476,8 +477,8 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
             if max(counts[2] for counts in gpu_counts) <= 0:
                 raise RuntimeError("GPU benchmark completed without any GPU terrain cache being consumed")
             material_batches = re.findall(
-                r"GPU terrain material decisions: queries=(\d+), positiveDensityQueries=(\d+), "
-                r"aquiferQueries=(\d+), .*?acceptedDecisions=(\d+), cpuFallback=(\d+)", run_log)
+                r"GPU terrain material decisions: skippedPositiveDensityQueries=(\d+), "
+                r"submittedAquiferRows=(\d+), .*?acceptedDecisions=(\d+), cpuFallback=(\d+)", run_log)
             if not material_batches:
                 skip_reasons = re.findall(r"GPU aquifer decision preflight skipped: ([^\r\n]+)", run_log)
                 reason_detail = "; ".join(dict.fromkeys(skip_reasons)) or "no preflight skip reason was logged"
@@ -488,9 +489,9 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
             if material_batches and (sum(int(row[0]) for row in material_batches) == 0
                                      or sum(int(row[1]) for row in material_batches) == 0):
                 raise RuntimeError(
-                    "GPU terrain material dispatch did not classify any positive-density solid/air rows")
+                    "GPU terrain material path did not scan positive-density blocks and submit aquifer rows")
             if (c2me_aquifer_rewrite
-                    and sum(int(row[3]) for row in material_batches) == 0):
+                    and sum(int(row[2]) for row in material_batches) == 0):
                 raise RuntimeError(
                     "C2ME aquifer rewrite completed without applying a GPU decision row; "
                     "the optimized C2ME path is still running entirely on Java")
@@ -525,13 +526,13 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                         f"GPU aquifer trace did not observe runtime decision lookup at {trace_block}")
                 if trace_applied and not trace_lines:
                     raise RuntimeError(
-                        f"GPU aquifer trace applied a decision without its Java parity sample at {trace_block}")
+                        f"GPU aquifer trace applied a decision without its Java decision-reference sample at {trace_block}")
                 if trace_lines and not any(
-                        ("vanillaSchedule=true" in line and "gpuSchedule=true" in line)
-                        or ("vanillaSchedule=false" in line and "gpuSchedule=false" in line)
+                        ("referenceSchedule=true" in line and "gpuSchedule=true" in line)
+                        or ("referenceSchedule=false" in line and "gpuSchedule=false" in line)
                         for line in trace_lines):
                     raise RuntimeError(
-                        f"GPU aquifer trace schedule differs from vanilla at {trace_block}: {trace_lines[-1]}")
+                        f"GPU aquifer trace schedule differs from the Java decision reference at {trace_block}: {trace_lines[-1]}")
             fallback_chunks = max(counts[3] for counts in gpu_counts)
             if fallback_chunks != 0:
                 raise RuntimeError(

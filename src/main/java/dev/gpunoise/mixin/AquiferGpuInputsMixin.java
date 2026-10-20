@@ -22,6 +22,7 @@ import dev.gpunoise.GpuWorldgenDependency;
 import dev.gpunoise.GpuTerrainProfiler;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 import net.minecraft.world.level.levelgen.Aquifer;
@@ -42,6 +43,7 @@ import java.util.Map;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -79,6 +81,16 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     @org.spongepowered.asm.mixin.Unique
     private volatile CompletableFuture<Void> gpunoise$decisionBuild;
 
+    @Override
+    public GpuAquiferDecisionTable gpunoise$decisionTable() {
+        return gpunoise$decisions;
+    }
+
+    @Override
+    public CompletableFuture<Void> gpunoise$decisionBuild() {
+        return gpunoise$decisionBuild;
+    }
+
     @org.spongepowered.asm.mixin.Unique
     private volatile boolean gpunoise$decisionBuildFallback;
 
@@ -110,9 +122,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private static final AtomicBoolean gpunoise$gpuAquiferInputsLogged = new AtomicBoolean();
 
     @org.spongepowered.asm.mixin.Unique
-    private static final ThreadLocal<Boolean> gpunoise$javaAquiferReference = new ThreadLocal<>();
-
-    @org.spongepowered.asm.mixin.Unique
     private static final int gpunoise$aquiferDecisionConcurrency = (int) Math.max(1L,
             Math.min(8L, Long.getLong("gpunoise.aquiferDecisionConcurrency", 3L)));
 
@@ -121,12 +130,13 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             Math.min(1024L, Long.getLong("gpunoise.aquiferDecisionQueueCapacity", 128L)));
 
     @org.spongepowered.asm.mixin.Unique
-    private static final int gpunoise$nearestQueriesPerDispatch = Math.min(
-            GpuAquiferNearestThree.MAX_QUERIES, 16_384);
+    // The persistent Vulkan slot already owns buffers for its full row
+    // capacity. Keep each normal chunk's nearest-center work in one dispatch
+    // instead of fragmenting it into small 16k submissions.
+    private static final int gpunoise$nearestQueriesPerDispatch = GpuAquiferNearestThree.MAX_QUERIES;
 
     @org.spongepowered.asm.mixin.Unique
-    private static final int gpunoise$substanceRowsPerDispatch = Math.min(
-            GpuAquiferSubstance.MAX_QUERIES, 16_384);
+    private static final int gpunoise$substanceRowsPerDispatch = GpuAquiferSubstance.MAX_QUERIES;
 
     @org.spongepowered.asm.mixin.Unique
     private static final ThreadPoolExecutor gpunoise$aquiferDecisionExecutor = new ThreadPoolExecutor(
@@ -154,10 +164,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
 
     @Invoker("getAquiferStatus")
     protected abstract Aquifer.FluidStatus gpunoise$getAquiferStatus(long position);
-
-    @Invoker("computeSubstance")
-    protected abstract BlockState gpunoise$invokeVanillaComputeSubstance(
-            DensityFunction.FunctionContext context, double density);
 
     private void gpunoise$prepareGpuDecisions(GpuChunkDensityCache cache, NoiseChunk noiseChunk) {
         if (gpunoise$decisions != null) return;
@@ -273,9 +279,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private void gpunoise$usePreparedGpuAquiferDecision(
             DensityFunction.FunctionContext context, double density,
             CallbackInfoReturnable<BlockState> cir) {
-        // The verifier invokes the original method through an @Invoker. Keep
-        // this prepared-table hook out of that Java reference call.
-        if (Boolean.TRUE.equals(gpunoise$javaAquiferReference.get())) return;
         GpuAquiferDecisionTable decisions = gpunoise$decisions;
         if (decisions == null) {
             CompletableFuture<Void> build = gpunoise$decisionBuild;
@@ -283,7 +286,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 long waitStart = build.isDone() ? 0L : GpuTerrainProfiler.beginPhase();
                 try {
                     build.join();
-                } catch (CompletionException failure) {
+                } catch (CompletionException | CancellationException failure) {
                     if (gpunoise$aquiferBatchWarning.compareAndSet(false, true)) {
                         dev.gpunoise.GpuNoise.LOGGER.warn(
                                 "Asynchronous GPU aquifer decision build failed; using vanilla decisions.", failure);
@@ -344,7 +347,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         GpuChunkDensityCache.FinalDensityBlockView finalDensityBlockView = cache.finalDensityBlockView();
         AquiferQueries queries = new AquiferQueries(decisionCapacity);
         GpuAquiferSubstance.BatchWriter substanceWriter =
-                new GpuAquiferSubstance.BatchWriter(decisionCapacity, gpunoise$substanceRowsPerDispatch);
+                new GpuAquiferSubstance.BatchWriter(decisionCapacity,
+                        Math.min(decisionCapacity, gpunoise$substanceRowsPerDispatch));
         List<CompletableFuture<int[]>> substanceBatches = new ArrayList<>();
         PendingDecisions pending = new PendingDecisions(decisionCapacity, gpunoise$verifyAquifer);
         int submittedSubstanceRows = 0;
@@ -375,30 +379,19 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     double density = noiseAccess.gpunoise$withBeardifier(cachedDensity, x, y, z);
                     if (!Double.isFinite(density)) continue;
                     int index = (y - minY) * 256 + (z - minZ) * 16 + (x - minX);
-                    // Only the optional differential verifier needs a context
-                    // retained for each queued decision. Exact Java barrier
-                    // mode creates one only for non-lava aquifer queries.
-                    DensityFunction.FunctionContext context = gpunoise$verifyAquifer
-                            ? new DensityFunction.SinglePointContext(x, y, z) : null;
                     if (density > 0.0) {
-                        // Vanilla's positive-density decision is the base
-                        // solid/air material choice. Batch it through the same
-                        // Vulkan decision kernel as aquifer results so the
-                        // complete per-block material classification has one
-                        // parity gate and one result table.
-                        GpuAquiferSubstance.Input diagnosticInput = gpunoise$verifyAquifer
-                                ? new GpuAquiferSubstance.Input(
-                                density, 0.0, y, 0, 0, 0, 0, 0, 0, 0, 0,
-                                GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
-                                GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
-                                0, 0, false, false, c2meAquifer, 0) : null;
-                        substanceWriter.addPositiveDensity(density, y, c2meAquifer);
-                        pending.add(index, null, context, density, diagnosticInput);
+                        // Positive density never asks the aquifer for a block
+                        // state. OreVeinifier and any mod material rules still
+                        // require the vanilla rule list, so sending a null
+                        // aquifer result through a separate Vulkan dispatch
+                        // only adds records and readback with no writer benefit.
                         positiveDensityDecisions++;
-                        submittedSubstanceRows = gpunoise$dispatchReadySubstanceRows(
-                                pending, substanceWriter, substanceBatches, submittedSubstanceRows);
                         continue;
                     }
+                    // Only queued rows need a context for optional differential
+                    // verification or exact Java barrier sampling.
+                    DensityFunction.FunctionContext context = gpunoise$verifyAquifer
+                            ? new DensityFunction.SinglePointContext(x, y, z) : null;
                     Aquifer.FluidStatus global = c2meAquifer
                             ? gpunoise$sampleGlobalFluidLevel(c2meGlobalFluidLevels, cache, y)
                             : globalFluidPicker.computeFluid(x, y, z);
@@ -406,8 +399,16 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     if (c2meAquifer && y > c2meSamplingCutoff) {
                         // C2ME OCL bypasses local aquifer pressure above its
                         // low-pass cutoff and returns the global picker state.
-                        substanceWriter.addDirectGlobalFluid(density, y, true);
-                        pending.add(index, globalState, context, density, null);
+                        int globalStateId = Block.getId(globalState);
+                        GpuAquiferSubstance.Input diagnosticInput = gpunoise$verifyAquifer
+                                ? new GpuAquiferSubstance.Input(density, 0.0, y,
+                                0, 0, 0, 0, 0, 0,
+                                GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                                GpuAquiferSubstance.OTHER, globalStateId,
+                                true, false, globalStateId) : null;
+                        substanceWriter.addDirectGlobalFluid(density, y, true,
+                                globalStateId);
+                        pending.add(index, globalState, context, density, diagnosticInput);
                         directGlobalFluidDecisions++;
                         submittedSubstanceRows = gpunoise$dispatchReadySubstanceRows(
                                 pending, substanceWriter, substanceBatches, submittedSubstanceRows);
@@ -418,8 +419,10 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                 ? new GpuAquiferSubstance.Input(density, 0.0, y,
                                 0, 0, 0, 0, 0, 0,
                                 GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
-                                GpuAquiferSubstance.OTHER, 0, true, false, 0) : null;
-                        substanceWriter.addDirectGlobalFluid(density, y, c2meAquifer);
+                                GpuAquiferSubstance.OTHER, Block.getId(globalState),
+                                true, false, 0) : null;
+                        substanceWriter.addDirectGlobalFluid(density, y, c2meAquifer,
+                                Block.getId(globalState));
                         pending.add(index, globalState, context, density, diagnosticInput);
                         directGlobalFluidDecisions++;
                         submittedSubstanceRows = gpunoise$dispatchReadySubstanceRows(
@@ -448,7 +451,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         GpuTerrainRuntime.markGpuCacheUsed(cache);
                         if (gpunoise$gpuAquiferInputsLogged.compareAndSet(false, true)) {
                             dev.gpunoise.GpuNoise.LOGGER.info(
-                                    "GPU aquifer inputs use Vulkan cache roots; parity verifier compares decisions against Java");
+                                    "GPU aquifer inputs use Vulkan cache roots; parity verifier compares GPU math with the Java double-precision decision reference");
                         }
                     }
                     if (!Double.isFinite(barrier)) {
@@ -568,12 +571,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         level0, level1, level2, level3,
                         distance0, distance1, distance2, distance3,
                         kind0, kind1, kind2, kind3, statusMask,
-                        0, false, queryBelowIsLava, c2meAquifer, 0) : null;
+                        0, false, queryBelowIsLava, c2meAquifer, Block.getId(nearestState)) : null;
                 substanceWriter.addAquifer(queryDensity, queryBarrier, queryY,
                         level0, level1, level2, level3,
                         distance0, distance1, distance2, distance3,
                         kind0, kind1, kind2, kind3, statusMask,
-                        queryBelowIsLava, c2meAquifer);
+                        queryBelowIsLava, c2meAquifer, Block.getId(nearestState));
                 pending.add(queries.index(query), nearestState,
                         gpunoise$verifyAquifer
                                 ? new DensityFunction.SinglePointContext(queryX, queryY, queryZ) : null,
@@ -604,15 +607,16 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
 
         int outputOffset = 0;
         int acceptedDecisions = 0;
-        int vanillaParitySamples = 0;
-        int vanillaParityMismatches = 0;
+        int decisionReferenceSamples = 0;
+        int decisionReferenceMismatches = 0;
         String substanceFirstMismatch = null;
         long tableResolveStart = GpuTerrainProfiler.beginAquiferPhase();
         for (CompletableFuture<int[]> batch : substanceBatches) {
             int[] outputs = batch.join();
             for (int row = 0; row < outputs.length / GpuAquiferSubstance.OUTPUT_INTS; row++) {
                 int query = outputOffset++;
-                int packedOutput = outputs[row];
+                int outputBase = row * GpuAquiferSubstance.OUTPUT_INTS;
+                int packedOutput = outputs[outputBase];
                 if (!GpuAquiferSubstance.isValidPackedOutput(packedOutput)) continue;
                 int action = GpuAquiferSubstance.outputAction(packedOutput);
                 if (action == GpuAquiferSubstance.CPU_FALLBACK) continue;
@@ -621,35 +625,37 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 boolean scheduleFluidUpdate = GpuAquiferSubstance.outputSchedulesFluidUpdate(packedOutput);
                 int sourceIndex = pending.index(query);
                 BlockState state = action == GpuAquiferSubstance.RETURN_STATE
-                        ? pending.selectedState(query) : null;
+                        ? Block.stateById(GpuAquiferSubstance.outputStateId(packedOutput)) : null;
+                if (action == GpuAquiferSubstance.RETURN_STATE && state == null) continue;
                 if (gpunoise$verifyAquifer) {
                     DensityFunction.FunctionContext context = pending.context(query);
-                    double density = pending.density(query);
-                    BlockState vanilla;
-                    gpunoise$javaAquiferReference.set(Boolean.TRUE);
-                    try {
-                        vanilla = gpunoise$invokeVanillaComputeSubstance(context, density);
-                    } finally {
-                        gpunoise$javaAquiferReference.remove();
-                    }
-                    boolean vanillaSchedule = shouldScheduleFluidUpdate;
-                    vanillaParitySamples++;
+                    int reference = GpuAquiferSubstance.evaluatePacked(pending.gpuInput(query));
+                    int referenceAction = GpuAquiferSubstance.outputAction(reference);
+                    BlockState referenceState = referenceAction == GpuAquiferSubstance.RETURN_STATE
+                            ? Block.stateById(GpuAquiferSubstance.outputStateId(reference)) : null;
+                    boolean referenceSchedule = GpuAquiferSubstance.outputSchedulesFluidUpdate(reference);
+                    decisionReferenceSamples++;
                     if (gpunoise$isTraceAquiferBlock(context.blockX(), context.blockY(), context.blockZ())) {
                         dev.gpunoise.GpuNoise.LOGGER.info(
                                 "GPU_AQUIFER_TRACE_PARITY block=({}, {}, {}) density={} "
-                                        + "vanillaState={} gpuState={} vanillaSchedule={} gpuSchedule={} action={}",
-                                context.blockX(), context.blockY(), context.blockZ(), density,
-                                vanilla, state, vanillaSchedule, scheduleFluidUpdate, action);
+                                        + "referenceState={} gpuState={} referenceSchedule={} gpuSchedule={} "
+                                        + "referenceAction={} gpuAction={}",
+                                context.blockX(), context.blockY(), context.blockZ(), pending.density(query),
+                                referenceState, state, referenceSchedule, scheduleFluidUpdate,
+                                referenceAction, action);
                     }
-                    if (!Objects.equals(vanilla, state) || vanillaSchedule != scheduleFluidUpdate) {
-                        vanillaParityMismatches++;
+                    if (referenceAction == GpuAquiferSubstance.CPU_FALLBACK
+                            || !Objects.equals(referenceState, state)
+                            || referenceSchedule != scheduleFluidUpdate) {
+                        decisionReferenceMismatches++;
                         if (substanceFirstMismatch == null) {
                             substanceFirstMismatch = "query=(" + context.blockX() + ","
                                     + context.blockY() + "," + context.blockZ()
-                                    + "), density=" + density + ", vanillaState=" + vanilla
-                                    + ", gpuState=" + state + ", vanillaSchedule=" + vanillaSchedule
+                                    + "), density=" + pending.density(query) + ", referenceState=" + referenceState
+                                    + ", gpuState=" + state + ", referenceSchedule=" + referenceSchedule
                                     + ", gpuSchedule=" + scheduleFluidUpdate
-                                    + ", gpuAction=" + action + ", gpuInput=" + pending.gpuInput(query);
+                                    + ", referenceAction=" + referenceAction + ", gpuAction=" + action
+                                    + ", gpuInput=" + pending.gpuInput(query);
                         }
                         continue;
                     }
@@ -670,23 +676,23 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         if (gpunoise$verifyAquifer) {
             dev.gpunoise.GpuNoise.LOGGER.info(
                     "GPU aquifer substance parity: samples={}, mismatches={}, firstMismatch={}",
-                    vanillaParitySamples, vanillaParityMismatches,
+                    decisionReferenceSamples, decisionReferenceMismatches,
                     substanceFirstMismatch == null ? "none" : substanceFirstMismatch);
         }
-        long cumulativeQueries = gpunoise$terrainDecisionQueryCount.addAndGet(substanceWriter.size());
+        long cumulativeGpuRows = gpunoise$terrainDecisionQueryCount.addAndGet(substanceWriter.size());
         long cumulativePositive = gpunoise$terrainDecisionPositiveCount.addAndGet(positiveDensityDecisions);
         if (cumulativePositive > 0
                 && gpunoise$terrainDecisionBatchLogged.compareAndSet(false, true)) {
             dev.gpunoise.GpuNoise.LOGGER.info(
-                    "GPU terrain material decisions: queries={}, positiveDensityQueries={}, "
-                            + "aquiferQueries={}, centerStatusReferences={}, uniqueCenterStatuses={}, "
+                    "GPU terrain material decisions: skippedPositiveDensityQueries={}, submittedAquiferRows={}, "
+                            + "centerStatusReferences={}, uniqueCenterStatuses={}, "
                             + "acceptedDecisions={}, cpuFallback={}, "
-                            + "directGlobalFluidQueries={}, vanillaParitySamples={}, vanillaParityMismatches={}",
-                    cumulativeQueries, cumulativePositive, cumulativeQueries - cumulativePositive,
+                            + "directGlobalFluidQueries={}, javaReferenceSamples={}, javaReferenceMismatches={}",
+                    cumulativePositive, cumulativeGpuRows,
                     queries.size() * 4L, fluidStatuses.size(),
                     acceptedDecisions, substanceWriter.size() - acceptedDecisions,
                     directGlobalFluidDecisions,
-                    vanillaParitySamples, vanillaParityMismatches);
+                    decisionReferenceSamples, decisionReferenceMismatches);
         }
     }
 
@@ -1038,11 +1044,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     @Redirect(method = {"computeSurfaceLevel", "computeRandomizedFluidSurfaceLevel", "calculatePressure"}, at = @At(value = "INVOKE",
             target = "Lnet/minecraft/world/level/levelgen/DensityFunction;compute(Lnet/minecraft/world/level/levelgen/DensityFunction$FunctionContext;)D"))
     private double gpunoise$useGpuAquiferInputs(DensityFunction vanillaFunction, DensityFunction.FunctionContext context) {
-        // Exact mode and the verifier's Java reference must bypass cached GPU
-        // roots; production decisions otherwise read the same roots used by
-        // the terrain shader.
-        if (GpuAquiferRuntimeMode.exactAquiferInputsEnabled()
-                || Boolean.TRUE.equals(gpunoise$javaAquiferReference.get())) {
+        // Exact mode bypasses cached GPU roots; production decisions read the
+        // same parity-admitted roots used by the terrain shader.
+        if (GpuAquiferRuntimeMode.exactAquiferInputsEnabled()) {
             if (GpuAquiferRuntimeMode.exactAquiferInputsEnabled()
                     && gpunoise$exactAquiferInputsLogged.compareAndSet(false, true)) {
                 dev.gpunoise.GpuNoise.LOGGER.info(

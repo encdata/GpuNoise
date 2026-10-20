@@ -17,24 +17,37 @@ import java.util.concurrent.atomic.AtomicLongArray;
 
 /** Batches the small NoiseChunk corner grids into one graph dispatch. */
 final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
-    /** Spatial batch footprint requested for terrain generation. */
-    private static final int BATCH_SIZE_CHUNKS = 10;
-    private static final int MAX_CHUNKS = 100;
-    /** Search a bounded 50x50 chunk area so neighboring prefetch tiles can coalesce. */
-    private static final int SEARCH_RADIUS_REGIONS = (int) Math.max(1L,
-            Math.min(4L, Long.getLong("gpunoise.terrainBatchRegionRadius", 2L)));
-    /** Amortize CPU/GPU submission overhead while keeping a hard dispatch bound. */
+    /**
+     * Match C2ME-OCL's aligned 4x4 terrain area by default. A 2x2 mode is
+     * useful when the world height or per-device output budget cannot hold a
+     * full region. The region size is also the hard scheduler batch limit, so
+     * one dispatch cannot silently span several independent C2ME areas.
+     */
+    private static final int BATCH_SIZE_CHUNKS = configuredRegionSize();
+    private static final int MAX_CHUNKS = BATCH_SIZE_CHUNKS * BATCH_SIZE_CHUNKS;
+    /** Search only adjacent regions when explicitly configured; default is one aligned area. */
+    private static final int SEARCH_RADIUS_REGIONS = (int) Math.max(0L,
+            Math.min(4L, Long.getLong("gpunoise.terrainBatchRegionRadius", 0L)));
+    /** Amortize submission overhead within one area; output capacity may lower this. */
     private static final int TARGET_CHUNKS = (int) Math.max(1L,
-            Math.min(MAX_CHUNKS, Long.getLong("gpunoise.terrainBatchTargetChunks", 96L)));
+            Math.min(MAX_CHUNKS, Long.getLong("gpunoise.terrainBatchTargetChunks", MAX_CHUNKS)));
     /** Bound producer bursts without converting temporary overload into CPU fallback. */
     private static final int PENDING_QUEUE_CAPACITY = (int) Math.max(256L,
             Math.min(16_384L, Long.getLong("gpunoise.terrainQueueCapacity", 512L)));
+    /** Bound a missing device/fence completion so a worldgen dependency can fall back instead of hanging forever. */
+    private static final long REQUEST_TIMEOUT_SECONDS = Math.max(1L,
+            Math.min(600L, Long.getLong("gpunoise.terrainRequestTimeoutSeconds", 120L)));
     private static final int MAX_INPUT = PersistentVulkanNormalNoiseEngine.CAPACITY;
-    // Give C2ME enough time to enqueue the rest of the local 10x10 area. The
-    // deadline is still bounded, so an isolated request is dispatched
-    // promptly instead of waiting for neighbors that may never arrive.
+    // Give C2ME enough time to enqueue the rest of the aligned area. The
+    // deadline is still bounded, so an incomplete area is dispatched without
+    // waiting indefinitely for neighbors that may never arrive.
     private static final long BATCH_WINDOW_NANOS = TimeUnit.MILLISECONDS.toNanos(
             Math.max(1L, Math.min(250L, Long.getLong("gpunoise.terrainBatchWindowMs", 50L))));
+
+    private static int configuredRegionSize() {
+        long configured = Long.getLong("gpunoise.terrainRegionBatchSize", 4L);
+        return configured <= 2L ? 2 : 4;
+    }
     private final BlockingQueue<Pending> queue = new ArrayBlockingQueue<>(PENDING_QUEUE_CAPACITY);
     // Grid metadata is small and Vulkan submissions are asynchronous. Keep one
     // bounded pool entry per active slot, with a floor for systems that use
@@ -70,9 +83,9 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         int metadataSlots = Math.max(8, GpuTerrainRuntime.activeSubmissionSlotCount());
         metadataPool = new ArrayBlockingQueue<>(metadataSlots);
         for (int i = 0; i < metadataSlots; i++) metadataPool.add(new DispatchMetadata());
-        GpuNoise.LOGGER.info("GPU terrain batch window={}ms, target={}, chunk limit={}, searchRadiusRegions={}, queueCapacity={}, cacheBuildConcurrency={}, blockOutputRoots={}, outputBufferMiB={}",
-                TimeUnit.NANOSECONDS.toMillis(BATCH_WINDOW_NANOS), TARGET_CHUNKS, MAX_CHUNKS,
-                SEARCH_RADIUS_REGIONS, PENDING_QUEUE_CAPACITY,
+        GpuNoise.LOGGER.info("GPU terrain batch window={}ms, alignedRegion={}x{} chunks, target={}, chunk limit={}, adjacentRegionRadius={}, queueCapacity={}, cacheBuildConcurrency={}, blockOutputRoots={}, outputBufferMiB={}",
+                TimeUnit.NANOSECONDS.toMillis(BATCH_WINDOW_NANOS), BATCH_SIZE_CHUNKS, BATCH_SIZE_CHUNKS,
+                TARGET_CHUNKS, MAX_CHUNKS, SEARCH_RADIUS_REGIONS, PENDING_QUEUE_CAPACITY,
                 GpuTerrainAreaRegistry.maxConcurrentCacheBuilds(),
                 GpuTerrainRuntime.terrainBlockOutputRootCount(),
                 (long) PersistentVulkanNormalNoiseEngine.INTERPOLATION_OUTPUT_FLOATS * Float.BYTES / (1024L * 1024L));
@@ -82,7 +95,8 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     }
 
     CompletionStage<GpuTerrainBatchResult> submit(GpuTerrainGrid grid) {
-        CompletableFuture<GpuTerrainBatchResult> future = new CompletableFuture<>();
+        CompletableFuture<GpuTerrainBatchResult> future = new CompletableFuture<>()
+                .orTimeout(REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         if (grid.sampleCount() > MAX_INPUT) {
             future.completeExceptionally(new IllegalArgumentException("invalid GPU terrain roots batch"));
             return future;
@@ -124,10 +138,10 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         try {
             while (!closed) {
                 Pending first = queue.poll();
-                if (first != null && !first.future.isCancelled()) addPending(first);
+                if (first != null && !first.future.isDone()) addPending(first);
                 while (pendingByLayout.isEmpty()) {
                     Pending next = queue.take();
-                    if (!next.future.isCancelled()) addPending(next);
+                    if (!next.future.isDone()) addPending(next);
                 }
                 long batchStarted = System.nanoTime();
                 long deadline = batchStarted + BATCH_WINDOW_NANOS;
@@ -137,7 +151,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                 int batchTarget = Math.min(TARGET_CHUNKS, batchCandidate.capacity);
                 int refreshAfterArrivals = candidateRefreshInterval(batchTarget - compatibleCount);
                 int arrivalsSinceRefresh = 0;
-                while (System.nanoTime() < deadline && pendingChunks < MAX_CHUNKS) {
+                while (System.nanoTime() < deadline) {
                     if (compatibleCount >= batchTarget) break;
                     long now = System.nanoTime();
                     long remaining = deadline - now;
@@ -145,7 +159,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                             ? queue.poll(remaining, TimeUnit.NANOSECONDS)
                             : queue.poll();
                     if (next == null) break;
-                    if (next.future.isCancelled()) continue;
+                    if (next.future.isDone()) continue;
                     addPending(next);
                     arrivalsSinceRefresh++;
                     if (arrivalsSinceRefresh >= refreshAfterArrivals) {
@@ -184,7 +198,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                     if (candidateQueue == null) continue;
                     while (!candidateQueue.isEmpty() && batch.size() < maxChunks) {
                         Pending item = candidateQueue.peekFirst();
-                        if (item.future.isCancelled()) {
+                        if (item.future.isDone()) {
                             candidateQueue.removeFirst();
                             pendingChunks--;
                             continue;
@@ -205,7 +219,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
                     if (batch.size() == maxChunks) break;
                 }
                 if (region.isEmpty()) pendingByLayout.remove(batchCandidate.layout);
-                batch.removeIf(item -> item.future.isCancelled());
+                batch.removeIf(item -> item.future.isDone());
                 if (batch.isEmpty()) continue;
                 dispatch(batch, samplesPerChunk);
             }
@@ -237,8 +251,8 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         pendingChunks++;
     }
 
-    /** Removes canceled requests before they can consume GPU batch capacity. */
-    private void pruneCancelledPending() {
+    /** Removes canceled or timed-out requests before they can consume GPU batch capacity. */
+    private void pruneFinishedPending() {
         var layouts = pendingByLayout.entrySet().iterator();
         while (layouts.hasNext()) {
             Map<Long, ArrayDeque<Pending>> regions = layouts.next().getValue();
@@ -246,7 +260,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
             while (regionEntries.hasNext()) {
                 ArrayDeque<Pending> requests = regionEntries.next().getValue();
                 int before = requests.size();
-                requests.removeIf(item -> item.future.isCancelled());
+                requests.removeIf(item -> item.future.isDone());
                 pendingChunks -= before - requests.size();
                 if (requests.isEmpty()) regionEntries.remove();
             }
@@ -278,7 +292,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     }
 
     private BatchCandidate largestNearbyBatch() {
-        pruneCancelledPending();
+        pruneFinishedPending();
         if (pendingByLayout.isEmpty()) return null;
         GridLayout bestLayout = null;
         long bestRegion = 0L;
@@ -354,7 +368,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     }
 
     private void dispatch(List<Pending> batch, int samplesPerChunk) {
-        batch.removeIf(item -> item.future.isCancelled());
+        batch.removeIf(item -> item.future.isDone());
         if (batch.isEmpty()) return;
         int inputCount = 0;
         for (Pending item : batch) inputCount = Math.addExact(inputCount, item.grid.sampleCount());
@@ -402,7 +416,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         metadata.flip();
         if (!blockOutput) outputMetadata.limit(0);
         else outputMetadata.position(0).limit(batch.size() * GpuInterpolationBatch.METADATA_BYTES);
-        if (batch.stream().allMatch(item -> item.future.isCancelled())) {
+        if (batch.stream().allMatch(item -> item.future.isDone())) {
             metadataPool.offer(buffers);
             return;
         }

@@ -518,6 +518,20 @@ public final class GpuTerrainRuntime {
         return Integer.bitCount(terrainBlockOutputRootMask());
     }
 
+    /**
+     * Roots with dense per-block consumers stay in the full-volume result:
+     * final density drives material decisions, initial density is consumed by
+     * terrain/surface stages, and barrier is read for aquifer classification.
+     * Other aquifer roots are sampled at the much smaller set of fluid centers
+     * and use exact corners or Java fallback when no cached corner is present.
+     * Climate roots likewise remain on the corner or Java path.
+     */
+    private static int terrainBlockOutputEligibleRootMask() {
+        return (1 << GpuTerrainRoots.FINAL_DENSITY)
+                | (1 << GpuTerrainRoots.INITIAL_DENSITY)
+                | (1 << GpuTerrainRoots.BARRIER);
+    }
+
     /** Stable root ordering for compact block readback, derived only from parity-verified roots. */
     static int[] terrainBlockOutputRootIndexes() {
         GpuDensityGraph graph = terrainGraph;
@@ -543,7 +557,7 @@ public final class GpuTerrainRuntime {
                 ? verifiedTerrainBlockRootMask
                     | (EXPERIMENTAL_INTERPOLATED_BLOCK_OUTPUT ? interpolatedTerrainBlockRootMask : 0)
                 : supportedTerrainRootMask();
-        return verified & ((1 << rootLimit) - 1);
+        return verified & terrainBlockOutputEligibleRootMask() & ((1 << rootLimit) - 1);
     }
 
     static java.util.concurrent.CompletionStage<GpuFusedResult> submitFusedDirect(int[] x, int[] y, int[] z,

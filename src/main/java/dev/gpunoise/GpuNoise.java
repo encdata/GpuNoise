@@ -89,10 +89,19 @@ public final class GpuNoise {
 
     private void onServerStarting(ServerStartingEvent event) {
         if (Boolean.getBoolean("gpunoise.forceCpuTerrain") || worldPreparationAttempted) return;
+        // ServerAboutToStart normally sees a ready overworld. If it did not,
+        // this is the fallback event; leave the attempt flag clear when the
+        // level is still unavailable so another eligible lifecycle callback
+        // can retry instead of permanently consuming the setup attempt.
+        if (event.getServer().overworld() == null) {
+            LOGGER.debug("Deferring GPU terrain setup: overworld is not available yet.");
+            GpuCompileStatus.clear();
+            return;
+        }
         worldPreparationAttempted = true;
         GpuCompileStatus.begin("Preparing world terrain");
         if (warmedDevice == null) warmGpuBeforeWorldgen(GpuNoiseConfig.GPU_VENDOR.get());
-        if (worldGraphSetupAttempted || warmedDevice == null || event.getServer().overworld() == null) {
+        if (worldGraphSetupAttempted || warmedDevice == null) {
             GpuCompileStatus.clear();
             return;
         }
@@ -151,16 +160,22 @@ public final class GpuNoise {
 
     private void installWorldGraph(MinecraftServer server) {
         if (worldGraphSetupAttempted) return;
+        var overworld = server.overworld();
+        if (overworld == null) {
+            LOGGER.debug("Deferring GPU terrain setup: overworld disappeared before graph installation.");
+            worldPreparationAttempted = false;
+            return;
+        }
         worldGraphSetupAttempted = true;
         GpuDevice device = warmedDevice;
         try {
             GpuCompileStatus.update("Translating the active terrain generator");
-            if (!(server.overworld().getChunkSource().getGenerator()
+            if (!(overworld.getChunkSource().getGenerator()
                     instanceof NoiseBasedChunkGenerator)) {
                 LOGGER.info("GPU terrain skipped: overworld generator is not NoiseBasedChunkGenerator.");
                 return;
             }
-            var router = server.overworld().getChunkSource().randomState().router();
+            var router = overworld.getChunkSource().randomState().router();
             GpuDensityGraph installedGraph = null;
             boolean softwareVulkan = device.deviceType()
                     == org.lwjgl.vulkan.VK10.VK_PHYSICAL_DEVICE_TYPE_CPU;
@@ -217,10 +232,10 @@ public final class GpuNoise {
                     return null;
                 });
                 GpuTerrainRuntime.installTerrainGraph(validationGraph, router);
-                NoiseSettings terrainSettings = server.overworld().getChunkSource().getGenerator()
+                NoiseSettings terrainSettings = overworld.getChunkSource().getGenerator()
                         instanceof NoiseBasedChunkGenerator noiseGenerator
                         ? noiseGenerator.generatorSettings().value().noiseSettings()
-                                .clampToHeightAccessor(server.overworld())
+                                .clampToHeightAccessor(overworld)
                         : null;
                 if (terrainSettings != null) {
                     GpuCompileStatus.update("Checking terrain grid and world height");

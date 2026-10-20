@@ -1,5 +1,7 @@
 package dev.gpunoise;
 
+import java.util.Arrays;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 
 /** Primitive-backed chunk table published only after every GPU decision row is ready. */
@@ -8,9 +10,11 @@ public final class GpuAquiferDecisionTable {
     private static final byte SCHEDULE_FLUID_UPDATE = 2;
 
     private final int minX, minY, minZ, height;
-    private final BlockState[] states;
+    /** Compact registry IDs mirror the Vulkan result format without retaining per-block object references. */
+    private final int[] stateIds;
     private final long[] densityBits;
     private final byte[] flags;
+    private int validCount;
 
     public GpuAquiferDecisionTable(int minX, int minY, int minZ, int height) {
         if (height <= 0) throw new IllegalArgumentException("aquifer decision table height must be positive");
@@ -19,7 +23,8 @@ public final class GpuAquiferDecisionTable {
         this.minZ = minZ;
         this.height = height;
         int size = Math.multiplyExact(height, 256);
-        this.states = new BlockState[size];
+        this.stateIds = new int[size];
+        Arrays.fill(this.stateIds, -1);
         this.densityBits = new long[size];
         this.flags = new byte[size];
     }
@@ -37,13 +42,31 @@ public final class GpuAquiferDecisionTable {
 
     public void set(int index, BlockState state, double density, boolean scheduleFluidUpdate) {
         if (index < 0 || index >= flags.length) throw new IndexOutOfBoundsException(index);
-        states[index] = state;
+        if ((flags[index] & VALID) == 0) validCount++;
+        stateIds[index] = state == null ? -1 : Block.getId(state);
         densityBits[index] = Double.doubleToLongBits(density);
         flags[index] = (byte) (VALID | (scheduleFluidUpdate ? SCHEDULE_FLUID_UPDATE : 0));
     }
 
-    public BlockState state(int index) { return states[index]; }
+    public BlockState state(int index) {
+        int stateId = stateIds[index];
+        return stateId < 0 ? null : Block.stateById(stateId);
+    }
+    public boolean isValid(int index) { return (flags[index] & VALID) != 0; }
+    public boolean matchesDensity(int index, double density) {
+        return index >= 0 && index < flags.length
+                && (flags[index] & VALID) != 0
+                && densityBits[index] == Double.doubleToLongBits(density);
+    }
     public boolean schedulesFluidUpdate(int index) { return (flags[index] & SCHEDULE_FLUID_UPDATE) != 0; }
+    public int minY() { return minY; }
+    public boolean coversChunk(int expectedMinX, int expectedMinY, int expectedMinZ, int expectedHeight) {
+        return minX == expectedMinX && minY == expectedMinY && minZ == expectedMinZ
+                && height == expectedHeight;
+    }
+    public boolean isComplete() { return validCount == flags.length; }
+    public int validCount() { return validCount; }
+    public int capacity() { return flags.length; }
     int height() { return height; }
     int size() { return flags.length; }
 }

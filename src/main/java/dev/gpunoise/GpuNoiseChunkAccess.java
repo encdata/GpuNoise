@@ -1,6 +1,8 @@
 package dev.gpunoise;
 
 public interface GpuNoiseChunkAccess {
+    net.minecraft.world.level.block.state.BlockState gpunoise$vanillaInterpolatedState();
+
     GpuChunkDensityCache gpunoise$gpuCache();
 
     void gpunoise$setGpuCache(GpuChunkDensityCache cache);

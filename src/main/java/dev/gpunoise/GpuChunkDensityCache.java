@@ -48,10 +48,9 @@ public final class GpuChunkDensityCache {
     private static final AtomicLong interpolatedReads = new AtomicLong();
     private static final AtomicLong blockReads = new AtomicLong();
     private static final AtomicLong lastReadLogBucket = new AtomicLong(-1L);
-    // Terrain graph roots: final, initial, barrier, floodedness, spread, lava,
-    // erosion, and depth.
-    // All three are interpolated in one dispatch and kept in the same result
-    // view so aquifer lookups do not trigger another GPU submission.
+    // The compact cell grid still carries every compiled router root. The
+    // optional full-volume result keeps only final density, initial density,
+    // and barrier; sparse aquifer-center roots use grid corners or Java fallback.
     private static final int ROOTS = GpuTerrainRoots.COUNT;
 
     private GpuChunkDensityCache(int minX, int minZ, NoiseSettings settings, GpuWorldgenDependency exact) {

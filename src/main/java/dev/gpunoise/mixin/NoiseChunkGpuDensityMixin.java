@@ -17,6 +17,7 @@ import net.minecraft.world.level.levelgen.NoiseChunk;
 import net.minecraft.world.level.levelgen.NoiseRouter;
 import net.minecraft.world.level.levelgen.NoiseSettings;
 import net.minecraft.world.level.levelgen.Aquifer;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.biome.Climate;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -44,6 +45,8 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
 
     @Invoker("preliminarySurfaceLevel")
     protected abstract int gpunoise$invokePreliminarySurfaceLevel(int x, int z);
+    @Invoker("getInterpolatedState")
+    protected abstract BlockState gpunoise$invokeInterpolatedState();
     @Shadow @Final private NoiseSettings noiseSettings;
     @Shadow @Final private DensityFunctions.BeardifierOrMarker beardifier;
     @Shadow @Final private List<NoiseChunk.NoiseInterpolator> interpolators;
@@ -97,6 +100,11 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
                 new GpuClimateFunction((NoiseChunk) (Object) this, cache, GpuTerrainRoots.EROSION, router.erosion()),
                 new GpuClimateFunction((NoiseChunk) (Object) this, cache, GpuTerrainRoots.DEPTH, router.depth()),
                 new GpuClimateFunction((NoiseChunk) (Object) this, cache, GpuTerrainRoots.RIDGES, router.ridges()), points));
+    }
+
+    @Override
+    public BlockState gpunoise$vanillaInterpolatedState() {
+        return gpunoise$invokeInterpolatedState();
     }
 
     @Override
