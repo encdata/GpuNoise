@@ -43,7 +43,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -125,10 +124,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             GpuAquiferSubstance.MAX_QUERIES, 16_384);
 
     @org.spongepowered.asm.mixin.Unique
-    private static final Semaphore gpunoise$aquiferDecisionSlots =
-            new Semaphore(gpunoise$aquiferDecisionConcurrency, true);
-
-    @org.spongepowered.asm.mixin.Unique
     private static final ExecutorService gpunoise$aquiferDecisionExecutor = new ThreadPoolExecutor(
             gpunoise$aquiferDecisionConcurrency, gpunoise$aquiferDecisionConcurrency,
             0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(gpunoise$aquiferDecisionQueueCapacity), r -> {
@@ -159,20 +154,13 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     protected abstract BlockState gpunoise$invokeVanillaComputeSubstance(
             DensityFunction.FunctionContext context, double density);
 
-    @Override
-    public void gpunoise$prepareGpuDecisions(GpuChunkDensityCache cache, NoiseChunk noiseChunk) {
+    private void gpunoise$prepareGpuDecisions(GpuChunkDensityCache cache, NoiseChunk noiseChunk) {
         if (gpunoise$decisions != null) return;
         dev.gpunoise.GpuNoiseChunkAccess noiseAccess = gpunoise$validatedNoiseAccess(cache, noiseChunk);
         if (noiseAccess == null) return;
-        boolean acquired = false;
         long decisionBuildStart = GpuTerrainProfiler.beginPhase();
         try {
-            gpunoise$aquiferDecisionSlots.acquire();
-            acquired = true;
             gpunoise$buildGpuDecisionTable(cache, noiseAccess, positionalRandomFactory);
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            gpunoise$logAquiferPreflightSkip("interrupted while waiting for the shared Vulkan aquifer decision slot");
         } catch (RuntimeException failure) {
             gpunoise$decisions = null;
             if (gpunoise$aquiferBatchWarning.compareAndSet(false, true)) {
@@ -180,7 +168,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         "GPU aquifer decision batch unavailable; using vanilla aquifer decisions.", failure);
             }
         } finally {
-            if (acquired) gpunoise$aquiferDecisionSlots.release();
             GpuTerrainProfiler.recordAquiferDecisionBuild(decisionBuildStart);
         }
     }
