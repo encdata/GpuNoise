@@ -91,9 +91,10 @@ final class GpuInterpolationBatch {
             int cellsZ = records.getInt(base + CELLS_Z_WORD * Integer.BYTES);
             int blocksPerCellX = records.getInt(base + BLOCKS_PER_CELL_X_WORD * Integer.BYTES);
             int blocksPerCellY = records.getInt(base + BLOCKS_PER_CELL_Y_WORD * Integer.BYTES);
-            long cornerVolume = (cellsX + 1L) * (cellsY + 1L) * (cellsZ + 1L);
-            long blockVolume = (long) cellsX * cellsY * cellsZ
-                    * blocksPerCellX * blocksPerCellX * blocksPerCellY;
+            long cornerVolume = Math.multiplyExact(Math.multiplyExact(cellsX + 1L, cellsY + 1L), cellsZ + 1L);
+            long blockVolume = Math.multiplyExact(Math.multiplyExact(
+                    Math.multiplyExact(Math.multiplyExact((long) cellsX, cellsY), cellsZ),
+                    Math.multiplyExact((long) blocksPerCellX, blocksPerCellX)), blocksPerCellY);
             if (cornerOffset != Math.multiplyExact(chunk, samplesPerChunk)
                     || blockOffset != Math.multiplyExact(chunk, blocksPerChunk)
                     || cellsX <= 0 || cellsY <= 0 || cellsZ <= 0
