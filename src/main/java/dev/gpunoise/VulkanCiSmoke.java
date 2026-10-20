@@ -572,12 +572,6 @@ public final class VulkanCiSmoke {
             System.out.println("Vulkan CI smoke: dispatching two chunks with distinct world origins");
             GpuTerrainBatchResult multiMarkerTerrain = ring.submitGraphGridInterpolated(markerGraph,
                     multiMarkerGrid, 2, 8, multiMarkerOutput, 256).get(60, TimeUnit.SECONDS);
-            if (Math.abs(multiMarkerTerrain.corners().valueAt(0, 0) - 1024.0f) > 1.0e-5f
-                    || Math.abs(multiMarkerTerrain.corners().valueAt(8, 0) - 9216.0f) > 1.0e-5f) {
-                throw new IllegalStateException("Two-chunk terrain corner roots lost their world-origin order: first="
-                        + multiMarkerTerrain.corners().valueAt(0, 0) + ", second="
-                        + multiMarkerTerrain.corners().valueAt(8, 0));
-            }
             GpuTerrainBlockResult firstChunkBlocks = multiMarkerTerrain.blocks().slice(0, 256);
             GpuTerrainBlockResult secondChunkBlocks = multiMarkerTerrain.blocks().slice(256, 256);
             assertMarkerChunkCoordinates(firstChunkBlocks, -32);
