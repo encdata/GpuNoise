@@ -1033,6 +1033,13 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new EnumSwitchConfigurationDensity(), "enum-switch terrain configuration");
         verifyStandaloneMath(new EnumEqualityConfigurationDensity(), "enum-equality terrain configuration");
         verifyStandaloneMath(new HolderBackedEnumConfigurationDensity(), "holder-backed enum terrain configuration");
+        GpuDensityBytecodeCompiler.Result mutableEnum = GpuDensityBytecodeCompiler.compile(
+                new MutableEnumConfigurationDensity());
+        if (mutableEnum.expression() != null || mutableEnum.rejection() == null
+                || !mutableEnum.rejection().contains("mutable field is not supported: mode")) {
+            throw new AssertionError("mutable enum configuration must stay on Java with a field diagnostic: "
+                    + mutableEnum.rejection());
+        }
         verifyStandaloneMath(new HolderBackedConfigurationDensity(), "bound registry-holder terrain configuration");
         verifyStandaloneMath(new MinecraftMathOverloadsDensity(), "Mth float and integer overloads");
         verifyStandaloneMath(new DynamicClampDensity(), "dynamic Mth.clamp overloads");
@@ -1890,6 +1897,15 @@ final class GpuDensityExpressionSmoke {
                 case BASIN -> context.blockZ() * 0.25 - context.blockY() * 0.03125;
                 case SHELF -> Math.abs(context.blockX() - context.blockZ()) * 0.5;
             };
+        }
+    }
+
+    private static final class MutableEnumConfigurationDensity extends NumericSmokeDensity {
+        private TerrainMode mode = TerrainMode.RIDGE;
+
+        @Override public double compute(FunctionContext context) {
+            return mode == TerrainMode.RIDGE
+                    ? context.blockX() * 0.125 : context.blockZ() * 0.25;
         }
     }
 
