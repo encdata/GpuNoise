@@ -33,7 +33,7 @@ final class GpuBiomeSearchBatchScheduler implements AutoCloseable {
 
     CompletableFuture<int[]> submit(ByteBuffer targets, GpuBiomeSearchTree tree, int count,
                                    int chunkX, int chunkZ) {
-        CompletableFuture<int[]> future = new CompletableFuture<>()
+        CompletableFuture<int[]> future = new CompletableFuture<int[]>()
                 .orTimeout(REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         if (tree == null || count <= 0 || count > PersistentVulkanNormalNoiseEngine.CAPACITY
                 || targets.remaining() != (long) count * 16L) {
