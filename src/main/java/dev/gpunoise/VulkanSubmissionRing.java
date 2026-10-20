@@ -5,12 +5,17 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 /**
  * Safe in-flight submission ring. Each slot owns its Vulkan buffers, command
@@ -19,6 +24,9 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  */
 final class VulkanSubmissionRing implements AutoCloseable {
     private static final int MAX_SLOT_COUNT = 2;
+    /** Bound retained request payloads across every queue class, including in-flight work. */
+    private static final int MAX_PENDING_SUBMISSIONS = (int) Math.max(8L,
+            Math.min(256L, Long.getLong("gpunoise.submissionQueueCapacity", 32L)));
     private static final QueueClass[] QUEUE_CLASSES = QueueClass.values();
     // Terrain callers block on their futures after submitting. Poll more
     // frequently while a graph dispatch is in flight, then back off while idle
@@ -30,15 +38,18 @@ final class VulkanSubmissionRing implements AutoCloseable {
     private final AtomicBoolean[] readbackScheduled;
     private final AtomicBoolean drainScheduled = new AtomicBoolean();
     /** Requests wait here, not on a worldgen thread, while the shared slot is busy. */
-    private final ConcurrentLinkedQueue<GraphRootsRequest> pendingGraphRoots = new ConcurrentLinkedQueue<>();
-    private final ConcurrentLinkedQueue<GraphRootsGridRequest> pendingGraphGrids = new ConcurrentLinkedQueue<>();
-    private final ConcurrentLinkedQueue<TerrainGridRequest> pendingTerrainGrids = new ConcurrentLinkedQueue<>();
-    private final ConcurrentLinkedQueue<AquiferNearestRequest> pendingAquiferNearest = new ConcurrentLinkedQueue<>();
-    private final ConcurrentLinkedQueue<AquiferSubstanceRequest> pendingAquiferSubstance = new ConcurrentLinkedQueue<>();
-    private final ConcurrentLinkedQueue<AquiferFluidStatusRequest> pendingAquiferFluidStatus = new ConcurrentLinkedQueue<>();
-    private final ConcurrentLinkedQueue<AquiferPrefillRequest> pendingAquiferPrefill = new ConcurrentLinkedQueue<>();
+    private final BlockingQueue<GraphRootsRequest> pendingGraphRoots = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
+    private final BlockingQueue<GraphRootsGridRequest> pendingGraphGrids = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
+    private final BlockingQueue<TerrainGridRequest> pendingTerrainGrids = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
+    private final BlockingQueue<AquiferNearestRequest> pendingAquiferNearest = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
+    private final BlockingQueue<AquiferSubstanceRequest> pendingAquiferSubstance = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
+    private final BlockingQueue<AquiferFluidStatusRequest> pendingAquiferFluidStatus = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
+    private final BlockingQueue<AquiferPrefillRequest> pendingAquiferPrefill = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
     /** Synchronous dispatch requests run on bounded slot workers. */
-    private final ConcurrentLinkedQueue<BlockingRequest<?>> pendingBlocking = new ConcurrentLinkedQueue<>();
+    private final BlockingQueue<BlockingRequest<?>> pendingBlocking = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
+    /** A permit belongs to a request until its result future completes. */
+    private final Semaphore submissionPermits = new Semaphore(MAX_PENDING_SUBMISSIONS);
+    private final AtomicLong submissionSaturationEvents = new AtomicLong();
     /** Synchronous Vulkan APIs run off the completion thread and reserve one slot each. */
     private final Set<PersistentVulkanNormalNoiseEngine> synchronousSlots =
             Collections.newSetFromMap(new IdentityHashMap<>());
@@ -274,9 +285,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     CompletableFuture<float[]> submitGraphRoots(GpuDensityGraph graph, float[] x, float[] y, float[] z, int sampleCount) {
         CompletableFuture<float[]> future = new CompletableFuture<>();
-        pendingGraphRoots.add(new GraphRootsRequest(graph, x.clone(), y.clone(), z.clone(), sampleCount,
-                future, System.nanoTime()));
-        scheduleDrain();
+        enqueue(pendingGraphRoots, () -> new GraphRootsRequest(graph, x.clone(), y.clone(), z.clone(), sampleCount,
+                future, System.nanoTime()), future, "graph roots");
         return future;
     }
 
@@ -289,9 +299,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
         if (graph == null) return CompletableFuture.failedFuture(
                 new IllegalStateException("GPU terrain graph is not installed"));
         CompletableFuture<float[]> future = new CompletableFuture<>();
-        pendingGraphGrids.add(new GraphRootsGridRequest(graph, snapshot(metadata), chunkCount,
-                samplesPerChunk, future, System.nanoTime()));
-        scheduleDrain();
+        enqueue(pendingGraphGrids, () -> new GraphRootsGridRequest(graph, snapshot(metadata), chunkCount,
+                samplesPerChunk, future, System.nanoTime()), future, "terrain root grid");
         return future;
     }
 
@@ -331,7 +340,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
             }
             case GRAPH_GRIDS -> {
                 GraphRootsGridRequest grid = pendingGraphGrids.poll();
-                if (grid == null) return false;
+                if (grid == null || grid.future.isDone()) return grid != null;
                 recordQueueWait(grid.enqueuedNanos, requestClass);
                 try {
                     slot.submitGraphRootsGridAsync(grid.graph, grid.metadata, grid.chunkCount, grid.samplesPerChunk)
@@ -342,8 +351,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
             }
             case FULL_TERRAIN -> {
                 TerrainGridRequest terrain = pendingTerrainGrids.poll();
-                if (terrain == null) return false;
-                if (terrain.future.isDone()) return false;
+                if (terrain == null || terrain.future.isDone()) return terrain != null;
                 recordQueueWait(terrain.enqueuedNanos, requestClass);
                 try {
                     slot.submitGraphGridInterpolated(terrain.graph, terrain.gridMetadata,
@@ -357,7 +365,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
             }
             case BLOCKING -> {
                 BlockingRequest<?> blocking = pendingBlocking.poll();
-                if (blocking == null) return false;
+                if (blocking == null || blocking.future.isDone()) return blocking != null;
                 recordQueueWait(blocking.enqueuedNanos, requestClass);
                 runBlocking(blocking, slot);
             }
@@ -369,6 +377,10 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 AquiferFluidStatusRequest fluidStatus = prefill == null && nearest == null && substance == null
                         ? pendingAquiferFluidStatus.poll() : null;
                 if (prefill == null && nearest == null && substance == null && fluidStatus == null) return false;
+                if ((prefill != null && prefill.future.isDone())
+                        || (nearest != null && nearest.future.isDone())
+                        || (substance != null && substance.future.isDone())
+                        || (fluidStatus != null && fluidStatus.future.isDone())) return true;
                 long enqueued = prefill != null ? prefill.enqueuedNanos
                         : nearest != null ? nearest.enqueuedNanos
                         : substance != null ? substance.enqueuedNanos : fluidStatus.enqueuedNanos;
@@ -420,8 +432,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     private <T> CompletableFuture<T> submitBlocking(String description, SlotOperation<T> operation) {
         CompletableFuture<T> future = new CompletableFuture<>();
-        pendingBlocking.add(new BlockingRequest<>(description, operation, future, System.nanoTime()));
-        scheduleDrain();
+        enqueue(pendingBlocking, () -> new BlockingRequest<>(description, operation, future, System.nanoTime()),
+                future, description);
         return future;
     }
 
@@ -474,31 +486,33 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     CompletableFuture<int[]> submitAquiferNearestThree(ByteBuffer records, int count) {
         CompletableFuture<int[]> future = new CompletableFuture<>();
-        pendingAquiferNearest.add(new AquiferNearestRequest(records.duplicate(), count, future, System.nanoTime()));
-        scheduleDrain();
+        enqueue(pendingAquiferNearest,
+                () -> new AquiferNearestRequest(records.duplicate(), count, future, System.nanoTime()),
+                future, "aquifer nearest-three");
         return future;
     }
 
     CompletableFuture<int[]> submitAquiferSubstance(ByteBuffer records, int count) {
         CompletableFuture<int[]> future = new CompletableFuture<>();
-        pendingAquiferSubstance.add(new AquiferSubstanceRequest(records.duplicate(), count, future, System.nanoTime()));
-        scheduleDrain();
+        enqueue(pendingAquiferSubstance,
+                () -> new AquiferSubstanceRequest(records.duplicate(), count, future, System.nanoTime()),
+                future, "aquifer substance");
         return future;
     }
 
     CompletableFuture<int[]> submitAquiferFluidStatus(ByteBuffer records, int count) {
         CompletableFuture<int[]> future = new CompletableFuture<>();
-        pendingAquiferFluidStatus.add(new AquiferFluidStatusRequest(records.duplicate(), count, future, System.nanoTime()));
-        scheduleDrain();
+        enqueue(pendingAquiferFluidStatus,
+                () -> new AquiferFluidStatusRequest(records.duplicate(), count, future, System.nanoTime()),
+                future, "aquifer fluid-status");
         return future;
     }
 
     CompletableFuture<GpuAquiferPrefillResult> submitAquiferPrefill(
             ByteBuffer nearestRecords, int nearestCount, ByteBuffer statusRecords, int statusCount) {
         CompletableFuture<GpuAquiferPrefillResult> future = new CompletableFuture<>();
-        pendingAquiferPrefill.add(new AquiferPrefillRequest(nearestRecords.duplicate(), nearestCount,
-                statusRecords.duplicate(), statusCount, future, System.nanoTime()));
-        scheduleDrain();
+        enqueue(pendingAquiferPrefill, () -> new AquiferPrefillRequest(nearestRecords.duplicate(), nearestCount,
+                statusRecords.duplicate(), statusCount, future, System.nanoTime()), future, "aquifer prefill");
         return future;
     }
 
@@ -541,14 +555,42 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                                                            ByteBuffer outputMetadata,
                                                                            int blocksPerChunk,
                                                                            int[] outputRootIndexes) {
-        ByteBuffer inputGridMetadata = snapshot(gridMetadata);
-        ByteBuffer inputOutputMetadata = snapshot(outputMetadata);
-        int[] roots = outputRootIndexes.clone();
         CompletableFuture<GpuTerrainBatchResult> future = new CompletableFuture<>();
-        pendingTerrainGrids.add(new TerrainGridRequest(graph, inputGridMetadata, chunkCount,
-                samplesPerChunk, inputOutputMetadata, blocksPerChunk, roots, future, System.nanoTime()));
-        scheduleDrain();
+        enqueue(pendingTerrainGrids, () -> new TerrainGridRequest(graph, snapshot(gridMetadata), chunkCount,
+                samplesPerChunk, snapshot(outputMetadata), blocksPerChunk, outputRootIndexes.clone(), future,
+                System.nanoTime()),
+                future, "full terrain grid");
         return future;
+    }
+
+    /**
+     * Enqueues only while the shared pending-plus-in-flight budget has room.
+     * Payloads are created after acquiring a permit, so a burst cannot allocate
+     * arbitrarily many cloned sample arrays while waiting for a Vulkan slot.
+     */
+    private <T, R> void enqueue(BlockingQueue<T> queue, Supplier<T> requestFactory,
+                               CompletableFuture<R> future, String description) {
+        if (!submissionPermits.tryAcquire()) {
+            long rejected = submissionSaturationEvents.incrementAndGet();
+            if (rejected == 1L || (rejected & 127L) == 0L) {
+                GpuNoise.LOGGER.warn("GPU Vulkan submission backlog is full ({} outstanding); {} request rejected, callers may use Java fallback (total rejections={})",
+                        MAX_PENDING_SUBMISSIONS, description, rejected);
+            }
+            future.completeExceptionally(new RejectedExecutionException(
+                    "GPU Vulkan submission backlog is full: " + description));
+            return;
+        }
+        future.whenComplete((ignored, failure) -> submissionPermits.release());
+        try {
+            if (!queue.offer(requestFactory.get())) {
+                future.completeExceptionally(new RejectedExecutionException(
+                        "GPU Vulkan " + description + " queue is full"));
+                return;
+            }
+            scheduleDrain();
+        } catch (Throwable failure) {
+            future.completeExceptionally(failure);
+        }
     }
 
     CompletableFuture<GpuFusedResult> submitGraphInterpolated(GpuDensityGraph graph, float[] x, float[] y, float[] z,
