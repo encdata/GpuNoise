@@ -5,6 +5,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 import net.minecraft.world.level.levelgen.Aquifer;
 
@@ -19,6 +22,8 @@ public final class GpuAquiferStatusRegionCache {
             new ShardedLruCache<>(MAX_ENTRIES, SEGMENT_COUNT);
     private static final ShardedLruCache<SurfaceKey, Integer> SURFACES =
             new ShardedLruCache<>(MAX_SURFACE_ENTRIES, SEGMENT_COUNT);
+    private static final ConcurrentHashMap<Key, CompletableFuture<Aquifer.FluidStatus>> IN_FLIGHT =
+            new ConcurrentHashMap<>();
     private static final Set<Scope> DISABLED_SCOPES = ConcurrentHashMap.newKeySet();
     private static final Set<Scope> DISABLED_SURFACE_SCOPES = ConcurrentHashMap.newKeySet();
 
@@ -36,6 +41,77 @@ public final class GpuAquiferStatusRegionCache {
         if (graphIdentity == null || fluidPickerIdentity == null || status == null) return;
         if (DISABLED_SCOPES.contains(new Scope(graphIdentity, fluidPickerIdentity))) return;
         ENTRIES.put(new Key(graphIdentity, fluidPickerIdentity, centerPosition), status);
+    }
+
+    /** Claims a center prefill or joins a neighboring chunk's in-flight result. */
+    public static Reservation reserve(Object graphIdentity, Object fluidPickerIdentity,
+                                      long centerPosition) {
+        if (graphIdentity == null || fluidPickerIdentity == null)
+            throw new IllegalArgumentException("aquifer status reservations need stable graph and picker identities");
+        Scope scope = new Scope(graphIdentity, fluidPickerIdentity);
+        Key key = new Key(graphIdentity, fluidPickerIdentity, centerPosition);
+        if (DISABLED_SCOPES.contains(scope)) {
+            return new Reservation(key, scope, new CompletableFuture<>(), true, false);
+        }
+        CompletableFuture<Aquifer.FluidStatus> existing = IN_FLIGHT.get(key);
+        if (existing != null) return new Reservation(key, scope, existing, false, true);
+        if (IN_FLIGHT.size() >= MAX_ENTRIES)
+            return new Reservation(key, scope, new CompletableFuture<>(), true, false);
+        AtomicBoolean owner = new AtomicBoolean();
+        AtomicReference<Aquifer.FluidStatus> cachedStatus = new AtomicReference<>();
+        CompletableFuture<Aquifer.FluidStatus> future = IN_FLIGHT.computeIfAbsent(key, candidate -> {
+            Aquifer.FluidStatus cached = ENTRIES.get(candidate);
+            if (cached != null) {
+                cachedStatus.set(cached);
+                return null;
+            }
+            owner.set(true);
+            return new CompletableFuture<>();
+        });
+        if (future == null) return new Reservation(key, scope,
+                CompletableFuture.completedFuture(cachedStatus.get()), false, false);
+        return new Reservation(key, scope, future, owner.get(), true);
+    }
+
+    /** One-shot ownership or join handle for a single center-status calculation. */
+    public static final class Reservation {
+        private final Key key;
+        private final Scope scope;
+        private final CompletableFuture<Aquifer.FluidStatus> future;
+        private final boolean owner;
+        private final boolean tracked;
+        private final AtomicBoolean completed = new AtomicBoolean();
+
+        private Reservation(Key key, Scope scope, CompletableFuture<Aquifer.FluidStatus> future,
+                            boolean owner, boolean tracked) {
+            this.key = key;
+            this.scope = scope;
+            this.future = future;
+            this.owner = owner;
+            this.tracked = tracked;
+        }
+
+        public boolean isOwner() { return owner; }
+
+        public Aquifer.FluidStatus join() { return future.join(); }
+
+        public void complete(Aquifer.FluidStatus status) {
+            if (!owner) throw new IllegalStateException("only the aquifer reservation owner may complete it");
+            if (status == null) throw new NullPointerException("aquifer fluid status");
+            if (completed.get()) return;
+            if (tracked && !DISABLED_SCOPES.contains(scope)) ENTRIES.put(key, status);
+            if (!completed.compareAndSet(false, true)) return;
+            future.complete(status);
+            if (tracked) IN_FLIGHT.remove(key, future);
+        }
+
+        public void fail(Throwable failure) {
+            if (!owner) return;
+            if (failure == null) failure = new IllegalStateException("aquifer center prefill failed");
+            if (!completed.compareAndSet(false, true)) return;
+            future.completeExceptionally(failure);
+            if (tracked) IN_FLIGHT.remove(key, future);
+        }
     }
 
     /** Returns the cached preliminary surface level or Integer.MIN_VALUE on a miss. */
@@ -61,6 +137,9 @@ public final class GpuAquiferStatusRegionCache {
     }
 
     public static void clear() {
+        IN_FLIGHT.forEach((key, future) -> future.completeExceptionally(
+                new IllegalStateException("aquifer status cache was cleared")));
+        IN_FLIGHT.clear();
         ENTRIES.clear();
         SURFACES.clear();
         DISABLED_SCOPES.clear();
@@ -74,6 +153,13 @@ public final class GpuAquiferStatusRegionCache {
         boolean changed = DISABLED_SCOPES.add(scope);
         ENTRIES.removeIf(key -> key.graphIdentity == graphIdentity
                 && key.fluidPickerIdentity == fluidPickerIdentity);
+        IN_FLIGHT.forEach((key, future) -> {
+            if (key.graphIdentity == graphIdentity && key.fluidPickerIdentity == fluidPickerIdentity
+                    && IN_FLIGHT.remove(key, future)) {
+                future.completeExceptionally(new IllegalStateException(
+                        "aquifer status sharing disabled after a parity mismatch"));
+            }
+        });
         return changed;
     }
 

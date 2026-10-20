@@ -1180,11 +1180,56 @@ public final class VulkanCiSmoke {
         long position = net.minecraft.core.BlockPos.asLong(-48, 32, 80);
         GpuAquiferStatusRegionCache.clear();
         GpuAquiferStatusRegionCache.put(graph, fluidPicker, position, expected);
+        GpuAquiferStatusRegionCache.Reservation cachedReservation =
+                GpuAquiferStatusRegionCache.reserve(graph, fluidPicker, position);
         if (GpuAquiferStatusRegionCache.get(graph, fluidPicker, position) != expected
+                || cachedReservation.isOwner() || cachedReservation.join() != expected
                 || GpuAquiferStatusRegionCache.get(new Object(), fluidPicker, position) != null
                 || GpuAquiferStatusRegionCache.get(graph, new Object(), position) != null
                 || GpuAquiferStatusRegionCache.get(graph, fluidPicker, position + 1L) != null) {
             throw new IllegalStateException("aquifer region cache did not preserve world, picker, and position identity");
+        }
+        Object inFlightGraph = new Object();
+        long inFlightPosition = net.minecraft.core.BlockPos.asLong(16, -24, 48);
+        GpuAquiferStatusRegionCache.Reservation owner = GpuAquiferStatusRegionCache.reserve(
+                inFlightGraph, fluidPicker, inFlightPosition);
+        GpuAquiferStatusRegionCache.Reservation follower = GpuAquiferStatusRegionCache.reserve(
+                inFlightGraph, fluidPicker, inFlightPosition);
+        if (!owner.isOwner() || follower.isOwner()) {
+            throw new IllegalStateException("aquifer center reservation did not deduplicate in-flight work");
+        }
+        owner.complete(expected);
+        if (follower.join() != expected
+                || GpuAquiferStatusRegionCache.get(inFlightGraph, fluidPicker, inFlightPosition) != expected) {
+            throw new IllegalStateException("aquifer center reservation did not publish its shared result");
+        }
+        long failedPosition = net.minecraft.core.BlockPos.asLong(32, -24, 48);
+        GpuAquiferStatusRegionCache.Reservation failedOwner = GpuAquiferStatusRegionCache.reserve(
+                inFlightGraph, fluidPicker, failedPosition);
+        GpuAquiferStatusRegionCache.Reservation failedFollower = GpuAquiferStatusRegionCache.reserve(
+                inFlightGraph, fluidPicker, failedPosition);
+        failedOwner.fail(new IllegalStateException("smoke failure"));
+        try {
+            failedFollower.join();
+            throw new IllegalStateException("failed aquifer reservation did not release its waiters");
+        } catch (java.util.concurrent.CompletionException expectedFailure) {
+            // The next chunk can claim the center after a failed owner is removed.
+        }
+        if (!GpuAquiferStatusRegionCache.reserve(inFlightGraph, fluidPicker, failedPosition).isOwner()) {
+            throw new IllegalStateException("failed aquifer reservation remained stuck in the in-flight cache");
+        }
+        Object disabledGraph = new Object();
+        long disabledPosition = net.minecraft.core.BlockPos.asLong(48, -24, 48);
+        GpuAquiferStatusRegionCache.Reservation disabledOwner = GpuAquiferStatusRegionCache.reserve(
+                disabledGraph, fluidPicker, disabledPosition);
+        GpuAquiferStatusRegionCache.Reservation disabledFollower = GpuAquiferStatusRegionCache.reserve(
+                disabledGraph, fluidPicker, disabledPosition);
+        GpuAquiferStatusRegionCache.disable(disabledGraph, fluidPicker);
+        try {
+            disabledFollower.join();
+            throw new IllegalStateException("parity disable did not release in-flight aquifer waiters");
+        } catch (java.util.concurrent.CompletionException expectedFailure) {
+            disabledOwner.fail(expectedFailure);
         }
         Object otherGraph = new Object();
         GpuAquiferStatusRegionCache.put(otherGraph, fluidPicker, position, expected);
