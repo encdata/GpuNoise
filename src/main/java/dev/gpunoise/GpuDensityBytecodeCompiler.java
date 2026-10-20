@@ -509,12 +509,32 @@ final class GpuDensityBytecodeCompiler {
                     reject("backward or missing switch case target is not supported");
                 targetIndices.add(targetIndex);
             }
-            if (branchForks + caseTargets.size() > 128)
-                reject("switch expansion exceeds the 128 branch-point limit");
-            branchForks += caseTargets.size();
             List<Value> baseStack = new ArrayList<>(stack);
             Map<Integer, Value> baseLocals = new HashMap<>(locals);
             Map<Integer, Integer> loopSnapshot = new HashMap<>(loopIterations);
+            if (selector.constant() != null) {
+                double selectedKey = selector.constant();
+                if (!Double.isFinite(selectedKey) || selectedKey != Math.rint(selectedKey)
+                        || selectedKey < Integer.MIN_VALUE || selectedKey > Integer.MAX_VALUE)
+                    reject("constant integer switch selector is outside the Java int range");
+                int selectedIndex = -1;
+                for (int i = 0; i < keys.length; i++) {
+                    if (keys[i] == (int) selectedKey) {
+                        selectedIndex = i;
+                        break;
+                    }
+                }
+                int targetIndex = selectedIndex < 0 ? defaultIndex : targetIndices.get(selectedIndex);
+                Value selectedValue = executePath(targetIndex,
+                        new ArrayList<>(baseStack), new HashMap<>(baseLocals));
+                loopIterations = loopSnapshot;
+                if (selectedValue.kind() != Kind.VALUE)
+                    reject("constant switch branch returned a nonnumeric value");
+                return selectedValue;
+            }
+            if (branchForks + caseTargets.size() > 128)
+                reject("switch expansion exceeds the 128 branch-point limit");
+            branchForks += caseTargets.size();
             Value defaultValue = executePath(defaultIndex,
                     new ArrayList<>(baseStack), new HashMap<>(baseLocals));
             if (defaultValue.kind() != Kind.VALUE) reject("switch default returned a nonnumeric value");
@@ -863,7 +883,7 @@ final class GpuDensityBytecodeCompiler {
                     && receiver.referenceValue() instanceof String stringValue
                     && owner.equals("java/lang/String") && arguments.length == 0
                     && name.equals("hashCode") && call.desc.equals("()I")) {
-                pushIntegerConstant(stringValue.hashCode());
+                stack.add(Value.value(-1, (double) stringValue.hashCode()));
                 return;
             }
             if (receiver != null && receiver.kind() == Kind.OBJECT
