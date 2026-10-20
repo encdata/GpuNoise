@@ -174,7 +174,10 @@ public final class GpuAquiferSubstance {
                     current.flip();
                     completed.add(current);
                 }
-                current = allocateBatch(Math.min(expectedRows - size, rowsPerBuffer));
+                // Keep slab capacities stable so drained buffers can be reused
+                // across chunks even when the final slab is only partly full.
+                current = GpuAquiferInputBufferPool.acquire(
+                        Math.multiplyExact(rowsPerBuffer, RECORD_BYTES));
             }
             int flags = (directGlobalFluid ? 1 : 0) | (belowIsLava ? 2 : 0)
                     | (c2meAquifer ? 4 : 0);

@@ -22,7 +22,8 @@ import net.minecraft.world.level.levelgen.NoiseRouter;
 /** Runtime bridge used by the vanilla DensityFunctions.Noise fill hook. */
 public final class GpuTerrainRuntime {
     public static final float GRAPH_PARITY_EPSILON = 5.0E-3f;
-    private static final long STARTUP_PARITY_TIMEOUT_SECONDS = 120L;
+    private static final long STARTUP_PARITY_TIMEOUT_SECONDS = Math.max(1L,
+            Long.getLong("gpunoise.startupParityTimeoutSeconds", 120L));
     private static volatile GpuDevice device;
     private static volatile PersistentVulkanNormalNoiseEngine engine;
     private static volatile VulkanSubmissionRing submissionRing;

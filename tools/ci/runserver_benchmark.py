@@ -47,7 +47,10 @@ SERVER_START_TIMEOUT = int(os.environ.get("GPUNOISE_SERVER_START_TIMEOUT", "900"
 if SERVER_START_TIMEOUT < 300:
     raise ValueError("GPUNOISE_SERVER_START_TIMEOUT must be at least 300 seconds")
 CHUNKY_RUN_TIMEOUT = 3600
-SHUTDOWN_TIMEOUT = 90
+# VulkanSubmissionRing closes four worker pools sequentially, allowing up to
+# 120 seconds before it force-stops unfinished work. Leave a small margin so
+# a successful server stop is not reported as a failed benchmark.
+SHUTDOWN_TIMEOUT = 150
 GPU_NOISE_MOD_LIST = re.compile(r"(?m)^\s*GPU Noise [^\r\n]*\(gpunoise\)\s*$")
 BYEPREGEN_MOD_LIST = re.compile(r"(?m)^\s*ByePregen [^\r\n]*\(byepregen\)\s*$", re.IGNORECASE)
 CHUNKY_RADIUS_BLOCKS = int(os.environ.get("GPUNOISE_CHUNKY_RADIUS_BLOCKS", "250"))
@@ -282,7 +285,10 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
     c2me_aquifer_rewrite = terrain_profile == "c2me-aquifer-rewrite"
     jvm_overrides = [
         "-Dc2me.base.config.override.vanillaWorldGenOptimizations.optimizeAquifer="
-        + str(c2me_aquifer_rewrite).lower()
+        + str(c2me_aquifer_rewrite).lower(),
+        # Five Mesa jobs run concurrently; graph compilation and parity on a
+        # software Vulkan device can exceed the runtime's 120 second default.
+        "-Dgpunoise.startupParityTimeoutSeconds=600",
     ]
     if not force_cpu:
         if TRACE_AQUIFER_BLOCK_COORDS:

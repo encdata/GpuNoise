@@ -31,6 +31,10 @@ public final class GpuTerrainProfiler {
     private static final LongAdder aquiferStatusPrefillSamples = new LongAdder();
     private static final LongAdder aquiferStatusPrefillCenters = new LongAdder();
     private static final LongAdder aquiferStatusPrefillJavaFallbacks = new LongAdder();
+    private static final LongAdder aquiferNearestDispatches = new LongAdder();
+    private static final LongAdder aquiferNearestRows = new LongAdder();
+    private static final LongAdder aquiferSubstanceDispatches = new LongAdder();
+    private static final LongAdder aquiferSubstanceRows = new LongAdder();
     private static final LongAdder aquiferRegionStatusCacheHits = new LongAdder();
     private static final LongAdder aquiferRegionStatusCacheMisses = new LongAdder();
     private static final LongAdder aquiferRegionSurfaceCacheHits = new LongAdder();
@@ -173,6 +177,19 @@ public final class GpuTerrainProfiler {
         }
     }
 
+    /** Tracks aquifer kernel batch shape for tuning without CPS measurements. */
+    public static void recordAquiferNearestBatch(int rows) {
+        if (!ENABLED || rows <= 0) return;
+        aquiferNearestDispatches.increment();
+        aquiferNearestRows.add(rows);
+    }
+
+    public static void recordAquiferSubstanceBatch(int rows) {
+        if (!ENABLED || rows <= 0) return;
+        aquiferSubstanceDispatches.increment();
+        aquiferSubstanceRows.add(rows);
+    }
+
     public static void recordBlockWrite() {
         if (ENABLED) blockWrites.increment();
     }
@@ -212,6 +229,11 @@ public final class GpuTerrainProfiler {
                 aquiferStatusPrefillCalls.sum(), aquiferStatusPrefillCenters.sum(),
                 aquiferStatusPrefillJavaFallbacks.sum(), aquiferStatusPrefillSamples.sum(),
                 averageNanos(aquiferStatusPrefillNanos, aquiferStatusPrefillSamples));
+        GpuNoise.LOGGER.info("GPU terrain aquifer batches: nearestDispatches={}, nearestRows={}, avgNearestRows={}, substanceDispatches={}, substanceRows={}, avgSubstanceRows={}",
+                aquiferNearestDispatches.sum(), aquiferNearestRows.sum(),
+                averageRows(aquiferNearestRows, aquiferNearestDispatches),
+                aquiferSubstanceDispatches.sum(), aquiferSubstanceRows.sum(),
+                averageRows(aquiferSubstanceRows, aquiferSubstanceDispatches));
         GpuNoise.LOGGER.info("GPU terrain aquifer phase average ns: {}",
                 formatAquiferPhases());
         GpuNoise.LOGGER.info("GPU terrain aquifer region-status cache: hits={}, misses={}",
@@ -266,6 +288,11 @@ public final class GpuTerrainProfiler {
     private static double averageNanos(LongAdder nanos, LongAdder samples) {
         long count = samples.sum();
         return count == 0L ? 0.0 : round(nanos.sum() / (double) count);
+    }
+
+    private static double averageRows(LongAdder rows, LongAdder dispatches) {
+        long count = dispatches.sum();
+        return count == 0L ? 0.0 : round(rows.sum() / (double) count);
     }
 
     private static double percentileMillis(double percentile, long sampleCount) {
