@@ -78,6 +78,24 @@ public final class VulkanCiSmoke {
             System.out.println("Vulkan CI smoke: coordinate graph shader completed");
             assertConstantResults("coordinate graph shader", graphResults, x.length);
 
+            int[] repeatedRoots = new int[GpuTerrainRoots.COUNT];
+            GpuDensityGraph multiRootGraph = new GpuDensityGraph(
+                    List.of(new GpuDensityGraph.Node("Constant", new int[0], new double[]{EXPECTED}, null, 0)),
+                    repeatedRoots, List.of(), List.of(), List.of(), List.of(), 1);
+            int[] selectedRootIndexes = {GpuTerrainRoots.RIDGES, GpuTerrainRoots.FINAL_DENSITY,
+                    GpuTerrainRoots.EROSION};
+            float[] selectedRootResults = ring.submitGraphRoots(multiRootGraph, x, y, z, selectedRootIndexes)
+                    .get(60, TimeUnit.SECONDS);
+            if (selectedRootResults.length != x.length * selectedRootIndexes.length)
+                throw new IllegalStateException("Selected graph roots returned an invalid compact result length");
+            for (int sample = 0; sample < x.length; sample++) {
+                for (int root = 0; root < selectedRootIndexes.length; root++) {
+                    if (Math.abs(selectedRootResults[sample * selectedRootIndexes.length + root] - EXPECTED) > 1.0e-6f)
+                        throw new IllegalStateException("Selected graph root mismatch at sample " + sample
+                                + ", selected root " + selectedRootIndexes[root]);
+                }
+            }
+
             GpuDensityGraph conditionalGraph = GpuDensityExpressionSmoke.conditionalGraphForVulkanSmoke();
             float[] conditionalResults = ring.submitGraphRoots(conditionalGraph, x, y, z)
                     .get(60, TimeUnit.SECONDS);
