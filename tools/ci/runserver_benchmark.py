@@ -422,6 +422,15 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
 
         if not force_cpu:
             run_log = log_path.read_text(encoding="utf-8")
+            if not VALUE_NOISE_PARITY.search(run_log):
+                raise RuntimeError("Vulkan deterministic value-noise parity probe did not pass")
+            for parity_marker in (
+                    "ImprovedNoise parity: 65536 samples;",
+                    "Minecraft parameter parity: 65536 samples;"):
+                parity_line = next((line for line in run_log.splitlines()
+                                    if parity_marker in line), "")
+                if "matches=true" not in parity_line:
+                    raise RuntimeError(f"Vulkan startup parity check did not pass: {parity_marker}")
             if VERIFY_AQUIFER_GPU and "GPU preliminary aquifer surface decision mismatch" in run_log:
                 raise RuntimeError(
                     "GPU preliminary aquifer surface decisions diverged from Java; Java fallback was used"
@@ -565,15 +574,6 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
             startup_log = log_path.read_text(encoding="utf-8")
             if "GPU_NOISE_VULKAN_SMOKE_PASSED" not in startup_log:
                 raise RuntimeError("Vulkan server lifecycle smoke did not report success")
-            if not VALUE_NOISE_PARITY.search(startup_log):
-                raise RuntimeError("Vulkan deterministic value-noise parity probe did not pass")
-            for parity_marker in (
-                    "ImprovedNoise parity: 65536 samples;",
-                    "Minecraft parameter parity: 65536 samples;"):
-                parity_line = next((line for line in startup_log.splitlines()
-                                    if parity_marker in line), "")
-                if "matches=true" not in parity_line:
-                    raise RuntimeError(f"Vulkan startup parity check did not pass: {parity_marker}")
 
         try:
             stop_server_with_rcon()
