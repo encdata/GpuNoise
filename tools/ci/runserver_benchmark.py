@@ -260,6 +260,10 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
         # booted. A standalone JavaExec has no LoadingModList or mod lifecycle.
         command.append("-Dgpunoise.vulkanSmoke=true")
     if not force_cpu:
+        # Collect sampled phase timings to locate CPU/GPU synchronization and
+        # aquifer staging costs during correctness runs. These diagnostics do
+        # not calculate or assert a chunks-per-second result.
+        command.append("-Dgpunoise.profileTerrain=true")
         # Benchmark the production cell-grid mode by default. Full-block
         # materialization is an explicit diagnostic because it adds output
         # transfer work that the normal runtime configuration does not use.
