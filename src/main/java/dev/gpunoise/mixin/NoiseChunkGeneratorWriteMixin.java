@@ -179,7 +179,7 @@ abstract class NoiseChunkGeneratorWriteMixin {
                 throw new CancellationException("chunk generation cancelled before terrain writes");
             }
             return gpunoise$writeGpuFilled(blender, randomState, structures, chunk,
-                    minCellY, cellCountY, cache, noiseChunk,
+                    minCellY, cellCountY, cache, noiseChunk, cancellationRequested,
                     gpunoise$getPublishedDecisionTable(noiseChunk));
         }, net.minecraft.Util.backgroundExecutor()).thenCompose(stage -> stage).whenComplete((result, failure) -> {
             if (failure != null) GpuTerrainRuntime.releaseGpuCache(cache);
@@ -190,6 +190,7 @@ abstract class NoiseChunkGeneratorWriteMixin {
                                                 StructureManager structures, ChunkAccess chunk,
                                                 int minCellY, int cellCountY,
                                                 GpuChunkDensityCache cache, NoiseChunk noiseChunk,
+                                                AtomicBoolean cancellationRequested,
                                                 GpuAquiferDecisionTable decisions) {
         int minY = generatorSettings().value().noiseSettings().minY();
         int cellHeight = generatorSettings().value().noiseSettings().getCellHeight();

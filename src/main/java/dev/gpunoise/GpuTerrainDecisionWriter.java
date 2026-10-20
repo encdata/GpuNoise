@@ -6,10 +6,15 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.LevelChunkSection;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.levelgen.NoiseChunk;
 import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.BitSet;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -55,13 +60,19 @@ public final class GpuTerrainDecisionWriter {
         ChunkFill first = fills.get(0);
         int regionX = Math.floorDiv(first.chunk().getPos().x, 4);
         int regionZ = Math.floorDiv(first.chunk().getPos().z, 4);
+        Object worldIdentity = first.chunk().getWorldForge();
         Set<ChunkAccess> uniqueChunks = new HashSet<>(fills.size());
         ArrayList<LevelChunkSection> acquired = new ArrayList<>(fills.size() * 8);
-        ArrayList<ChunkAccess> written = new ArrayList<>(fills.size());
+        ArrayList<ChunkAccess> written = new ArrayList<>(java.util.Collections.nCopies(fills.size(), null));
+        ArrayList<ChunkAccess> heightmapsToPrime = new ArrayList<>(fills.size());
+        boolean[] writeProtected = new boolean[fills.size()];
+        PreparedChunk[] prepared = new PreparedChunk[fills.size()];
         try {
-            for (ChunkFill fill : fills) {
+            for (int fillIndex = 0; fillIndex < fills.size(); fillIndex++) {
+                ChunkFill fill = fills.get(fillIndex);
                 if (Math.floorDiv(fill.chunk().getPos().x, 4) != regionX
                         || Math.floorDiv(fill.chunk().getPos().z, 4) != regionZ
+                        || fill.chunk().getWorldForge() != worldIdentity
                         || fill.minCellY() != first.minCellY()
                         || fill.cellCountY() != first.cellCountY()
                         || fill.cellWidth() != first.cellWidth()
@@ -70,6 +81,32 @@ public final class GpuTerrainDecisionWriter {
                         || !uniqueChunks.add(fill.chunk())) {
                     throw new IllegalArgumentException("incompatible or duplicate chunk in terrain write region");
                 }
+                // Match OCL's write-protection rule: a chunk whose noise stage
+                // already completed must never be rewritten by a duplicate or
+                // late region batch.
+                if (fill.chunk().getHighestGeneratedStatus().isOrAfter(ChunkStatus.NOISE)) {
+                    writeProtected[fillIndex] = true;
+                    written.set(fillIndex, fill.chunk());
+                    continue;
+                }
+            }
+            // Resolve interpolation and Java material fallbacks before section
+            // ownership, just as OCL consumes its completed device block map.
+            // This keeps all expensive terrain evaluation out of the writer's
+            // critical section and makes the later block pass region ordered.
+            for (int fillIndex = 0; fillIndex < fills.size(); fillIndex++) {
+                if (writeProtected[fillIndex]) continue;
+                ChunkFill fill = fills.get(fillIndex);
+                GpuTerrainRuntime.bindFillCache(fill.cache());
+                try {
+                    prepared[fillIndex] = prepareChunk(fill);
+                } finally {
+                    GpuTerrainRuntime.clearFillCache();
+                }
+            }
+            for (int fillIndex = 0; fillIndex < fills.size(); fillIndex++) {
+                if (writeProtected[fillIndex]) continue;
+                ChunkFill fill = fills.get(fillIndex);
                 int minY = fill.minCellY() * fill.cellHeight();
                 int top = fill.chunk().getSectionIndex(
                         fill.cellCountY() * fill.cellHeight() - 1 + minY);
@@ -84,20 +121,39 @@ public final class GpuTerrainDecisionWriter {
                     acquired.add(section);
                 }
             }
-            for (ChunkFill fill : fills) {
-                GpuTerrainRuntime.bindFillCache(fill.cache());
-                try {
-                    written.add(write(fill.chunk(), fill.noiseChunk(), fill.decisions(),
-                            fill.minCellY(), fill.cellCountY(), fill.cellWidth(), fill.cellHeight(),
-                            fill.defaultBlock(), fill.fillState()));
-                } finally {
-                    GpuTerrainRuntime.clearFillCache();
+            PreparedChunk[] byTile = new PreparedChunk[16];
+            for (PreparedChunk output : prepared) {
+                if (output == null) continue;
+                int tileIndex = (Math.floorMod(output.chunk().getPos().z, 4) << 2)
+                        | Math.floorMod(output.chunk().getPos().x, 4);
+                byTile[tileIndex] = output;
+            }
+            writeRegionBlocks(byTile, regionX, regionZ,
+                    first.cellCountY() * first.cellHeight(), first.minCellY() * first.cellHeight());
+            for (int fillIndex = 0; fillIndex < fills.size(); fillIndex++) {
+                if (prepared[fillIndex] != null) {
+                    ChunkAccess chunk = fills.get(fillIndex).chunk();
+                    written.set(fillIndex, chunk);
+                    heightmapsToPrime.add(chunk);
                 }
             }
-            return List.copyOf(written);
         } finally {
             for (int i = acquired.size() - 1; i >= 0; i--) acquired.get(i).release();
         }
+        // OCL updates these once after the batched palette writes. Besides
+        // avoiding two heightmap probes for every solid block, doing this
+        // after releasing section ownership matches Minecraft's normal stage
+        // boundary and keeps heightmap reads out of the locked write loop.
+        if (!heightmapsToPrime.isEmpty()) {
+            for (int i = 0; i < heightmapsToPrime.size(); i++) {
+                Heightmap.primeHeightmaps(heightmapsToPrime.get(i),
+                        EnumSet.of(Heightmap.Types.OCEAN_FLOOR_WG, Heightmap.Types.WORLD_SURFACE_WG));
+            }
+        }
+        if (written.contains(null)) {
+            throw new IllegalStateException("terrain region writer did not produce every chunk result");
+        }
+        return List.copyOf(written);
     }
 
     /**
@@ -111,21 +167,42 @@ public final class GpuTerrainDecisionWriter {
                                     int minCellY, int cellCountY,
                                     int cellWidth, int cellHeight,
                                     BlockState defaultBlock, GpuFillState fillState) {
+        PreparedChunk prepared = prepareChunk(chunk, noiseChunk, decisions, minCellY,
+                cellCountY, cellWidth, cellHeight, defaultBlock, fillState);
+        writePreparedChunk(prepared);
+        Heightmap.primeHeightmaps(chunk,
+                EnumSet.of(Heightmap.Types.OCEAN_FLOOR_WG, Heightmap.Types.WORLD_SURFACE_WG));
+        return chunk;
+    }
+
+    private static PreparedChunk prepareChunk(ChunkFill fill) {
+        return prepareChunk(fill.chunk(), fill.noiseChunk(), fill.decisions(), fill.minCellY(),
+                fill.cellCountY(), fill.cellWidth(), fill.cellHeight(), fill.defaultBlock(), fill.fillState());
+    }
+
+    private static PreparedChunk prepareChunk(ChunkAccess chunk, NoiseChunk noiseChunk,
+                                    GpuAquiferDecisionTable decisions,
+                                    int minCellY, int cellCountY,
+                                    int cellWidth, int cellHeight,
+                                    BlockState defaultBlock, GpuFillState fillState) {
         if (decisions.validCount() == 0) {
             throw new IllegalArgumentException("GPU terrain writer requires at least one admitted decision");
         }
 
-        Heightmap oceanFloor = chunk.getOrCreateHeightmapUnprimed(Heightmap.Types.OCEAN_FLOOR_WG);
-        Heightmap worldSurface = chunk.getOrCreateHeightmapUnprimed(Heightmap.Types.WORLD_SURFACE_WG);
         ChunkPos chunkPos = chunk.getPos();
         int startX = chunkPos.getMinBlockX();
         int startZ = chunkPos.getMinBlockZ();
         int cellsXZ = 16 / cellWidth;
         int minY = minCellY * cellHeight;
         int minDecisionY = decisions.minY();
-        int sectionsCount = chunk.getSectionsCount();
         boolean debugVoid = fillState.debugVoidTerrain;
-        BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
+        int[] blockPaletteIds = new int[cellCountY * cellHeight * 256];
+        BitSet fluidPostProcessing = new BitSet(blockPaletteIds.length);
+        ArrayList<BlockState> palette = new ArrayList<>();
+        Map<BlockState, Integer> paletteIds = new HashMap<>();
+        BlockState air = Blocks.AIR.defaultBlockState();
+        palette.add(air);
+        paletteIds.put(air, 0);
         GpuNoiseChunkAccess noiseAccess = (GpuNoiseChunkAccess) (Object) noiseChunk;
         GpuChunkDensityCache densityCache = noiseAccess.gpunoise$gpuCache();
         net.minecraft.world.level.levelgen.Aquifer aquifer = noiseChunk.aquifer();
@@ -134,20 +211,12 @@ public final class GpuTerrainDecisionWriter {
         for (int cellX = 0; cellX < cellsXZ; cellX++) {
             noiseChunk.advanceCellX(cellX);
             for (int cellZ = 0; cellZ < cellsXZ; cellZ++) {
-                int sectionIndex = sectionsCount - 1;
-                LevelChunkSection section = chunk.getSection(sectionIndex);
                 for (int cellY = cellCountY - 1; cellY >= 0; cellY--) {
                     noiseChunk.selectCellYZ(cellY, cellZ);
                     for (int inCellY = cellHeight - 1; inCellY >= 0; inCellY--) {
                         int y = minY + cellY * cellHeight + inCellY;
                         double yProgress = (double) inCellY / cellHeight;
                         boolean yInterpolationReady = false;
-                        int nextSectionIndex = chunk.getSectionIndex(y);
-                        if (nextSectionIndex != sectionIndex) {
-                            sectionIndex = nextSectionIndex;
-                            section = chunk.getSection(sectionIndex);
-                        }
-
                         for (int inCellX = 0; inCellX < cellWidth; inCellX++) {
                             int x = startX + cellX * cellWidth + inCellX;
                             int localX = x & 15;
@@ -219,28 +288,20 @@ public final class GpuTerrainDecisionWriter {
                                     }
                                 }
                                 if (state == null) state = defaultBlock;
-                                if (state == Blocks.AIR.defaultBlockState() || debugVoid) continue;
-
-                                if (fillState.directWritesSafe) {
-                                    long writeStart = GpuTerrainProfiler.beginPhase();
-                                    ((GpuLevelChunkSectionAccess) (Object) section)
-                                            .gpunoise$writeGpuBlock((inCellY << 8) | (localZ << 4) | localX,
-                                                    state);
-                                    GpuTerrainProfiler.recordBlockWrite(writeStart);
-                                } else {
-                                    section.setBlockState(localX, inCellY, localZ, state, false);
-                                }
-                                updateHeightmap(oceanFloor, localX, y, localZ, state,
-                                        fillState.directWritesSafe);
-                                updateHeightmap(worldSurface, localX, y, localZ, state,
-                                        fillState.directWritesSafe);
-                                boolean scheduleFluidUpdate = gpuStateResolved
-                                        ? decisions.schedulesFluidUpdate(decisionIndex)
-                                        : aquifer.shouldScheduleFluidUpdate();
-                                if (scheduleFluidUpdate
-                                        && !state.getFluidState().isEmpty()) {
-                                    mutable.set(x, y, z);
-                                    chunk.markPosForPostprocessing(mutable);
+                                if (debugVoid) state = air;
+                                int blockIndex = ((y - minY) << 8) | (localZ << 4) | localX;
+                                int paletteId = paletteIds.computeIfAbsent(state, blockState -> {
+                                    palette.add(blockState);
+                                    return palette.size() - 1;
+                                });
+                                blockPaletteIds[blockIndex] = paletteId;
+                                if (paletteId != 0) {
+                                    boolean scheduleFluidUpdate = gpuStateResolved
+                                            ? decisions.schedulesFluidUpdate(decisionIndex)
+                                            : aquifer.shouldScheduleFluidUpdate();
+                                    if (scheduleFluidUpdate && !state.getFluidState().isEmpty()) {
+                                        fluidPostProcessing.set(blockIndex);
+                                    }
                                 }
                             }
                         }
@@ -250,15 +311,60 @@ public final class GpuTerrainDecisionWriter {
             noiseChunk.swapSlices();
         }
         noiseChunk.stopInterpolation();
-        return chunk;
+        return new PreparedChunk(chunk, minY, cellCountY * cellHeight, fillState,
+                blockPaletteIds, palette, fluidPostProcessing);
     }
 
-    private static void updateHeightmap(Heightmap heightmap, int x, int y, int z,
-                                        BlockState state, boolean directWritesSafe) {
-        if (directWritesSafe && heightmap instanceof GpuHeightmapAccess fast
-                && fast.gpunoise$tryDescendingWrite(x, y, z, state)) {
-            return;
+    /**
+     * OCL-style region-major Y/Z/X write pass over compact per-chunk block
+     * palettes. Missing neighbors in a partial batch are simply skipped.
+     */
+    private static void writeRegionBlocks(PreparedChunk[] byTile, int regionX, int regionZ,
+                                          int verticalSize, int minY) {
+        BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
+        long writeStart = GpuTerrainProfiler.beginPhase();
+        for (int yOffset = 0; yOffset < verticalSize; yOffset++) {
+            int y = minY + yOffset;
+            for (int z = 0; z < 64; z++) {
+                for (int x = 0; x < 64; x++) {
+                    PreparedChunk output = byTile[((z >> 4) << 2) | (x >> 4)];
+                    if (output == null) continue;
+                    int blockIndex = (yOffset << 8) | ((z & 15) << 4) | (x & 15);
+                    int paletteId = output.blockPaletteIds()[blockIndex];
+                    if (paletteId == 0) continue;
+                    BlockState state = output.palette().get(paletteId);
+                    int worldX = (regionX << 6) + x;
+                    int worldZ = (regionZ << 6) + z;
+                    int localX = x & 15;
+                    int localZ = z & 15;
+                    LevelChunkSection section = output.chunk().getSection(
+                            output.chunk().getSectionIndex(y));
+                    if (output.fillState().directWritesSafe) {
+                        ((GpuLevelChunkSectionAccess) (Object) section)
+                                .gpunoise$writeGpuBlock(((y & 15) << 8) | (localZ << 4) | localX, state);
+                    } else {
+                        section.setBlockState(localX, y & 15, localZ, state, false);
+                    }
+                    if (output.fluidPostProcessing().get(blockIndex)) {
+                        mutable.set(worldX, y, worldZ);
+                        output.chunk().markPosForPostprocessing(mutable);
+                    }
+                }
+            }
         }
-        heightmap.update(x, y, z, state);
+        GpuTerrainProfiler.recordBlockWrite(writeStart);
     }
+
+    private static void writePreparedChunk(PreparedChunk output) {
+        PreparedChunk[] single = new PreparedChunk[16];
+        int tileIndex = (Math.floorMod(output.chunk().getPos().z, 4) << 2)
+                | Math.floorMod(output.chunk().getPos().x, 4);
+        single[tileIndex] = output;
+        writeRegionBlocks(single, Math.floorDiv(output.chunk().getPos().x, 4),
+                Math.floorDiv(output.chunk().getPos().z, 4), output.verticalSize(), output.minY());
+    }
+
+    private record PreparedChunk(ChunkAccess chunk, int minY, int verticalSize,
+                                 GpuFillState fillState, int[] blockPaletteIds,
+                                 ArrayList<BlockState> palette, BitSet fluidPostProcessing) {}
 }
