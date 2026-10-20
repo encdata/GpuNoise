@@ -25,9 +25,9 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
      */
     private static final int BATCH_SIZE_CHUNKS = configuredRegionSize();
     private static final int MAX_CHUNKS = BATCH_SIZE_CHUNKS * BATCH_SIZE_CHUNKS;
-    /** Search only adjacent regions when explicitly configured; default is one aligned area. */
+    /** Adjacent aligned areas share a dispatch window to fill sparse C2ME arrivals. */
     private static final int SEARCH_RADIUS_REGIONS = (int) Math.max(0L,
-            Math.min(4L, Long.getLong("gpunoise.terrainBatchRegionRadius", 0L)));
+            Math.min(4L, Long.getLong("gpunoise.terrainBatchRegionRadius", 1L)));
     /** Amortize submission overhead within one area; output capacity may lower this. */
     private static final int TARGET_CHUNKS = (int) Math.max(1L,
             Math.min(MAX_CHUNKS, Long.getLong("gpunoise.terrainBatchTargetChunks", MAX_CHUNKS)));

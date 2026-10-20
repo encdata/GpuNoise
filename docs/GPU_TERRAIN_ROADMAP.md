@@ -399,14 +399,22 @@ comparisons. The change removes an intermediate host readback and upload from
 both aquifer paths; it does not change Minecraft's CPU chunk writer.
 
 The terrain roots batcher now reuses a bounded pool of direct metadata buffers
-until each asynchronous Vulkan submission completes. The scheduler uses the
-same 4x4 aligned chunk regions as C2ME-OCL, with a 2x2 mode and bounded
-adjacent-region search available for smaller or sparse workloads. The selected
-region is further capped by the actual grid-buffer capacity. This is a runtime
-scheduling configuration, not a CI performance measurement. Dedicated-server
-profiles can report CPU preparation/upload/command-recording time,
-submit-to-fence time, readback time, batch fill, and per-chunk latency.
+until each asynchronous Vulkan submission completes. It groups compatible
+grids from adjacent 4x4 areas by default to fill sparse C2ME arrivals, while
+keeping each dispatch bounded by the region target and actual input/output
+capacity. Set `gpunoise.terrainBatchRegionRadius=0` to restrict batching to one
+aligned area, or use the 2x2 region mode for lower per-dispatch memory use. This
+is a runtime scheduling configuration, not a CI performance measurement.
+Dedicated-server profiles can report CPU preparation/upload/command-recording
+time, submit-to-fence time, readback time, batch fill, and per-chunk latency.
 Lavapipe remains a CPU Vulkan backend and cannot establish discrete-GPU speed.
+
+Java-precomputed aquifer status rows use a compact 16-byte staging format. The
+Vulkan ring coalesces only rows with matching layouts; computed C2ME rows keep
+the complete 264-byte input. For compact rows, the dispatcher places exact
+status outputs into the coherent mapped result range and omits the fluid-status
+compute pass, preserving the nearest/status/decision submission chain and the
+CPU chunk writer.
 
 The optional fused chunk scheduler now coalesces requests for at most one
 millisecond, retains incompatible FIFO requests without racing queue producers,
