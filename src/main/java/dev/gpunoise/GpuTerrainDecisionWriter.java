@@ -116,7 +116,7 @@ public final class GpuTerrainDecisionWriter {
                                     }
                                 }
                                 if (state == null) state = defaultBlock;
-                                if (state == Blocks.AIR || debugVoid) continue;
+                                if (state == Blocks.AIR.defaultBlockState() || debugVoid) continue;
 
                                 if (fillState.directWritesSafe) {
                                     long writeStart = GpuTerrainProfiler.beginPhase();

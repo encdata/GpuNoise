@@ -346,17 +346,22 @@ for both kernels and asserts that shared centers are compacted. This reduces
 transfer volume and avoidable synchronization without treating software Vulkan
 timing as evidence of hardware speed.
 
+Aquifer substance outputs use a chunk-local byte state palette, with action
+and fluid-tick bits in the same 16-bit decision. Vulkan packs two decisions
+into each 32-bit transfer word; Java expands the decisions and resolves palette
+slots before the CPU writer applies them. If one batch contains more than 256
+output states, only rows whose state cannot be mapped request exact Java
+evaluation. This ports OCL's compact device/host state boundary while
+preserving the Minecraft-owned chunk writer and an explicit overflow path.
+
 The terrain roots batcher now reuses a bounded pool of direct metadata buffers
-until each asynchronous Vulkan submission completes. This removes per-dispatch
-native metadata allocation without letting an in-flight submission observe
-overwritten records. To amortize host-to-device submission overhead, the
-current experiment targets 96 compatible chunks (within a 100-chunk ceiling)
-and collects for at most 50 ms; the target is reduced to the selected grid's
-actual buffer capacity so impossible batch sizes do not consume the full
-window. It no longer dispatches early after a single 25-chunk prefetch tile.
-This is a runtime scheduling configuration, not a CI performance measurement.
-Dedicated-server profiles can report CPU preparation/upload/command-recording
-time, submit-to-fence time, readback time, batch fill, and per-chunk latency.
+until each asynchronous Vulkan submission completes. The scheduler uses the
+same 4x4 aligned chunk regions as C2ME-OCL, with a 2x2 mode and bounded
+adjacent-region search available for smaller or sparse workloads. The selected
+region is further capped by the actual grid-buffer capacity. This is a runtime
+scheduling configuration, not a CI performance measurement. Dedicated-server
+profiles can report CPU preparation/upload/command-recording time,
+submit-to-fence time, readback time, batch fill, and per-chunk latency.
 Lavapipe remains a CPU Vulkan backend and cannot establish discrete-GPU speed.
 
 The optional fused chunk scheduler now coalesces requests for at most one

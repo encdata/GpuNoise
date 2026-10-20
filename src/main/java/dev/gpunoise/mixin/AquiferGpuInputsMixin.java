@@ -625,7 +625,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 boolean scheduleFluidUpdate = GpuAquiferSubstance.outputSchedulesFluidUpdate(packedOutput);
                 int sourceIndex = pending.index(query);
                 BlockState state = action == GpuAquiferSubstance.RETURN_STATE
-                        ? Block.stateById(GpuAquiferSubstance.outputStateId(packedOutput)) : null;
+                        ? Block.stateById(substanceWriter.stateIdForOutputSlot(
+                                GpuAquiferSubstance.outputStateId(packedOutput))) : null;
                 if (action == GpuAquiferSubstance.RETURN_STATE && state == null) continue;
                 if (gpunoise$verifyAquifer) {
                     DensityFunction.FunctionContext context = pending.context(query);

@@ -3,13 +3,14 @@ package dev.gpunoise;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /** Packed contract and double-precision reference for vanilla aquifer results. */
 public final class GpuAquiferSubstance {
-    /** 18 words: aquifer inputs, flags, and the selected runtime block-state ID. */
+    /** 18 words: aquifer inputs, flags, and an 8-bit chunk-local state palette slot. */
     public static final int RECORD_BYTES = 72;
-    /** One packed uint per block: action, fluid-tick bit, and 29-bit state ID. */
+    /** One logical result word per input row; Vulkan stores two decisions per uint. */
     public static final int OUTPUT_INTS = 1;
     /**
      * Substance evaluation is a compact one-dispatch pass over the full block
@@ -27,6 +28,8 @@ public final class GpuAquiferSubstance {
     private static final int OUTPUT_SCHEDULE_FLUID_UPDATE = 1 << 2;
     private static final int OUTPUT_STATE_SHIFT = 3;
     private static final int MAX_STATE_ID = 0x1fff_ffff;
+    private static final int MAX_OUTPUT_STATES = 256;
+    static final int FLAG_STATE_MAPPING_OVERFLOW = 8;
     // Matches the router parity gate while float64 classification is not yet
     // selected as a device capability variant.
     static final float PRECISION_EPSILON = 5.0e-3f;
@@ -61,17 +64,33 @@ public final class GpuAquiferSubstance {
         return action <= CPU_FALLBACK;
     }
 
+    static int packGpuOutput(int action, int stateSlot, boolean scheduleFluidUpdate) {
+        if (action < RETURN_DEFAULT || action > CPU_FALLBACK)
+            throw new IllegalArgumentException("invalid aquifer action " + action);
+        if (stateSlot < 0 || stateSlot >= MAX_OUTPUT_STATES)
+            throw new IllegalArgumentException("aquifer palette slot does not fit one byte");
+        return (stateSlot << OUTPUT_STATE_SHIFT) | action
+                | (scheduleFluidUpdate ? OUTPUT_SCHEDULE_FLUID_UPDATE : 0);
+    }
+
+    static int shaderOutputWordCount(int rows) { return (rows + 1) >>> 1; }
+
     /** Returns true when GPU rounding can change the density sign decision. */
     public static boolean nearDensityDecisionThreshold(double density) {
         return Double.isFinite(density) && Math.abs(density) <= PRECISION_EPSILON;
     }
 
     public static ByteBuffer pack(Input[] inputs) {
+        return packBatch(inputs).records();
+    }
+
+    public static PackedBatch packBatch(Input[] inputs) {
         if (inputs == null || inputs.length == 0 || inputs.length > MAX_QUERIES)
             throw new IllegalArgumentException("invalid aquifer substance batch");
         ByteBuffer packed = allocateBatch(inputs.length);
-        for (Input input : inputs) putInput(packed, input);
-        return packed.flip();
+        StatePalette palette = new StatePalette();
+        for (Input input : inputs) putInput(packed, input, palette);
+        return new PackedBatch(packed.flip(), palette.snapshot());
     }
 
     /** Packs a range directly from the caller's list without a temporary array copy. */
@@ -80,7 +99,8 @@ public final class GpuAquiferSubstance {
                 || offset < 0 || offset > inputs.size() - count)
             throw new IllegalArgumentException("invalid aquifer substance batch range");
         ByteBuffer packed = allocateBatch(count);
-        for (int index = offset; index < offset + count; index++) putInput(packed, inputs.get(index));
+        StatePalette palette = new StatePalette();
+        for (int index = offset; index < offset + count; index++) putInput(packed, inputs.get(index), palette);
         return packed.flip();
     }
 
@@ -89,15 +109,60 @@ public final class GpuAquiferSubstance {
                 .order(ByteOrder.nativeOrder());
     }
 
-    private static void putInput(ByteBuffer packed, Input input) {
+    private static void putInput(ByteBuffer packed, Input input, StatePalette palette) {
         int flags = (input.directGlobalFluid ? 1 : 0) | (input.belowIsLava ? 2 : 0)
                 | (input.c2meAquifer ? 4 : 0);
+        int slot = palette.slot(input.directGlobalFluid ? input.globalStateId : input.nearestStateId);
+        if (slot < 0) {
+            flags |= FLAG_STATE_MAPPING_OVERFLOW;
+            slot = 0;
+        }
         packed.putFloat((float) input.density).putFloat((float) input.barrier).putInt(input.y)
                 .putInt(input.level0).putInt(input.level1).putInt(input.level2).putInt(input.level3)
                 .putInt(input.distance0).putInt(input.distance1).putInt(input.distance2).putInt(input.distance3)
                 .putInt(input.kind0).putInt(input.kind1).putInt(input.kind2).putInt(input.kind3)
-                .putInt(input.statusEqualityMask).putInt(flags)
-                .putInt(input.directGlobalFluid ? input.globalStateId : input.nearestStateId);
+                .putInt(input.statusEqualityMask).putInt(flags).putInt(slot);
+    }
+
+    public record PackedBatch(ByteBuffer records, int[] stateIds) {
+        public PackedBatch { stateIds = stateIds.clone(); }
+        @Override public int[] stateIds() { return stateIds.clone(); }
+        public int stateIdForSlot(int slot) {
+            return slot < 0 || slot >= stateIds.length ? -1 : stateIds[slot];
+        }
+        public int slotForStateId(int stateId) {
+            for (int slot = 0; slot < stateIds.length; slot++)
+                if (stateIds[slot] == stateId) return slot;
+            return -1;
+        }
+    }
+
+    private static final class StatePalette {
+        private final int[] keys = new int[MAX_OUTPUT_STATES * 2];
+        private final int[] keySlots = new int[MAX_OUTPUT_STATES * 2];
+        private final int[] stateIds = new int[MAX_OUTPUT_STATES];
+        private int size;
+
+        StatePalette() { Arrays.fill(keys, -1); }
+
+        int slot(int stateId) {
+            if (stateId < 0) return -1;
+            int mask = keys.length - 1;
+            int bucket = (stateId * 0x9e3779b9) >>> 23;
+            while (keys[bucket] != -1) {
+                if (keys[bucket] == stateId) return keySlots[bucket];
+                bucket = (bucket + 1) & mask;
+            }
+            if (size == stateIds.length) return -1;
+            int slot = size++;
+            keys[bucket] = stateId;
+            keySlots[bucket] = slot;
+            stateIds[slot] = stateId;
+            return slot;
+        }
+
+        int stateId(int slot) { return slot < 0 || slot >= size ? -1 : stateIds[slot]; }
+        int[] snapshot() { return Arrays.copyOf(stateIds, size); }
     }
 
     /** Incremental direct-buffer staging for chunk-sized aquifer decisions. */
@@ -105,6 +170,7 @@ public final class GpuAquiferSubstance {
         private final int expectedRows;
         private final int rowsPerBuffer;
         private final List<ByteBuffer> completed = new ArrayList<>();
+        private final StatePalette palette = new StatePalette();
         private ByteBuffer current;
         private int size;
         private boolean finished;
@@ -122,6 +188,8 @@ public final class GpuAquiferSubstance {
         }
 
         public int size() { return size; }
+        public int outputPaletteSize() { return palette.size; }
+        public int stateIdForOutputSlot(int slot) { return palette.stateId(slot); }
 
         public void add(Input input) {
             if (input == null) throw new NullPointerException("input");
@@ -195,11 +263,16 @@ public final class GpuAquiferSubstance {
             }
             int flags = (directGlobalFluid ? 1 : 0) | (belowIsLava ? 2 : 0)
                     | (c2meAquifer ? 4 : 0);
+            int slot = palette.slot(selectedStateId);
+            if (slot < 0) {
+                flags |= FLAG_STATE_MAPPING_OVERFLOW;
+                slot = 0;
+            }
             current.putFloat((float) density).putFloat((float) barrier).putInt(y)
                     .putInt(level0).putInt(level1).putInt(level2).putInt(level3)
                     .putInt(distance0).putInt(distance1).putInt(distance2).putInt(distance3)
                     .putInt(kind0).putInt(kind1).putInt(kind2).putInt(kind3)
-                    .putInt(statusEqualityMask).putInt(flags).putInt(selectedStateId);
+                    .putInt(statusEqualityMask).putInt(flags).putInt(slot);
             size++;
         }
     }

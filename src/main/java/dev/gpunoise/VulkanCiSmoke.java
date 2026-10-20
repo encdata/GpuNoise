@@ -975,8 +975,10 @@ public final class VulkanCiSmoke {
                 throw new IllegalStateException("aquifer input slab pool failed to reuse a compatible buffer");
             }
             for (ByteBuffer batch : reusedBatches) GpuAquiferInputBufferPool.release(batch);
+            GpuAquiferSubstance.PackedBatch packedSubstanceCases =
+                    GpuAquiferSubstance.packBatch(substanceCases);
             var substanceFuture = ring.submitAquiferSubstance(
-                    GpuAquiferSubstance.pack(substanceCases), substanceCases.length);
+                    packedSubstanceCases.records(), substanceCases.length);
             GpuAquiferFluidStatus.Input[] fluidStatusCases = aquiferFluidStatusCases();
             GpuAquiferFluidStatus.Input fluidStatusCase = fluidStatusCases[0];
             GpuAquiferFluidStatus.BatchWriter fluidStatusWriter =
@@ -1053,8 +1055,10 @@ public final class VulkanCiSmoke {
             }
             GpuAquiferSubstance.Input[] chunkBatch = new GpuAquiferSubstance.Input[chunkBatchSize];
             java.util.Arrays.fill(chunkBatch, positiveDensityMaterialCase);
+            GpuAquiferSubstance.PackedBatch packedChunkSubstance =
+                    GpuAquiferSubstance.packBatch(chunkBatch);
             var chunkSubstanceFuture = ring.submitAquiferSubstance(
-                    GpuAquiferSubstance.pack(chunkBatch), chunkBatch.length);
+                    packedChunkSubstance.records(), chunkBatch.length);
             int[] nearest = nearestFuture.get(60, TimeUnit.SECONDS);
             int[] chunkNearestResults = chunkNearestFuture.get(60, TimeUnit.SECONDS);
             int[] substanceResults = substanceFuture.get(60, TimeUnit.SECONDS);
@@ -1091,16 +1095,18 @@ public final class VulkanCiSmoke {
             }
             for (int i = 0; i < chunkBatchSize; i++) {
                 int base = i * GpuAquiferSubstance.OUTPUT_INTS;
-                if (chunkSubstanceResults[base] != GpuAquiferSubstance.packOutput(
-                        GpuAquiferSubstance.RETURN_DEFAULT, false)) {
+                if (chunkSubstanceResults[base] != GpuAquiferSubstance.packGpuOutput(
+                        GpuAquiferSubstance.RETURN_DEFAULT, 0, false)) {
                     throw new IllegalStateException("Chunk-sized aquifer decision mismatch at row " + i);
                 }
             }
             System.out.println("Vulkan CI smoke: full-chunk aquifer batch completed (147,456 blocks, one dispatch)");
             for (int i = 0; i < substanceCases.length; i++) {
                 int[] expected = GpuAquiferSubstance.evaluate(substanceCases[i]);
-                int expectedPacked = GpuAquiferSubstance.packOutput(
-                        expected[0], expected[1], expected[2] != 0);
+                int expectedSlot = expected[0] == GpuAquiferSubstance.RETURN_STATE
+                        ? packedSubstanceCases.slotForStateId(expected[1]) : 0;
+                int expectedPacked = GpuAquiferSubstance.packGpuOutput(
+                        expected[0], Math.max(0, expectedSlot), expected[2] != 0);
                 int actualPacked = substanceResults[i * GpuAquiferSubstance.OUTPUT_INTS];
                 if (!GpuAquiferSubstance.isValidPackedOutput(actualPacked)
                         || actualPacked != expectedPacked) {
@@ -1117,10 +1123,37 @@ public final class VulkanCiSmoke {
             }
             if (weightedThirdPressureIndex < 0
                     || substanceResults[weightedThirdPressureIndex * GpuAquiferSubstance.OUTPUT_INTS]
-                    != GpuAquiferSubstance.packOutput(
-                            GpuAquiferSubstance.RETURN_STATE, 417, true)) {
+                    != GpuAquiferSubstance.packGpuOutput(GpuAquiferSubstance.RETURN_STATE,
+                            packedSubstanceCases.slotForStateId(417), true)) {
                 throw new IllegalStateException("Packed aquifer output lost the weighted second/third pressure decision");
             }
+            GpuAquiferSubstance.Input[] paletteOverflowCases =
+                    new GpuAquiferSubstance.Input[257];
+            for (int row = 0; row < paletteOverflowCases.length; row++) {
+                paletteOverflowCases[row] = new GpuAquiferSubstance.Input(-0.25, 0.0, 32,
+                        0, 0, 0, 0, 0, 0, 0, 0,
+                        GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                        GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
+                        0, row + 1, true, false, false, 0);
+            }
+            GpuAquiferSubstance.PackedBatch overflowPaletteBatch =
+                    GpuAquiferSubstance.packBatch(paletteOverflowCases);
+            int[] overflowPaletteResults = ring.submitAquiferSubstance(
+                    overflowPaletteBatch.records(), paletteOverflowCases.length)
+                    .get(60, TimeUnit.SECONDS);
+            for (int row = 0; row < 256; row++) {
+                int actual = overflowPaletteResults[row];
+                if (GpuAquiferSubstance.outputAction(actual) != GpuAquiferSubstance.RETURN_STATE
+                        || overflowPaletteBatch.stateIdForSlot(
+                                GpuAquiferSubstance.outputStateId(actual)) != row + 1) {
+                    throw new IllegalStateException("Aquifer byte palette changed state mapping at row " + row);
+                }
+            }
+            if (GpuAquiferSubstance.outputAction(overflowPaletteResults[256])
+                    != GpuAquiferSubstance.CPU_FALLBACK) {
+                throw new IllegalStateException("Aquifer palette overflow did not mark only the unmapped row for CPU fallback");
+            }
+            System.out.println("Vulkan CI smoke: compact aquifer palette and overflow fallback passed");
             if (GpuAquiferSubstance.evaluate(positiveDensityThresholdCase)[0]
                     != GpuAquiferSubstance.CPU_FALLBACK) {
                 throw new IllegalStateException("Positive density near zero must use exact Java evaluation");

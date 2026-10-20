@@ -95,7 +95,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     }
 
     CompletionStage<GpuTerrainBatchResult> submit(GpuTerrainGrid grid) {
-        CompletableFuture<GpuTerrainBatchResult> future = new CompletableFuture<>()
+        CompletableFuture<GpuTerrainBatchResult> future = new CompletableFuture<GpuTerrainBatchResult>()
                 .orTimeout(REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         if (grid.sampleCount() > MAX_INPUT) {
             future.completeExceptionally(new IllegalArgumentException("invalid GPU terrain roots batch"));

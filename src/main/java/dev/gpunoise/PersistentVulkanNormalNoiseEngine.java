@@ -497,10 +497,19 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 IntBuffer values = persistentMappings.get(aquiferNearestOutput)
                         .duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
                 values.clear();
-                int[] output = new int[Math.multiplyExact(inFlightAquiferRowCount,
-                        inFlightAquiferRowStage.outputInts)];
-                values.limit(output.length);
-                values.get(output);
+                int[] output;
+                if (inFlightAquiferRowStage == AquiferRowStage.SUBSTANCE) {
+                    int words = GpuAquiferSubstance.shaderOutputWordCount(inFlightAquiferRowCount);
+                    int[] packed = new int[words];
+                    values.limit(words);
+                    values.get(packed);
+                    output = unpackAquiferSubstanceRows(packed, inFlightAquiferRowCount);
+                } else {
+                    output = new int[Math.multiplyExact(inFlightAquiferRowCount,
+                            inFlightAquiferRowStage.outputInts)];
+                    values.limit(output.length);
+                    values.get(output);
+                }
                 check(vkResetFences(device, fence), "reset async aquifer decision fence");
                 inFlightAquiferRows = null;
                 inFlightAquiferRowStage = null;
@@ -923,7 +932,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             ByteBuffer push = stack.malloc(4).order(ByteOrder.nativeOrder()).putInt(count).flip();
             vkCmdPushConstants(commandBuffer, aquiferPressurePipelineLayout,
                     VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
-            vkCmdDispatch(commandBuffer, Math.max(1, (count + 63) / 64), 1, 1);
+            vkCmdDispatch(commandBuffer, (count + 63) / 64, 1, 1);
             VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
                     .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
                     .buffer(interpolationOutput.buffer).size((long) count * Float.BYTES);
@@ -995,8 +1004,12 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     ? stack.malloc(12).order(ByteOrder.nativeOrder()).putInt(count).putInt(0).putInt(0).flip()
                     : stack.malloc(4).order(ByteOrder.nativeOrder()).putInt(count).flip();
             vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
-            vkCmdDispatch(commandBuffer, Math.max(1, (count + 63) / 64), 1, 1);
-            long outputBytes = (long) count * stage.outputInts * Integer.BYTES;
+            int invocationsPerWorkgroup = stage == AquiferRowStage.SUBSTANCE ? 128 : 64;
+            vkCmdDispatch(commandBuffer, Math.max(1, (count + invocationsPerWorkgroup - 1)
+                    / invocationsPerWorkgroup), 1, 1);
+            long outputBytes = stage == AquiferRowStage.SUBSTANCE
+                    ? (long) GpuAquiferSubstance.shaderOutputWordCount(count) * Integer.BYTES
+                    : (long) count * stage.outputInts * Integer.BYTES;
             VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
                     .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
                     .buffer(aquiferNearestOutput.buffer)
@@ -1031,7 +1044,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             ByteBuffer push = stack.malloc(4).order(ByteOrder.nativeOrder()).putInt(count).flip();
             vkCmdPushConstants(commandBuffer, aquiferNearestPipelineLayout,
                     VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
-            vkCmdDispatch(commandBuffer, Math.max(1, (count + 63) / 64), 1, 1);
+            vkCmdDispatch(commandBuffer, (count + 63) / 64, 1, 1);
             VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
                     .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
                     .buffer(aquiferNearestOutput.buffer)
@@ -1071,11 +1084,12 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             ByteBuffer push = stack.malloc(4).order(ByteOrder.nativeOrder()).putInt(count).flip();
             vkCmdPushConstants(commandBuffer, aquiferSubstancePipelineLayout,
                     VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
-            vkCmdDispatch(commandBuffer, (count + 63) / 64, 1, 1);
+            vkCmdDispatch(commandBuffer, (count + 127) / 128, 1, 1);
+            int outputWords = GpuAquiferSubstance.shaderOutputWordCount(count);
             VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
                     .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
                     .buffer(aquiferNearestOutput.buffer)
-                    .size((long) count * GpuAquiferSubstance.OUTPUT_INTS * Integer.BYTES);
+                    .size((long) outputWords * Integer.BYTES);
             vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                     VK_PIPELINE_STAGE_HOST_BIT, 0, null, barrier, null);
             check(vkEndCommandBuffer(commandBuffer), "end aquifer substance command buffer");
@@ -1088,11 +1102,21 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             IntBuffer values = persistentMappings.get(aquiferNearestOutput)
                     .duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
             values.clear();
-            values.limit(count * GpuAquiferSubstance.OUTPUT_INTS);
-            int[] output = new int[count * GpuAquiferSubstance.OUTPUT_INTS];
-            values.get(output);
-            return output;
+            values.limit(outputWords);
+            int[] packed = new int[outputWords];
+            values.get(packed);
+            return unpackAquiferSubstanceRows(packed, count);
         }
+    }
+
+    private static int[] unpackAquiferSubstanceRows(int[] words, int rows) {
+        if (words.length != GpuAquiferSubstance.shaderOutputWordCount(rows))
+            throw new IllegalArgumentException("packed aquifer output word count does not match row count");
+        int[] output = new int[rows];
+        for (int row = 0; row < rows; row++) {
+            output[row] = (words[row >>> 1] >>> ((row & 1) * 16)) & 0xffff;
+        }
+        return output;
     }
 
     /** Prefills the discrete per-center aquifer status using GPU terrain roots. */
