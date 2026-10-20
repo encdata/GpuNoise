@@ -361,40 +361,26 @@ final class VulkanSubmissionRing implements AutoCloseable {
             }
             return;
         }
-        synchronousSlots.add(slot);
-        try {
-            dispatchWorkers.execute(() -> {
-                try {
-                    if (prefill != null) {
-                        prefill.future.complete(slot.submitAquiferPrefill(
-                                prefill.nearestRecords, prefill.nearestCount,
-                                prefill.statusRecords, prefill.statusCount));
-                    } else if (nearest != null) {
-                        nearest.future.complete(slot.submitAquiferNearestThree(nearest.records, nearest.count));
-                    } else if (substance != null) {
-                        substance.future.complete(slot.submitAquiferSubstance(substance.records, substance.count));
-                    } else {
-                        fluidStatus.future.complete(slot.submitAquiferFluidStatus(fluidStatus.records, fluidStatus.count));
-                    }
-                } catch (Throwable failure) {
-                    if (prefill != null) prefill.future.completeExceptionally(
-                            new IllegalStateException("GPU ring combined aquifer prefill dispatch failed", failure));
-                    else if (nearest != null) nearest.future.completeExceptionally(
-                            new IllegalStateException("GPU ring aquifer nearest-three dispatch failed", failure));
-                    else if (substance != null) substance.future.completeExceptionally(
-                            new IllegalStateException("GPU ring aquifer substance dispatch failed", failure));
-                    else fluidStatus.future.completeExceptionally(
-                            new IllegalStateException("GPU ring aquifer fluid-status dispatch failed", failure));
-                } finally {
-                    releaseSynchronousSlot(slot);
-                }
-            });
-        } catch (RuntimeException stopped) {
-            synchronousSlots.remove(slot);
-            if (prefill != null) prefill.future.completeExceptionally(stopped);
-            else if (nearest != null) nearest.future.completeExceptionally(stopped);
-            else if (substance != null) substance.future.completeExceptionally(stopped);
-            else fluidStatus.future.completeExceptionally(stopped);
+        if (substance != null) {
+            try {
+                slot.submitAquiferSubstanceAsync(substance.records, substance.count)
+                        .whenComplete((result, failure) ->
+                                completeOnDispatchWorker(substance.future, result, failure));
+            } catch (Throwable failure) {
+                substance.future.completeExceptionally(new IllegalStateException(
+                        "GPU ring aquifer substance submission failed", failure));
+            }
+            return;
+        }
+        if (fluidStatus != null) {
+            try {
+                slot.submitAquiferFluidStatusAsync(fluidStatus.records, fluidStatus.count)
+                        .whenComplete((result, failure) ->
+                                completeOnDispatchWorker(fluidStatus.future, result, failure));
+            } catch (Throwable failure) {
+                fluidStatus.future.completeExceptionally(new IllegalStateException(
+                        "GPU ring aquifer fluid-status submission failed", failure));
+            }
         }
     }
 

@@ -91,8 +91,17 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private CompletableFuture<GpuAquiferPrefillResult> inFlightAquiferPrefill;
     private int inFlightAquiferNearestCount;
     private int inFlightAquiferStatusCount;
-    private CompletableFuture<int[]> inFlightAquiferNearest;
-    private int inFlightAquiferNearestOnlyCount;
+    private CompletableFuture<int[]> inFlightAquiferRows;
+    private AquiferRowStage inFlightAquiferRowStage;
+    private int inFlightAquiferRowCount;
+    private enum AquiferRowStage {
+        NEAREST(GpuAquiferNearestThree.OUTPUT_INTS),
+        SUBSTANCE(GpuAquiferSubstance.OUTPUT_INTS),
+        FLUID_STATUS(GpuAquiferFluidStatus.OUTPUT_INTS);
+
+        private final int outputInts;
+        AquiferRowStage(int outputInts) { this.outputInts = outputInts; }
+    }
     private int inFlightSamples;
     private int inFlightRoots;
     private int inFlightTerrainBlockCount;
@@ -475,8 +484,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         CompletableFuture<float[]> future = inFlightGraphRoots;
         CompletableFuture<GpuTerrainBatchResult> terrainFuture = inFlightTerrain;
         CompletableFuture<GpuAquiferPrefillResult> aquiferFuture = inFlightAquiferPrefill;
-        CompletableFuture<int[]> nearestFuture = inFlightAquiferNearest;
-        if (future == null && terrainFuture == null && aquiferFuture == null && nearestFuture == null) return;
+        CompletableFuture<int[]> aquiferRowsFuture = inFlightAquiferRows;
+        if (future == null && terrainFuture == null && aquiferFuture == null && aquiferRowsFuture == null) return;
         int status = vkGetFenceStatus(device, fence);
         if (status == VK_NOT_READY) return;
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -484,17 +493,19 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             long fenceDuration = GPU_TIMING_ENABLED
                     ? System.nanoTime() - inFlightFenceSubmittedNanos : 0L;
             long readbackStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
-            if (nearestFuture != null) {
+            if (aquiferRowsFuture != null) {
                 IntBuffer values = persistentMappings.get(aquiferNearestOutput)
                         .duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
                 values.clear();
-                int[] output = new int[Math.multiplyExact(inFlightAquiferNearestOnlyCount,
-                        GpuAquiferNearestThree.OUTPUT_INTS)];
+                int[] output = new int[Math.multiplyExact(inFlightAquiferRowCount,
+                        inFlightAquiferRowStage.outputInts)];
                 values.limit(output.length);
                 values.get(output);
-                check(vkResetFences(device, fence), "reset async aquifer nearest-three fence");
-                inFlightAquiferNearest = null;
-                nearestFuture.complete(output);
+                check(vkResetFences(device, fence), "reset async aquifer decision fence");
+                inFlightAquiferRows = null;
+                inFlightAquiferRowStage = null;
+                inFlightAquiferRowCount = 0;
+                aquiferRowsFuture.complete(output);
             } else if (aquiferFuture != null) {
                 IntBuffer values = persistentMappings.get(aquiferNearestOutput)
                         .duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
@@ -544,11 +555,13 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             inFlightGraphRoots = null;
             inFlightTerrain = null;
             inFlightAquiferPrefill = null;
-            inFlightAquiferNearest = null;
+            inFlightAquiferRows = null;
+            inFlightAquiferRowStage = null;
+            inFlightAquiferRowCount = 0;
             if (future != null) future.completeExceptionally(failure);
             if (terrainFuture != null) terrainFuture.completeExceptionally(failure);
             if (aquiferFuture != null) aquiferFuture.completeExceptionally(failure);
-            if (nearestFuture != null) nearestFuture.completeExceptionally(failure);
+            if (aquiferRowsFuture != null) aquiferRowsFuture.completeExceptionally(failure);
         }
     }
 
@@ -605,7 +618,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     synchronized boolean graphRootsInFlight() { return inFlightGraphRoots != null; }
     synchronized boolean hasInFlightWork() {
         return inFlightGraphRoots != null || inFlightTerrain != null
-                || inFlightAquiferPrefill != null || inFlightAquiferNearest != null;
+                || inFlightAquiferPrefill != null || inFlightAquiferRows != null;
     }
 
     private float[] submit(GpuGlobalNoiseBatch.Packed packed, MemoryStack stack) throws Exception {
@@ -923,37 +936,71 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     /** Selects aquifer centers with Minecraft's exact integer tie ordering. */
     synchronized CompletableFuture<int[]> submitAquiferNearestThreeAsync(ByteBuffer records, int count)
             throws Exception {
+        return submitAquiferRowsAsync(records, count, AquiferRowStage.NEAREST);
+    }
+
+    synchronized CompletableFuture<int[]> submitAquiferSubstanceAsync(ByteBuffer records, int count)
+            throws Exception {
+        return submitAquiferRowsAsync(records, count, AquiferRowStage.SUBSTANCE);
+    }
+
+    synchronized CompletableFuture<int[]> submitAquiferFluidStatusAsync(ByteBuffer records, int count)
+            throws Exception {
+        return submitAquiferRowsAsync(records, count, AquiferRowStage.FLUID_STATUS);
+    }
+
+    private synchronized CompletableFuture<int[]> submitAquiferRowsAsync(
+            ByteBuffer records, int count, AquiferRowStage stage) throws Exception {
         if (hasInFlightWork()) throw new IllegalStateException("Vulkan slot is still in flight");
-        if (!GpuAquiferNearestThree.isValidPacked(records, count))
-            throw new IllegalArgumentException("invalid aquifer nearest-three batch");
+        boolean valid = switch (stage) {
+            case NEAREST -> GpuAquiferNearestThree.isValidPacked(records, count);
+            case SUBSTANCE -> count > 0 && count <= GpuAquiferSubstance.MAX_QUERIES
+                    && records.remaining() == count * GpuAquiferSubstance.RECORD_BYTES;
+            case FLUID_STATUS -> count > 0 && count <= GpuAquiferFluidStatus.MAX_QUERIES
+                    && records.remaining() == count * GpuAquiferFluidStatus.RECORD_BYTES;
+        };
+        if (!valid) throw new IllegalArgumentException("invalid aquifer " + stage + " batch");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             put(aquiferNearestInputs, records, stack);
-            check(vkResetCommandBuffer(commandBuffer, 0), "reset async aquifer nearest-three command buffer");
+            check(vkResetCommandBuffer(commandBuffer, 0), "reset async aquifer " + stage + " command buffer");
             check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()),
-                    "begin async aquifer nearest-three command buffer");
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, aquiferNearestPipeline);
+                    "begin async aquifer " + stage + " command buffer");
+            long pipeline = switch (stage) {
+                case NEAREST -> aquiferNearestPipeline;
+                case SUBSTANCE -> aquiferSubstancePipeline;
+                case FLUID_STATUS -> aquiferFluidStatusPipeline;
+            };
+            long pipelineLayout = switch (stage) {
+                case NEAREST -> aquiferNearestPipelineLayout;
+                case SUBSTANCE -> aquiferSubstancePipelineLayout;
+                case FLUID_STATUS -> aquiferFluidStatusPipelineLayout;
+            };
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                    aquiferNearestPipelineLayout, 0, stack.longs(aquiferNearestDescriptorSet), null);
-            ByteBuffer push = stack.malloc(4).order(ByteOrder.nativeOrder()).putInt(count).flip();
-            vkCmdPushConstants(commandBuffer, aquiferNearestPipelineLayout,
-                    VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
+                    pipelineLayout, 0, stack.longs(aquiferNearestDescriptorSet), null);
+            ByteBuffer push = stage == AquiferRowStage.FLUID_STATUS
+                    ? stack.malloc(12).order(ByteOrder.nativeOrder()).putInt(count).putInt(0).putInt(0).flip()
+                    : stack.malloc(4).order(ByteOrder.nativeOrder()).putInt(count).flip();
+            vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
             vkCmdDispatch(commandBuffer, Math.max(1, (count + 63) / 64), 1, 1);
+            long outputBytes = (long) count * stage.outputInts * Integer.BYTES;
             VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
                     .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
                     .buffer(aquiferNearestOutput.buffer)
-                    .size((long) count * GpuAquiferNearestThree.OUTPUT_INTS * Integer.BYTES);
+                    .size(outputBytes);
             vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                     VK_PIPELINE_STAGE_HOST_BIT, 0, null, barrier, null);
-            check(vkEndCommandBuffer(commandBuffer), "end async aquifer nearest-three command buffer");
+            check(vkEndCommandBuffer(commandBuffer), "end async aquifer " + stage + " command buffer");
             synchronized (queueSubmitLock) {
                 check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default()
                         .pCommandBuffers(stack.pointers(commandBuffer.address())), fence),
-                        "submit async aquifer nearest-three");
+                        "submit async aquifer " + stage);
             }
         }
-        inFlightAquiferNearestOnlyCount = count;
-        inFlightAquiferNearest = new CompletableFuture<>();
-        return inFlightAquiferNearest;
+        inFlightAquiferRowCount = count;
+        inFlightAquiferRowStage = stage;
+        inFlightAquiferRows = new CompletableFuture<>();
+        return inFlightAquiferRows;
     }
 
     /** Selects aquifer centers with Minecraft's exact integer tie ordering. */
@@ -1648,9 +1695,10 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         inFlightAquiferPrefill = null;
         if (unfinishedAquifer != null) unfinishedAquifer.completeExceptionally(
                 new IllegalStateException("GPU engine closed before aquifer prefill completion was observed"));
-        CompletableFuture<int[]> unfinishedNearest = inFlightAquiferNearest;
-        inFlightAquiferNearest = null;
-        if (unfinishedNearest != null) unfinishedNearest.completeExceptionally(
-                new IllegalStateException("GPU engine closed before aquifer nearest-three completion was observed"));
+        CompletableFuture<int[]> unfinishedAquiferRows = inFlightAquiferRows;
+        inFlightAquiferRows = null;
+        inFlightAquiferRowStage = null;
+        if (unfinishedAquiferRows != null) unfinishedAquiferRows.completeExceptionally(
+                new IllegalStateException("GPU engine closed before aquifer decision completion was observed"));
         for(NativeBuffer buffer:persistentMappings.keySet())buffer.unmap(device);vkDestroyFence(device,fence,null);if(timestampQueryPool!=0L)vkDestroyQueryPool(device,timestampQueryPool,null);vkDestroyCommandPool(device,commandPool,null);vkDestroyDescriptorPool(device,descriptorPool,null);vkDestroyPipeline(device,pipeline,null);vkDestroyPipelineLayout(device,pipelineLayout,null);vkDestroyDescriptorSetLayout(device,descriptorLayout,null);vkDestroyShaderModule(device,shader,null);vkDestroyPipeline(device,graphPipeline,null);vkDestroyPipeline(device,gridPipeline,null);vkDestroyPipeline(device,blockGraphPipeline,null);vkDestroyShaderModule(device,blockGraphShader,null);vkDestroyPipelineLayout(device,graphPipelineLayout,null);vkDestroyDescriptorSetLayout(device,graphDescriptorLayout,null);vkDestroyDescriptorPool(device,graphDescriptorPool,null);vkDestroyShaderModule(device,graphShader,null);vkDestroyShaderModule(device,gridShader,null);vkDestroyPipeline(device,interpolationPipeline,null);vkDestroyPipelineLayout(device,interpolationPipelineLayout,null);vkDestroyDescriptorSetLayout(device,interpolationDescriptorLayout,null);vkDestroyDescriptorPool(device,interpolationDescriptorPool,null);vkDestroyShaderModule(device,interpolationShader,null);vkDestroyPipeline(device,aquiferPressurePipeline,null);vkDestroyPipelineLayout(device,aquiferPressurePipelineLayout,null);vkDestroyDescriptorSetLayout(device,aquiferPressureDescriptorLayout,null);vkDestroyDescriptorPool(device,aquiferPressureDescriptorPool,null);vkDestroyShaderModule(device,aquiferPressureShader,null);vkDestroyPipeline(device,aquiferNearestPipeline,null);vkDestroyPipelineLayout(device,aquiferNearestPipelineLayout,null);vkDestroyDescriptorSetLayout(device,aquiferNearestDescriptorLayout,null);vkDestroyDescriptorPool(device,aquiferNearestDescriptorPool,null);vkDestroyShaderModule(device,aquiferNearestShader,null);vkDestroyPipeline(device,aquiferSubstancePipeline,null);vkDestroyPipelineLayout(device,aquiferSubstancePipelineLayout,null);vkDestroyShaderModule(device,aquiferSubstanceShader,null);vkDestroyPipeline(device,aquiferFluidStatusPipeline,null);vkDestroyPipelineLayout(device,aquiferFluidStatusPipelineLayout,null);vkDestroyShaderModule(device,aquiferFluidStatusShader,null);coordinates.destroy(device);graphCoordinates.destroy(device);graphNodes.destroy(device);graphSplinePoints.destroy(device);graphBlendedMetadata.destroy(device);graphRoots.destroy(device);graphMthSinTable.destroy(device);interpolatedInputs.destroy(device);interpolatorMap.destroy(device);interpolationMetadata.destroy(device);interpolationOutput.destroy(device);aquiferPressureInputs.destroy(device);aquiferNearestInputs.destroy(device);aquiferNearestOutput.destroy(device);results.destroy(device);permutations.destroy(device);octaves.destroy(device);samplerMetadata.destroy(device);if(ownsDevice){vkDestroyDevice(device,null);vkDestroyInstance(instance,null);}}
 }
