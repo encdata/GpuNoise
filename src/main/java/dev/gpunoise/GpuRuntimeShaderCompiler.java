@@ -24,7 +24,10 @@ final class GpuRuntimeShaderCompiler {
         // per-thread MemoryStack. Large modded graphs can exceed that small
         // stack before shaderc starts. Keep the full source in native heap
         // memory and use the direct-buffer overload instead.
-        ByteBuffer sourceText = MemoryUtil.memUTF8(source, true);
+        // shaderc receives an explicit source byte length, so exclude the
+        // UTF-8 terminator from the source payload. File and entry names below
+        // are C strings and remain null-terminated.
+        ByteBuffer sourceText = MemoryUtil.memUTF8(source, false);
         ByteBuffer inputFile = MemoryUtil.memUTF8(resource, true);
         ByteBuffer entryPoint = MemoryUtil.memUTF8("main", true);
         long compiler = shaderc_compiler_initialize();
