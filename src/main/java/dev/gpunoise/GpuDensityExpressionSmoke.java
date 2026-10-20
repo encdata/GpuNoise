@@ -181,6 +181,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new EnumEqualityConfigurationDensity());
     }
 
+    static VulkanBranchFixture holderBackedEnumConfigurationFixture() {
+        return graphFixture(new HolderBackedEnumConfigurationDensity());
+    }
+
     static VulkanBranchFixture mixedTerrainRootFixture() {
         DensityFunction supported = new FinalFieldConfigurationDensity();
         GpuDensityGraph baseline = GpuDensityGraphLowerer.lower(
@@ -1028,6 +1032,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new RecordConfigurationDensity(), "immutable terrain record configuration");
         verifyStandaloneMath(new EnumSwitchConfigurationDensity(), "enum-switch terrain configuration");
         verifyStandaloneMath(new EnumEqualityConfigurationDensity(), "enum-equality terrain configuration");
+        verifyStandaloneMath(new HolderBackedEnumConfigurationDensity(), "holder-backed enum terrain configuration");
         verifyStandaloneMath(new HolderBackedConfigurationDensity(), "bound registry-holder terrain configuration");
         verifyStandaloneMath(new MinecraftMathOverloadsDensity(), "Mth float and integer overloads");
         verifyStandaloneMath(new DynamicClampDensity(), "dynamic Mth.clamp overloads");
@@ -1873,6 +1878,18 @@ final class GpuDensityExpressionSmoke {
             if (MODE == TerrainMode.RIDGE) return context.blockX() * 0.125;
             if (MODE == TerrainMode.SHELF) return context.blockZ() * 0.25 + 3.0;
             return context.blockY() * 0.5;
+        }
+    }
+
+    private static final class HolderBackedEnumConfigurationDensity extends NumericSmokeDensity {
+        private final Holder<TerrainMode> mode = Holder.direct(TerrainMode.RIDGE);
+
+        @Override public double compute(FunctionContext context) {
+            return switch (mode.value()) {
+                case RIDGE -> context.blockX() * 0.125 + context.blockY() * 0.0625;
+                case BASIN -> context.blockZ() * 0.25 - context.blockY() * 0.03125;
+                case SHELF -> Math.abs(context.blockX() - context.blockZ()) * 0.5;
+            };
         }
     }
 
