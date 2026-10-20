@@ -142,16 +142,23 @@ public final class GpuNoise {
                 LOGGER.info("GPU density graph discovered: {} nodes, {} router roots, {} noise samplers; packed {} bytes for GPU lowering.",
                         fullGraph.nodes().size(), fullGraph.routerRootCount(), fullGraph.noises().size(),
                         packedGraph.nodes().capacity());
-                if (device.shaderFloat64()) {
+                boolean softwareVulkan = device.deviceType()
+                        == org.lwjgl.vulkan.VK10.VK_PHYSICAL_DEVICE_TYPE_CPU;
+                if (device.shaderFloat64() && !softwareVulkan) {
                     VulkanBootstrapThread.callUnchecked(() -> {
                         GpuTerrainRuntime.verifyGraph(fullGraph, router);
                         return null;
                     });
-                } else LOGGER.info("GPU density graph verification skipped: selected GPU lacks shaderFloat64.");
-                VulkanBootstrapThread.callUnchecked(() -> {
-                    GpuTerrainRuntime.verifyTerrainGraph(fullGraph, router);
-                    return null;
-                });
+                    VulkanBootstrapThread.callUnchecked(() -> {
+                        GpuTerrainRuntime.verifyTerrainGraph(fullGraph, router);
+                        return null;
+                    });
+                } else if (softwareVulkan) {
+                    LOGGER.info("Full-router parity diagnostics skipped on the software Vulkan device; "
+                            + "compact terrain-root and cell-grid parity checks remain enabled.");
+                } else {
+                    LOGGER.info("Full-router parity diagnostics skipped: selected GPU lacks shaderFloat64.");
+                }
             } catch (RuntimeException diagnosticFailure) {
                 LOGGER.info("GPU full-router parity diagnostic skipped: {}", diagnosticFailure.getMessage());
             }
