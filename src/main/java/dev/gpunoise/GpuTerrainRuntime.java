@@ -804,6 +804,8 @@ public final class GpuTerrainRuntime {
             int verifiedInterpolatedRoots = (1 << GpuTerrainRoots.COUNT) - 1;
             int blockVerifiedDeviceCount = 0;
             List<GpuDevice> candidateDevices = ring.devices();
+            boolean softwareVulkanInPool = candidateDevices.stream().anyMatch(candidate ->
+                    candidate.deviceType() == org.lwjgl.vulkan.VK10.VK_PHYSICAL_DEVICE_TYPE_CPU);
             for (int deviceIndex = 0; deviceIndex < deviceTerrainResults.size(); deviceIndex++) {
                 GpuTerrainBatchResult deviceResult = deviceTerrainResults.get(deviceIndex);
                 GpuDevice candidate = candidateDevices.get(deviceIndex);
@@ -815,9 +817,17 @@ public final class GpuTerrainRuntime {
                 verifiedBlockRoots &= verifyTerrainBlockOutputs(graph, cpu, deviceResult.blocks(), settings);
                 verifiedInterpolatedRoots &= findInterpolatedBlockOutputRoots(graph, deviceResult.blocks());
             }
-            if (blockVerifiedDeviceCount == 0) {
-                GpuNoise.LOGGER.info("Skipping full-height per-block startup parity on software Vulkan; "
-                        + "compact grid roots were checked and per-block output remains disabled there.");
+            if (softwareVulkanInPool) {
+                // Terrain dispatches can be assigned to any ring device. Do
+                // not globally enable a full-volume path verified only on a
+                // hardware slot while an unverified software slot can run it.
+                verifiedBlockRoots = 0;
+                verifiedInterpolatedRoots = 0;
+                GpuNoise.LOGGER.info("Skipping full-height per-block startup parity because the Vulkan pool "
+                        + "contains a software device; compact grid roots were checked and per-block output "
+                        + "remains disabled for this pool.");
+            } else if (blockVerifiedDeviceCount == 0) {
+                GpuNoise.LOGGER.info("No device produced per-block startup output; per-block output remains disabled.");
             }
             verifiedTerrainBlockRootMask = verifiedBlockRoots & verifiedTerrainRootMask;
             interpolatedTerrainBlockRootMask = verifiedInterpolatedRoots & verifiedTerrainRootMask;
