@@ -1005,6 +1005,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
 
     /** Selects aquifer centers with Minecraft's exact integer tie ordering. */
     synchronized int[] submitAquiferNearestThree(ByteBuffer records, int count) throws Exception {
+        if (hasInFlightWork()) throw new IllegalStateException("Vulkan slot is still in flight");
         if (!GpuAquiferNearestThree.isValidPacked(records, count))
             throw new IllegalArgumentException("invalid aquifer nearest-three batch");
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -1043,6 +1044,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
 
     /** Applies the vanilla nearest-status and pressure rules to packed records. */
     synchronized int[] submitAquiferSubstance(ByteBuffer records, int count) throws Exception {
+        if (hasInFlightWork()) throw new IllegalStateException("Vulkan slot is still in flight");
         if (count <= 0 || count > GpuAquiferSubstance.MAX_QUERIES
                 || records.remaining() != count * GpuAquiferSubstance.RECORD_BYTES)
             throw new IllegalArgumentException("invalid aquifer substance batch");
@@ -1082,6 +1084,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
 
     /** Prefills the discrete per-center aquifer status using GPU terrain roots. */
     synchronized int[] submitAquiferFluidStatus(ByteBuffer records, int count) throws Exception {
+        if (hasInFlightWork()) throw new IllegalStateException("Vulkan slot is still in flight");
         if (count <= 0 || count > GpuAquiferFluidStatus.MAX_QUERIES
                 || records.remaining() != count * GpuAquiferFluidStatus.RECORD_BYTES)
             throw new IllegalArgumentException("invalid aquifer fluid-status batch");
@@ -1193,6 +1196,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     synchronized GpuAquiferPrefillResult submitAquiferPrefill(ByteBuffer nearestRecords, int nearestCount,
                                                                ByteBuffer statusRecords, int statusCount)
             throws Exception {
+        if (hasInFlightWork()) throw new IllegalStateException("Vulkan slot is still in flight");
         if (!GpuAquiferNearestThree.isValidPacked(nearestRecords, nearestCount)
                 || statusCount <= 0 || statusCount > GpuAquiferFluidStatus.MAX_PREFILL_CENTERS
                 || statusRecords.remaining() != statusCount * GpuAquiferFluidStatus.RECORD_BYTES)
