@@ -40,6 +40,9 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -69,6 +72,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
 
     @org.spongepowered.asm.mixin.Unique
     private volatile GpuAquiferDecisionTable gpunoise$decisions;
+
+    @org.spongepowered.asm.mixin.Unique
+    private volatile CompletableFuture<Void> gpunoise$decisionBuild;
 
     @org.spongepowered.asm.mixin.Unique
     private static final AtomicBoolean gpunoise$aquiferBatchWarning = new AtomicBoolean();
@@ -112,6 +118,14 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     @org.spongepowered.asm.mixin.Unique
     private static final Semaphore gpunoise$aquiferDecisionSlots =
             new Semaphore(gpunoise$aquiferDecisionConcurrency, true);
+
+    @org.spongepowered.asm.mixin.Unique
+    private static final ExecutorService gpunoise$aquiferDecisionExecutor = Executors.newFixedThreadPool(
+            gpunoise$aquiferDecisionConcurrency, r -> {
+                Thread thread = new Thread(r, "GPU aquifer decision build");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     @org.spongepowered.asm.mixin.Unique
     private static final boolean gpunoise$verifyAquifer = Boolean.getBoolean("gpunoise.verifyAquiferGpu");
@@ -179,6 +193,43 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         }
     }
 
+    @Override
+    public void gpunoise$beginGpuDecisions(GpuChunkDensityCache cache, NoiseChunk noiseChunk) {
+        if (gpunoise$decisions != null || cache == null || noiseChunk == null) return;
+        if (!(noiseChunk instanceof dev.gpunoise.GpuNoiseChunkAccess noiseAccess)) {
+            gpunoise$logAquiferPreflightSkip("NoiseChunk GPU access bridge is missing");
+            return;
+        }
+        if (!noiseAccess.gpunoise$matchesGpuCache(cache)) {
+            gpunoise$logAquiferPreflightSkip("GPU density cache does not match NoiseChunk coordinates");
+            return;
+        }
+        if (!cache.hasFullBlockOutput()) {
+            gpunoise$logAquiferPreflightSkip("full block density output is unavailable");
+            return;
+        }
+        if (!cache.supportsRoot(GpuTerrainRoots.FINAL_DENSITY)) {
+            gpunoise$logAquiferPreflightSkip("finalDensity root is unsupported");
+            return;
+        }
+        if (!cache.supportsRoot(GpuTerrainRoots.BARRIER)) {
+            gpunoise$logAquiferPreflightSkip("aquifer barrier root is unsupported");
+            return;
+        }
+        synchronized (this) {
+            if (gpunoise$decisions != null || gpunoise$decisionBuild != null) return;
+            try {
+                gpunoise$decisionBuild = CompletableFuture.runAsync(
+                        () -> gpunoise$prepareGpuDecisions(cache, noiseChunk), gpunoise$aquiferDecisionExecutor);
+            } catch (RuntimeException rejected) {
+                if (gpunoise$aquiferBatchWarning.compareAndSet(false, true)) {
+                    dev.gpunoise.GpuNoise.LOGGER.warn(
+                            "GPU aquifer decision executor rejected a chunk; using vanilla aquifer decisions.", rejected);
+                }
+            }
+        }
+    }
+
     @org.spongepowered.asm.mixin.Unique
     private static void gpunoise$logAquiferPreflightSkip(String reason) {
         if (gpunoise$aquiferPreflightLogged.compareAndSet(false, true)) {
@@ -213,6 +264,23 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         // this prepared-table hook out of that Java reference call.
         if (Boolean.TRUE.equals(gpunoise$javaAquiferReference.get())) return;
         GpuAquiferDecisionTable decisions = gpunoise$decisions;
+        if (decisions == null) {
+            CompletableFuture<Void> build = gpunoise$decisionBuild;
+            if (build != null) {
+                long waitStart = build.isDone() ? 0L : GpuTerrainProfiler.beginPhase();
+                try {
+                    build.join();
+                } catch (CompletionException failure) {
+                    if (gpunoise$aquiferBatchWarning.compareAndSet(false, true)) {
+                        dev.gpunoise.GpuNoise.LOGGER.warn(
+                                "Asynchronous GPU aquifer decision build failed; using vanilla decisions.", failure);
+                    }
+                } finally {
+                    GpuTerrainProfiler.recordAquiferDecisionWait(waitStart);
+                }
+                decisions = gpunoise$decisions;
+            }
+        }
         if (decisions == null) {
             if (gpunoise$isTraceAquiferBlock(context.blockX(), context.blockY(), context.blockZ())) {
                 dev.gpunoise.GpuNoise.LOGGER.info(

@@ -27,6 +27,9 @@ public final class GpuTerrainProfiler {
     private static final LongAdder aquiferDecisionBuildCalls = new LongAdder();
     private static final LongAdder aquiferDecisionBuildNanos = new LongAdder();
     private static final LongAdder aquiferDecisionBuildSamples = new LongAdder();
+    private static final LongAdder aquiferDecisionWaitCalls = new LongAdder();
+    private static final LongAdder aquiferDecisionWaitNanos = new LongAdder();
+    private static final LongAdder aquiferDecisionWaitSamples = new LongAdder();
     private static final LongAdder aquiferStatusPrefillCalls = new LongAdder();
     private static final LongAdder aquiferStatusPrefillNanos = new LongAdder();
     private static final LongAdder aquiferStatusPrefillSamples = new LongAdder();
@@ -166,6 +169,16 @@ public final class GpuTerrainProfiler {
         }
     }
 
+    /** Measures chunk-thread blocking left after moving aquifer table preparation off-thread. */
+    public static void recordAquiferDecisionWait(long start) {
+        if (!ENABLED) return;
+        aquiferDecisionWaitCalls.increment();
+        if (start != 0L) {
+            aquiferDecisionWaitNanos.add(Math.max(0L, System.nanoTime() - start));
+            aquiferDecisionWaitSamples.increment();
+        }
+    }
+
     /** Starts an unsampled timer for a once-per-chunk aquifer preparation phase. */
     public static long beginAquiferPhase() {
         return ENABLED ? System.nanoTime() : 0L;
@@ -249,6 +262,9 @@ public final class GpuTerrainProfiler {
         GpuNoise.LOGGER.info("GPU terrain aquifer decision preparation: calls={}, sampled={} avgNs={}",
                 aquiferDecisionBuildCalls.sum(), aquiferDecisionBuildSamples.sum(),
                 averageNanos(aquiferDecisionBuildNanos, aquiferDecisionBuildSamples));
+        GpuNoise.LOGGER.info("GPU terrain aquifer decision wait: calls={}, sampled={} avgNs={}",
+                aquiferDecisionWaitCalls.sum(), aquiferDecisionWaitSamples.sum(),
+                averageNanos(aquiferDecisionWaitNanos, aquiferDecisionWaitSamples));
         GpuNoise.LOGGER.info("GPU terrain cache preparation: calls={}, sampled={} avgNs={}, maxConcurrent={}",
                 terrainCachePreparationCalls.sum(), terrainCachePreparationSamples.sum(),
                 averageNanos(terrainCachePreparationNanos, terrainCachePreparationSamples),

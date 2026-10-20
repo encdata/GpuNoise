@@ -71,6 +71,9 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
         GpuChunkDensityCache cache = GpuTerrainRuntime.activeFillCache();
         if (cache != null && cache.matchesChunk(firstNoiseX << 2, firstNoiseZ << 2)) {
             gpunoise$cache = cache;
+            if (aquifer instanceof GpuAquiferDecisionAccess access) {
+                access.gpunoise$beginGpuDecisions(cache, (NoiseChunk) (Object) this);
+            }
         }
     }
 
@@ -78,7 +81,7 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     private void gpunoise$prepareAquiferBatch(CallbackInfo callback) {
         GpuChunkDensityCache cache = gpunoise$getActiveCache();
         if (cache != null && aquifer instanceof GpuAquiferDecisionAccess access) {
-            access.gpunoise$prepareGpuDecisions(cache, (NoiseChunk) (Object) this);
+            access.gpunoise$beginGpuDecisions(cache, (NoiseChunk) (Object) this);
         }
     }
 
