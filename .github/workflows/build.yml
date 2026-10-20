@@ -31,9 +31,9 @@ permissions:
 
 concurrency:
   group: gpunoise-${{ github.workflow }}-${{ github.ref }}
-  # Keep correctness runs alive while follow-up compiler work is pushed; queued
-  # runs execute sequentially so their worldgen artifacts remain attributable.
-  cancel-in-progress: false
+  # A newer commit supersedes older build/runtime checks, including a slow
+  # worldgen profile queued for up to three hours.
+  cancel-in-progress: true
 
 jobs:
   build:
