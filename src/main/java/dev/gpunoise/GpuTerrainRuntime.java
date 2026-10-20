@@ -188,6 +188,12 @@ public final class GpuTerrainRuntime {
         return chunkPipelineGate.submit(operation);
     }
 
+    public static <T> java.util.concurrent.CompletableFuture<T> submitChunkPipeline(
+            java.util.function.Supplier<? extends java.util.concurrent.CompletionStage<T>> operation,
+            java.util.function.Consumer<Boolean> cancellation) {
+        return chunkPipelineGate.submit(operation, cancellation);
+    }
+
     /**
      * The strict writer is intentionally held behind the exact-coordinate
      * dependency provider.  A NoiseChunk cache is not sufficient: aquifers

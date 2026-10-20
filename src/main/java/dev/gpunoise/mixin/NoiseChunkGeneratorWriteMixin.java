@@ -15,6 +15,8 @@ import net.minecraft.SharedConstants;
 import net.neoforged.fml.ModList;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -73,6 +75,7 @@ abstract class NoiseChunkGeneratorWriteMixin {
         }
         // prepareChunk returns immediately.  doFill is chained only after the
         // lattice result is installed, so no worldgen thread calls join/get.
+        AtomicBoolean cancellationRequested = new AtomicBoolean();
         CompletableFuture<ChunkAccess> gpuFill = GpuTerrainRuntime.submitChunkPipeline(() -> {
             CompletionStage<GpuChunkDensityCache> prepared = GpuTerrainRuntime.prepareChunk(
                     blender, randomState, structures, chunk, minCellY, cellCountY, settings);
@@ -80,6 +83,10 @@ abstract class NoiseChunkGeneratorWriteMixin {
             // doFill starts it may have written sections, so retrying after a
             // fill exception could mix two terrain writers into one chunk.
             return prepared.handle((cache, failure) -> {
+                if (cancellationRequested.get()) {
+                    return CompletableFuture.<ChunkAccess>failedFuture(
+                            new CancellationException("chunk generation cancelled before CPU fill"));
+                }
                 if (failure != null) {
                     GpuTerrainRuntime.markCpuFallbackChunk(
                             chunk.getPos().x, chunk.getPos().z, failure);
@@ -89,7 +96,7 @@ abstract class NoiseChunkGeneratorWriteMixin {
                         () -> gpunoise$fillWithGpuReady(blender, randomState, structures, chunk,
                                 minCellY, cellCountY, cache), net.minecraft.Util.backgroundExecutor());
             }).thenCompose(stage -> stage);
-        });
+        }, interrupted -> cancellationRequested.set(true));
         return gpuFill;
     }
 
