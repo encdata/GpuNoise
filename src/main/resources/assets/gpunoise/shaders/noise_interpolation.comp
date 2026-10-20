@@ -31,12 +31,15 @@ void main(){
     if(globalIndex>=chunkCount*blocksPerChunk)return;
     uint chunk=globalIndex/blocksPerChunk;
     uint index=globalIndex%blocksPerChunk;
-    uint base=chunk*8u;
+    uint base=chunk*12u;
     uint cornerOffset=metadata[base+0u];
     uint blockOffset=metadata[base+1u];
     uint cellsX=metadata[base+2u], cellsY=metadata[base+3u], cellsZ=metadata[base+4u];
     uint blocksPerCellX=metadata[base+5u];
     uint blocksPerCellY=metadata[base+6u];
+    int originX=int(metadata[base+8u]);
+    int originY=int(metadata[base+9u]);
+    int originZ=int(metadata[base+10u]);
     uint blocksX=cellsX*blocksPerCellX;
     uint blocksZ=cellsZ*blocksPerCellX;
     uint perLayer=blocksX*blocksZ;
@@ -66,6 +69,5 @@ void main(){
         else blocks[blockOffset+index*valueCount+valueIndex]=value;
     }
     if(markerMode) coordinates[blockOffset+index]=ivec4(
-        int(metadata[base+0u])+int(x),int(metadata[base+1u])+int(y),
-        int(metadata[base+2u])+int(z),0);
+        originX+int(x),originY+int(y),originZ+int(z),0);
 }

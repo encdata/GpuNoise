@@ -520,12 +520,10 @@ public final class VulkanCiSmoke {
             // root at cell corners. Also verify marker-only children can skip.
             GpuDensityGraph markerGraph = GpuDensityExpressionSmoke.interpolatedMarkerGraphForVulkanSmoke();
             ByteBuffer markerGrid = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder());
-            markerGrid.putInt(0).putInt(0).putInt(0)
+            markerGrid.putInt(-32).putInt(-64).putInt(48)
                     .putInt(2).putInt(2).putInt(2).putInt(16).putInt(1).flip();
-            ByteBuffer markerOutput = ByteBuffer.allocateDirect(GpuInterpolationBatch.METADATA_BYTES)
-                    .order(ByteOrder.nativeOrder());
-            markerOutput.putInt(0).putInt(0).putInt(1).putInt(1).putInt(1)
-                    .putInt(16).putInt(1).putInt(0).flip();
+            ByteBuffer markerOutput = GpuInterpolationBatch.metadata(1, 1, 1, 1,
+                    16, 1, 8, 256, -32, -64, 48);
             System.out.println("Vulkan CI smoke: dispatching block graph with interpolated marker inputs");
             GpuTerrainBatchResult markerTerrain = ring.submitGraphGridInterpolated(markerGraph,
                     markerGrid, 1, 8, markerOutput, 256).get(60, TimeUnit.SECONDS);
@@ -538,7 +536,7 @@ public final class VulkanCiSmoke {
                 for (int blockX = 0; blockX < 16; blockX++) {
                     for (int root = 0; root < GpuTerrainRoots.COUNT; root++) {
                         float value = markerBlocks.valueAt(blockX, 0, blockZ, root);
-                        float expected = root == 0 ? blockX * blockX
+                        float expected = root == 0 ? (blockX - 32.0f) * (blockX - 32.0f)
                                 : root == 1 || root == 2 ? 8.0f : blockX + 3.0f;
                         if (Math.abs(value - expected) > 1.0e-5f) {
                             throw new IllegalStateException("Interpolated-marker block graph mismatch at "
@@ -567,7 +565,8 @@ public final class VulkanCiSmoke {
             for (int blockX = 0; blockX < 16; blockX++) {
                 float density = compactBlocks.valueAt(blockX, 0, 0, GpuTerrainRoots.FINAL_DENSITY);
                 float barrier = compactBlocks.valueAt(blockX, 0, 0, GpuTerrainRoots.BARRIER);
-                if (Math.abs(density - blockX * blockX) > 1.0e-5f || Math.abs(barrier - 8.0f) > 1.0e-5f) {
+                float expectedDensity = (blockX - 32.0f) * (blockX - 32.0f);
+                if (Math.abs(density - expectedDensity) > 1.0e-5f || Math.abs(barrier - 8.0f) > 1.0e-5f) {
                     throw new IllegalStateException("Compact terrain block output mismatch at X=" + blockX);
                 }
             }

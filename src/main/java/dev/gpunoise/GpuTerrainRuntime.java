@@ -722,10 +722,9 @@ public final class GpuTerrainRuntime {
             int[] blockRoots = terrainBlockOutputRootIndexes();
             boolean includeBlockOutputs = terrainBlockOutputEnabled() && blockRoots.length > 0;
             int blocksPerChunk = Math.multiplyExact(256, settings.height());
-            java.nio.ByteBuffer outputMetadata = java.nio.ByteBuffer.allocateDirect(
-                    GpuInterpolationBatch.METADATA_BYTES).order(java.nio.ByteOrder.nativeOrder());
-            outputMetadata.putInt(0).putInt(0).putInt(grid.gridX() - 1).putInt(grid.gridY() - 1)
-                    .putInt(grid.gridZ() - 1).putInt(grid.cellWidth()).putInt(grid.cellHeight()).putInt(0).flip();
+            java.nio.ByteBuffer outputMetadata = GpuInterpolationBatch.metadata(1, grid.gridX() - 1,
+                    grid.gridY() - 1, grid.gridZ() - 1, grid.cellWidth(), grid.cellHeight(),
+                    grid.sampleCount(), blocksPerChunk, grid.minX(), grid.minY(), grid.minZ());
             List<CompletableFuture<GpuTerrainBatchResult>> terrainChecks = new ArrayList<>();
             for (GpuDevice candidate : ring.devices()) {
                 if (includeBlockOutputs) {
