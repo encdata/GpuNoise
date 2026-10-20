@@ -286,6 +286,12 @@ final class GpuDensityExpressionSmoke {
                 GpuDensityGraphCompiler.compileDensityFunction(function, true)), function);
     }
 
+    static VulkanBranchFixture doubleDivisionFixture() {
+        DensityFunction function = new DoubleDivisionDensity();
+        return new VulkanBranchFixture(GpuDensityGraphLowerer.lower(
+                GpuDensityGraphCompiler.compileDensityFunction(function, true)), function);
+    }
+
     static VulkanBranchFixture boundedLoopFixture() {
         DensityFunction function = new BoundedLoopDensity();
         return new VulkanBranchFixture(GpuDensityGraphLowerer.lower(
@@ -384,6 +390,10 @@ final class GpuDensityExpressionSmoke {
         int dcmplGreaterEqual = nanCompareBuilder.compare("DCMPL_GE", nanValue, zeroConstant);
         int dcmpgLess = nanCompareBuilder.compare("DCMPG_LT", nanValue, zeroConstant);
         int dcmpgGreaterEqual = nanCompareBuilder.compare("DCMPG_GE", nanValue, zeroConstant);
+        int fcmplLess = nanCompareBuilder.compare("FCMPL_LT", nanValue, zeroConstant);
+        int fcmplGreaterEqual = nanCompareBuilder.compare("FCMPL_GE", nanValue, zeroConstant);
+        int fcmpgLess = nanCompareBuilder.compare("FCMPG_LT", nanValue, zeroConstant);
+        int fcmpgGreaterEqual = nanCompareBuilder.compare("FCMPG_GE", nanValue, zeroConstant);
         requireClose(nanCompareBuilder.build(dcmplLess).evaluate(0.0, 0.0, 0.0), 1.0,
                 "DCMPL NaN ordering for less-than");
         requireClose(nanCompareBuilder.build(dcmplGreaterEqual).evaluate(0.0, 0.0, 0.0), 0.0,
@@ -392,6 +402,14 @@ final class GpuDensityExpressionSmoke {
                 "DCMPG NaN ordering for less-than");
         requireClose(nanCompareBuilder.build(dcmpgGreaterEqual).evaluate(0.0, 0.0, 0.0), 1.0,
                 "DCMPG NaN ordering for greater-or-equal");
+        requireClose(nanCompareBuilder.build(fcmplLess).evaluate(0.0, 0.0, 0.0), 1.0,
+                "FCMPL NaN ordering for less-than");
+        requireClose(nanCompareBuilder.build(fcmplGreaterEqual).evaluate(0.0, 0.0, 0.0), 0.0,
+                "FCMPL NaN ordering for greater-or-equal");
+        requireClose(nanCompareBuilder.build(fcmpgLess).evaluate(0.0, 0.0, 0.0), 0.0,
+                "FCMPG NaN ordering for less-than");
+        requireClose(nanCompareBuilder.build(fcmpgGreaterEqual).evaluate(0.0, 0.0, 0.0), 1.0,
+                "FCMPG NaN ordering for greater-or-equal");
 
         GpuDensityExpression.Builder reuseBuilder = new GpuDensityExpression.Builder();
         int sharedX = reuseBuilder.coordinate(GpuDensityExpression.Coordinate.X);
@@ -2326,6 +2344,16 @@ final class GpuDensityExpressionSmoke {
         @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
         @Override public double minValue() { return -1.0; }
         @Override public double maxValue() { return 1.0; }
+        @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
+            return DensityFunctions.constant(0.0).codec();
+        }
+    }
+
+    private static final class DoubleDivisionDensity implements DensityFunction.SimpleFunction {
+        @Override public double compute(FunctionContext context) { return context.blockX() / 0.0; }
+        @Override public DensityFunction mapAll(Visitor visitor) { return visitor.apply(this); }
+        @Override public double minValue() { return Double.NEGATIVE_INFINITY; }
+        @Override public double maxValue() { return Double.POSITIVE_INFINITY; }
         @Override public net.minecraft.util.KeyDispatchDataCodec<? extends DensityFunction> codec() {
             return DensityFunctions.constant(0.0).codec();
         }

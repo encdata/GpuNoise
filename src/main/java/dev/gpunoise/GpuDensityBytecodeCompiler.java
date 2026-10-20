@@ -399,8 +399,13 @@ final class GpuDensityBytecodeCompiler {
                         if (insn.getOpcode() == Opcodes.DCMPL || insn.getOpcode() == Opcodes.DCMPG
                                 || insn.getOpcode() == Opcodes.FCMPL || insn.getOpcode() == Opcodes.FCMPG) {
                             Value right = popValue("floating comparison"), left = popValue("floating comparison");
-                            String mode = (insn.getOpcode() == Opcodes.DCMPL || insn.getOpcode() == Opcodes.FCMPL)
-                                    ? "DCMPL" : "DCMPG";
+                            String mode = switch (insn.getOpcode()) {
+                                case Opcodes.DCMPL -> "DCMPL";
+                                case Opcodes.DCMPG -> "DCMPG";
+                                case Opcodes.FCMPL -> "FCMPL";
+                                case Opcodes.FCMPG -> "FCMPG";
+                                default -> throw new AssertionError("not a JVM floating comparison");
+                            };
                             stack.add(Value.comparison(left.expression(), right.expression(), mode));
                             continue;
                         }

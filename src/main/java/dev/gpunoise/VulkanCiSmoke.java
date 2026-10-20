@@ -352,6 +352,18 @@ public final class VulkanCiSmoke {
                             + ": expected " + expected + ", got " + comparisonResults[sample]);
                 }
             }
+            GpuDensityExpressionSmoke.VulkanBranchFixture doubleDivisionFixture =
+                    GpuDensityExpressionSmoke.doubleDivisionFixture();
+            float[] divisionX = {-7.0f, 0.0f, 7.0f};
+            float[] divisionZeros = new float[divisionX.length];
+            float[] divisionResults = ring.submitGraphRoots(doubleDivisionFixture.graph(), divisionX,
+                    divisionZeros, divisionZeros).get(60, TimeUnit.SECONDS);
+            if (divisionResults[0] != Float.NEGATIVE_INFINITY
+                    || !Float.isNaN(divisionResults[1])
+                    || divisionResults[2] != Float.POSITIVE_INFINITY) {
+                throw new IllegalStateException("Java double division IEEE parity failed: expected [-Infinity, NaN, Infinity], got ["
+                        + divisionResults[0] + ", " + divisionResults[1] + ", " + divisionResults[2] + "]");
+            }
             GpuDensityExpressionSmoke.VulkanBranchFixture loopFixture =
                     GpuDensityExpressionSmoke.boundedLoopFixture();
             float[] loopX = {-30_000_001.0f, -17.0f, 0.0f, 7.0f, 1_234_567.0f, 30_000_001.0f};

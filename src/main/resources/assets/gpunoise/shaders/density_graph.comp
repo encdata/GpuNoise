@@ -130,6 +130,8 @@ double javaRemainder(double x,double y){
 }
 bool negativeDouble(double value){return (unpackDouble2x32(value).y&0x80000000u)!=0u;}
 double signedZero64(bool negative){return packDouble2x32(uvec2(0u,negative?0x80000000u:0u));}
+double canonicalNaN64(){return packDouble2x32(uvec2(0u,0x7ff80000u));}
+double signedInfinity64(bool negative){return packDouble2x32(uvec2(0u,(negative?0x80000000u:0u)|0x7ff00000u));}
 int signedIntFromBits(uint bits){
     return bits<=2147483647u?int(bits):int(double(bits)-4294967296.0);
 }
@@ -193,7 +195,17 @@ double javaFloatOperation(uint operation,double leftValue,double rightValue){
         // arithmetic optimizations that canonicalize a zero product.
         if(result==0.0)result=uintBitsToFloat((floatBitsToUint(left)^floatBitsToUint(right))&0x80000000u);
     }
-    else if(operation==4u)result=left/right;
+    else if(operation==4u){
+        bool invalid=isnan(left)||isnan(right)||(left==0.0&&right==0.0)||(isinf(left)&&isinf(right));
+        if(invalid)result=uintBitsToFloat(0x7fc00000u);
+        else if(right==0.0||isinf(left)){
+            uint sign=(negativeFloat(left)!=negativeFloat(right))?0x80000000u:0u;
+            result=uintBitsToFloat(sign|0x7f800000u);
+        }else if(isinf(right)){
+            uint sign=(negativeFloat(left)!=negativeFloat(right))?0x80000000u:0u;
+            result=uintBitsToFloat(sign);
+        }else result=left/right;
+    }
     else if(operation==5u){
         if(isnan(left)||isnan(right)||isinf(left)||right==0.0)result=uintBitsToFloat(0x7fc00000u);
         else if(isinf(right))result=left;
@@ -357,8 +369,21 @@ double graphMultiply(double x, double y){
 }
 double graphDivide(double x, double y){
 #ifdef FAST_MATH
-    return double(float(x)/float(y));
+    float left=float(x),right=float(y);
+    bool invalid=isnan(left)||isnan(right)||(left==0.0&&right==0.0)||(isinf(left)&&isinf(right));
+    if(invalid)return double(uintBitsToFloat(0x7fc00000u));
+    bool negative=negativeFloat(left)!=negativeFloat(right);
+    if(right==0.0||isinf(left))return double(uintBitsToFloat((negative?0x80000000u:0u)|0x7f800000u));
+    if(isinf(right))return double(signedZero32(negative));
+    float result=left/right;
+    if(result==0.0)result=signedZero32(negative);
+    return double(result);
 #else
+    bool invalid=isnan(x)||isnan(y)||(x==0.0&&y==0.0)||(isinf(x)&&isinf(y));
+    if(invalid)return canonicalNaN64();
+    bool negative=negativeDouble(x)!=negativeDouble(y);
+    if(y==0.0||isinf(x))return signedInfinity64(negative);
+    if(isinf(y))return signedZero64(negative);
     return x/y;
 #endif
 }
