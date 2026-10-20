@@ -1,11 +1,13 @@
 package dev.gpunoise;
 
+import java.util.ArrayList;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.StringJoiner;
+import java.util.concurrent.atomic.AtomicLong;
 
 import net.minecraft.world.level.levelgen.DensityFunction;
 import net.minecraft.world.level.levelgen.NoiseSettings;
@@ -15,7 +17,6 @@ import net.minecraft.world.level.StructureManager;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.levelgen.synth.NormalNoise;
 import net.minecraft.world.level.levelgen.NoiseRouter;
-import net.minecraft.world.level.levelgen.DensityFunction;
 
 /** Runtime bridge used by the vanilla DensityFunctions.Noise fill hook. */
 public final class GpuTerrainRuntime {
@@ -570,7 +571,7 @@ public final class GpuTerrainRuntime {
                 router.initialDensityWithoutJaggedness(), router.finalDensity(), router.veinToggle(),
                 router.veinRidged(), router.veinGap()};
         try {
-            float[] gpu = current.submitGraphRoots(graph, x, y, z);
+            float[] gpu = submitGraphRootsForParity(graph, x, y, z);
             float worst = 0.0f;
             for (int root = 0; root < cpu.length; root++) {
                 float rootWorst = 0.0f;
@@ -621,7 +622,7 @@ public final class GpuTerrainRuntime {
         GpuTerrainParity.fillStartupSamples(x, y, z);
         int verifiedRoots = 0;
         try {
-            float[] gpu = current.submitGraphRoots(graph, x, y, z);
+            float[] gpu = submitGraphRootsForParity(graph, x, y, z);
             for (int root = 0; root < cpu.length; root++) {
                 if (!graph.supportsRouterRoot(root)) continue;
                 float rootWorst = 0.0f;
@@ -814,9 +815,9 @@ public final class GpuTerrainRuntime {
                 "veinToggle", "veinRidged", "veinGap"
         };
         try {
-            verifyBlendedNoiseNodes(current, graph, x, y, z);
+            verifyBlendedNoiseNodes(graph, x, y, z);
             float worst = 0.0f;
-            float[] allRoots = current.submitGraphRoots(graph, x, y, z);
+            float[] allRoots = submitGraphRootsForParity(graph, x, y, z);
             for (int root = 0; root < graph.routerRootCount(); root++) {
                 float maxError = 0.0f;
                 int maxIndex = -1;
@@ -854,41 +855,56 @@ public final class GpuTerrainRuntime {
 
 
     /** Verifies the packed BlendedNoise records independently of router branches. */
-    private static void verifyBlendedNoiseNodes(PersistentVulkanNormalNoiseEngine current,
-                                                GpuDensityGraph graph, float[] x, float[] y, float[] z) throws Exception {
-        int checked = 0;
+    private static void verifyBlendedNoiseNodes(GpuDensityGraph graph, float[] x, float[] y, float[] z) {
+        List<Integer> blendedNodes = new ArrayList<>();
         for (int node = 0; node < graph.nodes().size(); node++) {
-            if (!graph.nodes().get(node).opcode().equals("BlendedNoise")) continue;
-            // The lowered graph stores physical register numbers separately
-            // from its instruction indices. The shader's single-root test
-            // reads a register, so passing the instruction index compares the
-            // wrong value after register allocation.
-            int resultRegister = graph.nodes().get(node).register();
-            float[] gpu = current.submitGraph(graph, x, y, z, resultRegister);
-            DensityFunction cpuFunction = graph.sourceFunctions().get(node);
-            float maxError = 0.0f;
-            int maxIndex = -1;
-            float maxGpu = 0.0f;
-            float maxCpu = 0.0f;
-            for (int i = 0; i < x.length; i++) {
-                float cpu = (float) cpuFunction.compute(new DensityFunction.SinglePointContext(
-                        (int) x[i], (int) y[i], (int) z[i]));
-                float error = GpuTerrainParity.error(gpu[i], cpu);
-                if (error > maxError) {
-                    maxError = error;
-                    maxIndex = i;
-                    maxGpu = gpu[i];
-                    maxCpu = cpu;
-                }
-            }
-            GpuNoise.LOGGER.info("GPU BlendedNoise parity: node={} maxError={} parity={}",
-                    node, maxError, maxError < 1.0E-3f);
-            if (maxIndex >= 0) GpuNoise.LOGGER.info(
-                    "GPU BlendedNoise detail: at ({},{},{}): gpu={}, cpu={}",
-                    (int) x[maxIndex], (int) y[maxIndex], (int) z[maxIndex], maxGpu, maxCpu);
-            checked++;
+            if (graph.nodes().get(node).opcode().equals("BlendedNoise")) blendedNodes.add(node);
         }
-        GpuNoise.LOGGER.info("GPU BlendedNoise parity test: {} nodes checked", checked);
+        for (int start = 0; start < blendedNodes.size(); start += 16) {
+            int count = Math.min(16, blendedNodes.size() - start);
+            int[] rootRegisters = new int[count];
+            for (int root = 0; root < count; root++) {
+                int node = blendedNodes.get(start + root);
+                rootRegisters[root] = graph.nodes().get(node).register();
+            }
+            GpuDensityGraph registerGraph = new GpuDensityGraph(graph.nodes(), rootRegisters,
+                    graph.noises(), graph.splines(), graph.blended(), graph.sourceFunctions(),
+                    graph.registerCount(), (1 << count) - 1, new String[count]);
+            float[] gpu = submitGraphRootsForParity(registerGraph, x, y, z);
+            for (int root = 0; root < count; root++) {
+                int node = blendedNodes.get(start + root);
+                DensityFunction cpuFunction = graph.sourceFunctions().get(node);
+                float maxError = 0.0f;
+                int maxIndex = -1;
+                float maxGpu = 0.0f;
+                float maxCpu = 0.0f;
+                for (int sample = 0; sample < x.length; sample++) {
+                    float actual = gpu[sample * count + root];
+                    float expected = (float) cpuFunction.compute(new DensityFunction.SinglePointContext(
+                            (int) x[sample], (int) y[sample], (int) z[sample]));
+                    float error = GpuTerrainParity.error(actual, expected);
+                    if (error > maxError) {
+                        maxError = error;
+                        maxIndex = sample;
+                        maxGpu = actual;
+                        maxCpu = expected;
+                    }
+                }
+                GpuNoise.LOGGER.info("GPU BlendedNoise parity: node={} maxError={} parity={}",
+                        node, maxError, maxError < 1.0E-3f);
+                if (maxIndex >= 0) GpuNoise.LOGGER.info(
+                        "GPU BlendedNoise detail: at ({},{},{}): gpu={}, cpu={}",
+                        (int) x[maxIndex], (int) y[maxIndex], (int) z[maxIndex], maxGpu, maxCpu);
+            }
+        }
+        GpuNoise.LOGGER.info("GPU BlendedNoise parity test: {} nodes checked", blendedNodes.size());
+    }
+
+    /** Uses the ring's async completion path so parity work never holds an engine monitor while waiting. */
+    private static float[] submitGraphRootsForParity(GpuDensityGraph graph, float[] x, float[] y, float[] z) {
+        VulkanSubmissionRing ring = submissionRing;
+        if (ring == null) throw new IllegalStateException("Vulkan submission ring is not installed");
+        return ring.submitGraphRoots(graph, x, y, z).join();
     }
 
     private static void fillVolumeParitySamples(float[] x, float[] y, float[] z) {
