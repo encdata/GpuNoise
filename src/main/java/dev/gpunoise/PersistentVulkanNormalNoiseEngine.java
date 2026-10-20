@@ -146,7 +146,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             timestampQueryPool = createTimestampQueryPool(stack);
             graphShader = graphShader(stack); graphDescriptorLayout = graphDescriptorLayout(stack);
             graphPipelineLayout = graphPipelineLayout(stack); graphPipeline = graphPipeline(stack);
-            blockGraphShader = loadShader(stack, "/assets/gpunoise/shaders/density_graph_256.comp.spv", "block graph shader");
+            blockGraphShader = loadShader(stack, "/assets/gpunoise/shaders/density_graph.comp.spv", "block graph shader");
             blockGraphPipeline = graphPipeline(blockGraphShader, stack);
             blockGraphRegisterVariant = -1;
             gridShader = gridShader(stack); gridPipeline = gridPipeline(stack);
@@ -221,7 +221,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             timestampQueryPool = createTimestampQueryPool(stack);
             graphShader = graphShader(stack); graphDescriptorLayout = graphDescriptorLayout(stack);
             graphPipelineLayout = graphPipelineLayout(stack); graphPipeline = graphPipeline(stack);
-            blockGraphShader = loadShader(stack, "/assets/gpunoise/shaders/density_graph_256.comp.spv", "block graph shader");
+            blockGraphShader = loadShader(stack, "/assets/gpunoise/shaders/density_graph.comp.spv", "block graph shader");
             blockGraphPipeline = graphPipeline(blockGraphShader, stack);
             blockGraphRegisterVariant = -1;
             gridShader = gridShader(stack); gridPipeline = gridPipeline(stack);

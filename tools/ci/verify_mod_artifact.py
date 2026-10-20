@@ -19,6 +19,17 @@ MOD_PAYLOAD = "META-INF/gpunoise/gpunoise-mod.jar"
 METADATA = "META-INF/jarjar/metadata.json"
 LOCATOR_SERVICE = "META-INF/services/net.neoforged.neoforgespi.locating.IModFileCandidateLocator"
 LOCATOR_CLASS = "dev/gpunoise/loader/GpuNoiseDedicatedLwjglLocator.class"
+UNUSED_GRAPH_SHADER_VARIANTS = {
+    f"assets/gpunoise/shaders/density_graph_{registers}.comp.spv"
+    for registers in (32, 64, 128)
+} | {
+    f"assets/gpunoise/shaders/density_graph_grid_{registers}.comp.spv"
+    for registers in (32, 64, 128, 256)
+}
+ACTIVE_GRAPH_SHADERS = {
+    "assets/gpunoise/shaders/density_graph.comp.spv",
+    "assets/gpunoise/shaders/density_graph_grid.comp.spv",
+}
 MAX_ARTIFACT_BYTES = 20 * 1024 * 1024
 
 
@@ -83,6 +94,7 @@ def verify(path: Path) -> None:
                 "dev/gpunoise/GpuNoise.class",
                 "dev/gpunoise/GpuRuntimeShaderCompiler.class",
                 "dev/gpunoise/GpuDensityGraphShaderGenerator.class",
+                *ACTIVE_GRAPH_SHADERS,
                 "linux/x64/org/lwjgl/shaderc/libshaderc.so",
                 "windows/x64/org/lwjgl/shaderc/shaderc.dll",
                 "macos/x64/org/lwjgl/shaderc/libshaderc.dylib",
@@ -93,6 +105,14 @@ def verify(path: Path) -> None:
             missing_mod = sorted(mod_required - mod_entries)
             if missing_mod:
                 raise ValueError(f"Embedded GPU Noise mod payload is missing required entries: {missing_mod}")
+            unused_graph_shaders = sorted(UNUSED_GRAPH_SHADER_VARIANTS & mod_entries)
+            if "assets/gpunoise/shaders/density_graph_256.comp.spv" in mod_entries:
+                unused_graph_shaders.append("assets/gpunoise/shaders/density_graph_256.comp.spv (duplicate)")
+            if unused_graph_shaders:
+                raise ValueError(
+                    "Embedded mod payload includes unused precompiled register variants: "
+                    f"{unused_graph_shaders}"
+                )
             if LOCATOR_SERVICE in mod_entries or any(
                 name.startswith("dev/gpunoise/loader/") for name in mod_entries
             ):
