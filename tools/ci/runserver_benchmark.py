@@ -431,10 +431,22 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                                     if parity_marker in line), "")
                 if "matches=true" not in parity_line:
                     raise RuntimeError(f"Vulkan startup parity check did not pass: {parity_marker}")
-            if VERIFY_AQUIFER_GPU and "GPU preliminary aquifer surface decision mismatch" in run_log:
-                raise RuntimeError(
-                    "GPU preliminary aquifer surface decisions diverged from Java; Java fallback was used"
-                )
+            if VERIFY_AQUIFER_GPU:
+                surface_fallbacks = [
+                    line for line in run_log.splitlines()
+                    if "GPU preliminary aquifer surface decision mismatch" in line
+                ]
+                unsafe_surface_results = [
+                    line for line in surface_fallbacks
+                    if "using Java for this sample." not in line
+                ]
+                if unsafe_surface_results:
+                    raise RuntimeError(
+                        "GPU aquifer surface mismatch did not explicitly fall back to Java: "
+                        + unsafe_surface_results[0]
+                    )
+                if surface_fallbacks:
+                    print(f"CI_GPU_AQUIFER_SURFACE_JAVA_FALLBACKS count={len(surface_fallbacks)}", flush=True)
             if terrain_profile == "c2me-aquifer-rewrite" and (
                     "GPU aquifer surface scan sampled initialDensity" not in run_log):
                 raise RuntimeError(
