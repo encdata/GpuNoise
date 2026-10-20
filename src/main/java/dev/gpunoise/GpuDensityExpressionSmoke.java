@@ -849,7 +849,7 @@ final class GpuDensityExpressionSmoke {
                         new GpuDensityGraph.Node("GpuMath", new int[]{1, 4}, new double[0], "ADD")),
                 roots, java.util.List.of(), java.util.List.of(), java.util.List.of(),
                 java.util.List.of(interpolationSource, interpolationMarker, sharedSource, sharedMarker,
-                        otherInput, combined, zero, sharedCombined)));
+                        otherInput, combined, zero, sharedCombined, combined));
     }
 
     private static void verifyBytecodeFrontend() {

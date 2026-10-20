@@ -20,8 +20,20 @@ final class GpuRuntimeShaderCompiler {
         long started = System.nanoTime();
         String source = GpuDensityGraphShaderGenerator.specialize(readResource(resource), packed, blockProgram);
         List<String> customTypes = graph.customDensityFunctionTypes();
+        // LWJGL's CharSequence overload copies the entire shader into its
+        // per-thread MemoryStack. Large modded graphs can exceed that small
+        // stack before shaderc starts. Keep the full source in native heap
+        // memory and use the direct-buffer overload instead.
+        ByteBuffer sourceText = MemoryUtil.memUTF8(source, true);
+        ByteBuffer inputFile = MemoryUtil.memUTF8(resource, true);
+        ByteBuffer entryPoint = MemoryUtil.memUTF8("main", true);
         long compiler = shaderc_compiler_initialize();
-        if (compiler == 0L) throw new IllegalStateException("shaderc could not create a compiler");
+        if (compiler == 0L) {
+            MemoryUtil.memFree(sourceText);
+            MemoryUtil.memFree(inputFile);
+            MemoryUtil.memFree(entryPoint);
+            throw new IllegalStateException("shaderc could not create a compiler");
+        }
         long options = 0L;
         long result = 0L;
         try {
@@ -34,15 +46,15 @@ final class GpuRuntimeShaderCompiler {
                 shaderc_compile_options_add_macro_definition(options, definition.getKey(), definition.getValue());
             }
             try {
-                result = shaderc_compile_into_spv(compiler, source, shaderc_glsl_compute_shader,
-                        resource, "main", options);
+                result = shaderc_compile_into_spv(compiler, sourceText, shaderc_glsl_compute_shader,
+                        inputFile, entryPoint, options);
             } catch (OutOfMemoryError stackExhaustion) {
                 if (!isStackExhaustion(stackExhaustion.getMessage())) throw stackExhaustion;
                 GpuNoise.LOGGER.warn("Shader compiler exhausted its native stack optimizing {}; retrying without optimization",
                         programName);
                 shaderc_compile_options_set_optimization_level(options, shaderc_optimization_level_zero);
-                result = shaderc_compile_into_spv(compiler, source, shaderc_glsl_compute_shader,
-                        resource, "main", options);
+                result = shaderc_compile_into_spv(compiler, sourceText, shaderc_glsl_compute_shader,
+                        inputFile, entryPoint, options);
             }
             if (result == 0L) throw new IllegalStateException("shaderc failed to create a compilation result");
             int status = shaderc_result_get_compilation_status(result);
@@ -54,8 +66,8 @@ final class GpuRuntimeShaderCompiler {
                 GpuNoise.LOGGER.warn("Shader compiler exhausted its native stack optimizing {}; retrying without optimization",
                         programName);
                 shaderc_compile_options_set_optimization_level(options, shaderc_optimization_level_zero);
-                result = shaderc_compile_into_spv(compiler, source, shaderc_glsl_compute_shader,
-                        resource, "main", options);
+                result = shaderc_compile_into_spv(compiler, sourceText, shaderc_glsl_compute_shader,
+                        inputFile, entryPoint, options);
                 if (result == 0L) throw new IllegalStateException(
                         "shaderc could not create a compilation result after unoptimized retry");
                 status = shaderc_result_get_compilation_status(result);
@@ -78,6 +90,9 @@ final class GpuRuntimeShaderCompiler {
             if (result != 0L) shaderc_result_release(result);
             if (options != 0L) shaderc_compile_options_release(options);
             shaderc_compiler_release(compiler);
+            MemoryUtil.memFree(sourceText);
+            MemoryUtil.memFree(inputFile);
+            MemoryUtil.memFree(entryPoint);
         }
     }
 

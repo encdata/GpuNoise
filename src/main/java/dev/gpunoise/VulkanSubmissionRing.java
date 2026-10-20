@@ -54,6 +54,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
     private final BlockingQueue<AquiferPrefillRequest> pendingAquiferPrefill = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
     /** Synchronous dispatch requests run on bounded slot workers. */
     private final BlockingQueue<BlockingRequest<?>> pendingBlocking = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
+    /** Startup parity borrows a specific device asynchronously until one of its slots is free. */
+    private final BlockingQueue<ParityRequest<?>> pendingParity = new ArrayBlockingQueue<>(MAX_DEVICE_COUNT * 4);
     /** A permit belongs to a request until its result future completes. */
     private final Semaphore submissionPermits = new Semaphore(MAX_PENDING_SUBMISSIONS);
     private final AtomicLong submissionSaturationEvents = new AtomicLong();
@@ -208,7 +210,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
             }
             // Submission setup is handled on its own executor. Fence polling
             // must stay responsive even when command recording takes time.
-            scheduleDrain();
+            if (hasPendingRequests() && canStartQueuedWork()) scheduleDrain();
             for (int i = 0; i < slots.length; i++) {
                 PersistentVulkanNormalNoiseEngine slot = slots[i];
                 if (slot != null && !readbackScheduled[i].get()) graphInFlight |= slot.hasInFlightWork();
@@ -268,14 +270,26 @@ final class VulkanSubmissionRing implements AutoCloseable {
         return !pendingGraphRoots.isEmpty() || !pendingGraphGrids.isEmpty()
                 || !pendingAquiferNearest.isEmpty() || !pendingAquiferSubstance.isEmpty()
                 || !pendingAquiferFluidStatus.isEmpty() || !pendingAquiferPrefill.isEmpty()
-                || !pendingBlocking.isEmpty() || !pendingTerrainGrids.isEmpty();
+                || !pendingBlocking.isEmpty() || !pendingTerrainGrids.isEmpty() || !pendingParity.isEmpty();
     }
 
     private synchronized boolean canStartQueuedWork() {
+        boolean hasGeneralWork = !pendingGraphRoots.isEmpty() || !pendingGraphGrids.isEmpty()
+                || !pendingAquiferNearest.isEmpty() || !pendingAquiferSubstance.isEmpty()
+                || !pendingAquiferFluidStatus.isEmpty() || !pendingAquiferPrefill.isEmpty()
+                || !pendingBlocking.isEmpty() || !pendingTerrainGrids.isEmpty();
         for (int i = 0; i < slots.length; i++) {
             PersistentVulkanNormalNoiseEngine slot = slots[i];
             if (slot != null && !readbackScheduled[i].get()
-                    && !slot.hasInFlightWork() && !synchronousSlots.contains(slot)) return true;
+                    && !slot.hasInFlightWork() && !synchronousSlots.contains(slot)
+                    && (hasGeneralWork || hasPendingParityFor(slotDevices[i]))) return true;
+        }
+        return false;
+    }
+
+    private boolean hasPendingParityFor(GpuDevice device) {
+        for (ParityRequest<?> request : pendingParity) {
+            if (request.target.equals(device) && !request.future.isDone()) return true;
         }
         return false;
     }
@@ -297,6 +311,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
         while ((prefill = pendingAquiferPrefill.poll()) != null) prefill.future.completeExceptionally(failure);
         BlockingRequest<?> blocking;
         while ((blocking = pendingBlocking.poll()) != null) blocking.future.completeExceptionally(failure);
+        ParityRequest<?> parity;
+        while ((parity = pendingParity.poll()) != null) parity.future.completeExceptionally(failure);
     }
 
     /** Keep worldgen continuations and chunk-result fanout off the fence-poll thread. */
@@ -370,46 +386,18 @@ final class VulkanSubmissionRing implements AutoCloseable {
     private <T> CompletableFuture<T> submitParityOnDevice(
             GpuDevice target, String description, SlotOperation<CompletableFuture<T>> operation) {
         CompletableFuture<T> result = new CompletableFuture<>();
-        PersistentVulkanNormalNoiseEngine selected = null;
-        synchronized (this) {
-            for (int index = 0; index < slots.length; index++) {
-                PersistentVulkanNormalNoiseEngine slot = slots[index];
-                if (!slotDevices[index].equals(target) || readbackScheduled[index].get()
-                        || slot.hasInFlightWork() || synchronousSlots.contains(slot)) continue;
-                selected = slot;
-                synchronousSlots.add(slot);
-                break;
-            }
+        if (target == null) return CompletableFuture.failedFuture(
+                new IllegalArgumentException("Vulkan parity target is null"));
+        boolean available = false;
+        for (GpuDevice slotDevice : slotDevices) available |= slotDevice.equals(target);
+        if (!available) return CompletableFuture.failedFuture(new IllegalArgumentException(
+                "Vulkan parity target is not in the active pool: " + target.name()));
+        if (!pendingParity.offer(new ParityRequest<>(target, description, operation, result))) {
+            result.completeExceptionally(new RejectedExecutionException(
+                    "Vulkan pinned parity queue is full for " + target.name()));
+            return result;
         }
-        if (selected == null) return CompletableFuture.failedFuture(new IllegalStateException(
-                "no idle Vulkan slot for " + description + " parity on " + target.name()));
-        PersistentVulkanNormalNoiseEngine slot = selected;
-        try {
-            dispatchWorkers.execute(() -> {
-                CompletableFuture<T> submitted;
-                try {
-                    submitted = operation.call(slot);
-                } catch (Throwable failure) {
-                    synchronized (this) { synchronousSlots.remove(slot); }
-                    result.completeExceptionally(new IllegalStateException(
-                            "Vulkan " + description + " parity dispatch failed on " + target.name(), failure));
-                    scheduleDrain();
-                    return;
-                }
-                synchronized (this) { synchronousSlots.remove(slot); }
-                scheduleDrain();
-                submitted.whenComplete((value, failure) -> {
-                    Throwable reportedFailure = failure == null ? null
-                            : new IllegalStateException("Vulkan " + description
-                                    + " parity failed on " + target.name(), failure);
-                    completeOnDispatchWorker(result, value, reportedFailure);
-                });
-            });
-        } catch (RuntimeException stopped) {
-            synchronized (this) { synchronousSlots.remove(slot); }
-            result.completeExceptionally(stopped);
-            scheduleDrain();
-        }
+        scheduleDrain();
         return result;
     }
 
@@ -430,16 +418,30 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     CompletableFuture<float[]> submitGraphRootsGrid(GpuDensityGraph graph, ByteBuffer metadata,
                                                       int chunkCount, int samplesPerChunk) {
+        return submitGraphRootsGrid(graph, metadata, chunkCount, samplesPerChunk, true);
+    }
+
+    /** Internal batch path; the caller keeps metadata stable until the future completes. */
+    CompletableFuture<float[]> submitGraphRootsGridOwned(GpuDensityGraph graph, ByteBuffer metadata,
+                                                           int chunkCount, int samplesPerChunk) {
+        return submitGraphRootsGrid(graph, metadata, chunkCount, samplesPerChunk, false);
+    }
+
+    private CompletableFuture<float[]> submitGraphRootsGrid(GpuDensityGraph graph, ByteBuffer metadata,
+                                                              int chunkCount, int samplesPerChunk,
+                                                              boolean copyMetadata) {
         if (graph == null) return CompletableFuture.failedFuture(
                 new IllegalStateException("GPU terrain graph is not installed"));
         CompletableFuture<float[]> future = new CompletableFuture<>();
-        enqueue(pendingGraphGrids, () -> new GraphRootsGridRequest(graph, snapshot(metadata), chunkCount,
+        enqueue(pendingGraphGrids, () -> new GraphRootsGridRequest(graph,
+                copyMetadata ? snapshot(metadata) : metadata, chunkCount,
                 samplesPerChunk, future, System.nanoTime()), future, "terrain root grid");
         return future;
     }
 
     /** Starts at most one request per free slot, rotating classes to avoid producer starvation. */
     private synchronized void drainGraphRoots() {
+        drainParityRequests();
         for (int dispatched = 0; dispatched < slots.length; dispatched++) {
             int index = selectLeastLoadedSlot();
             if (index < 0) return;
@@ -453,6 +455,66 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 }
                 if (attempt == QUEUE_CLASSES.length - 1) return;
             }
+        }
+    }
+
+    /** Borrow pinned startup slots without blocking the bootstrap or submitter thread. */
+    private void drainParityRequests() {
+        int requestsToInspect = pendingParity.size();
+        for (int requestIndex = 0; requestIndex < requestsToInspect; requestIndex++) {
+            ParityRequest<?> request = pendingParity.poll();
+            if (request == null) return;
+            if (request.future.isDone()) continue;
+            int slotIndex = selectIdleSlot(request.target);
+            if (slotIndex < 0) {
+                if (!pendingParity.offer(request)) request.future.completeExceptionally(
+                        new RejectedExecutionException("Vulkan pinned parity queue overflow"));
+                continue;
+            }
+            PersistentVulkanNormalNoiseEngine slot = slots[slotIndex];
+            synchronousSlots.add(slot);
+            dispatchParityRequest(request, slot);
+        }
+    }
+
+    private int selectIdleSlot(GpuDevice target) {
+        for (int offset = 0; offset < slots.length; offset++) {
+            int index = (nextSlotIndex + offset) % slots.length;
+            PersistentVulkanNormalNoiseEngine slot = slots[index];
+            if (!slotDevices[index].equals(target) || readbackScheduled[index].get()
+                    || slot.hasInFlightWork() || synchronousSlots.contains(slot)) continue;
+            nextSlotIndex = (index + 1) % slots.length;
+            return index;
+        }
+        return -1;
+    }
+
+    private <T> void dispatchParityRequest(ParityRequest<T> request,
+                                            PersistentVulkanNormalNoiseEngine slot) {
+        try {
+            dispatchWorkers.execute(() -> {
+                CompletableFuture<T> submitted;
+                try {
+                    submitted = request.operation.call(slot);
+                    if (submitted == null) throw new IllegalStateException("parity submission returned no future");
+                } catch (Throwable failure) {
+                    releaseSynchronousSlot(slot);
+                    request.future.completeExceptionally(new IllegalStateException(
+                            "Vulkan " + request.description + " parity dispatch failed on "
+                                    + request.target.name(), failure));
+                    return;
+                }
+                releaseSynchronousSlot(slot);
+                submitted.whenComplete((value, failure) -> {
+                    Throwable reportedFailure = failure == null ? null
+                            : new IllegalStateException("Vulkan " + request.description
+                                    + " parity failed on " + request.target.name(), failure);
+                    completeOnDispatchWorker(request.future, value, reportedFailure);
+                });
+            });
+        } catch (RuntimeException stopped) {
+            releaseSynchronousSlot(slot);
+            request.future.completeExceptionally(stopped);
         }
     }
 
@@ -721,9 +783,27 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                                                            ByteBuffer outputMetadata,
                                                                            int blocksPerChunk,
                                                                            int[] outputRootIndexes) {
+        return submitGraphGridInterpolated(graph, gridMetadata, chunkCount, samplesPerChunk,
+                outputMetadata, blocksPerChunk, outputRootIndexes, true);
+    }
+
+    /** Internal batch path; metadata remains owned by its dispatch buffer until completion. */
+    CompletableFuture<GpuTerrainBatchResult> submitGraphGridInterpolatedOwned(
+            GpuDensityGraph graph, ByteBuffer gridMetadata, int chunkCount, int samplesPerChunk,
+            ByteBuffer outputMetadata, int blocksPerChunk, int[] outputRootIndexes) {
+        return submitGraphGridInterpolated(graph, gridMetadata, chunkCount, samplesPerChunk,
+                outputMetadata, blocksPerChunk, outputRootIndexes, false);
+    }
+
+    private CompletableFuture<GpuTerrainBatchResult> submitGraphGridInterpolated(
+            GpuDensityGraph graph, ByteBuffer gridMetadata, int chunkCount, int samplesPerChunk,
+            ByteBuffer outputMetadata, int blocksPerChunk, int[] outputRootIndexes,
+            boolean copyMetadata) {
         CompletableFuture<GpuTerrainBatchResult> future = new CompletableFuture<>();
-        enqueue(pendingTerrainGrids, () -> new TerrainGridRequest(graph, snapshot(gridMetadata), chunkCount,
-                samplesPerChunk, snapshot(outputMetadata), blocksPerChunk, outputRootIndexes.clone(), future,
+        enqueue(pendingTerrainGrids, () -> new TerrainGridRequest(graph,
+                copyMetadata ? snapshot(gridMetadata) : gridMetadata, chunkCount,
+                samplesPerChunk, copyMetadata ? snapshot(outputMetadata) : outputMetadata,
+                blocksPerChunk, outputRootIndexes.clone(), future,
                 System.nanoTime()),
                 future, "full terrain grid");
         return future;
@@ -827,6 +907,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
         BlockingRequest<?> blockingRequest;
         while ((blockingRequest = pendingBlocking.poll()) != null)
             blockingRequest.future.completeExceptionally(stopped);
+        ParityRequest<?> parityRequest;
+        while ((parityRequest = pendingParity.poll()) != null)
+            parityRequest.future.completeExceptionally(stopped);
         for (int i = slots.length - 1; i >= 0; i--) {
             if (slots[i] != null) slots[i].close();
         }
@@ -855,4 +938,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
     }
     private record BlockingRequest<T>(String description, SlotOperation<T> operation,
                                       CompletableFuture<T> future, long enqueuedNanos) {}
+    private record ParityRequest<T>(GpuDevice target, String description,
+                                    SlotOperation<CompletableFuture<T>> operation,
+                                    CompletableFuture<T> future) {}
 }

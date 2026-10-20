@@ -411,21 +411,42 @@ public final class GpuTerrainRuntime {
     static java.util.concurrent.CompletionStage<GpuTerrainBatchResult> submitTerrainGridInterpolated(
             java.nio.ByteBuffer gridMetadata, int chunkCount, int samplesPerChunk,
             java.nio.ByteBuffer outputMetadata, int blocksPerChunk) {
+        return submitTerrainGridInterpolated(gridMetadata, chunkCount, samplesPerChunk,
+                outputMetadata, blocksPerChunk, false);
+    }
+
+    /** Batch scheduler owns both pooled metadata buffers until this stage completes. */
+    static java.util.concurrent.CompletionStage<GpuTerrainBatchResult> submitTerrainGridInterpolatedOwned(
+            java.nio.ByteBuffer gridMetadata, int chunkCount, int samplesPerChunk,
+            java.nio.ByteBuffer outputMetadata, int blocksPerChunk) {
+        return submitTerrainGridInterpolated(gridMetadata, chunkCount, samplesPerChunk,
+                outputMetadata, blocksPerChunk, true);
+    }
+
+    private static java.util.concurrent.CompletionStage<GpuTerrainBatchResult> submitTerrainGridInterpolated(
+            java.nio.ByteBuffer gridMetadata, int chunkCount, int samplesPerChunk,
+            java.nio.ByteBuffer outputMetadata, int blocksPerChunk, boolean ownedMetadata) {
         VulkanSubmissionRing ring = terrainRing;
-        if (ring == null || terrainGraph == null) return java.util.concurrent.CompletableFuture.failedStage(
+        GpuDensityGraph graph = terrainGraph;
+        if (ring == null || graph == null) return java.util.concurrent.CompletableFuture.failedStage(
                 new IllegalStateException("GPU terrain graph provider is not installed"));
         if (!terrainBlockOutputEnabled()) {
-            return ring.submitGraphRootsGrid(gridMetadata, chunkCount, samplesPerChunk)
+            java.util.concurrent.CompletableFuture<float[]> roots = ownedMetadata
+                    ? ring.submitGraphRootsGridOwned(graph, gridMetadata, chunkCount, samplesPerChunk)
+                    : ring.submitGraphRootsGrid(graph, gridMetadata, chunkCount, samplesPerChunk);
+            return roots
                     .thenApply(values -> new GpuTerrainBatchResult(
                             new GpuTerrainRootsResult(values, 0, values.length,
-                                    terrainGraph.routerRootCount(),
-                                    terrainGraph.routerRootCount()
-                                            + terrainGraph.interpolatedMarkerCount(),
-                                    terrainGraph.interpolatedMarkerCount()),
+                                    graph.routerRootCount(), graph.routerRootCount()
+                                            + graph.interpolatedMarkerCount(),
+                                    graph.interpolatedMarkerCount()),
                             new GpuTerrainBlockResult(new float[0], 0, 0, 1, 16, 0, 16)));
         }
-        return ring.submitGraphGridInterpolated(gridMetadata, chunkCount, samplesPerChunk,
-                outputMetadata, blocksPerChunk, terrainBlockOutputRootIndexes());
+        return ownedMetadata
+                ? ring.submitGraphGridInterpolatedOwned(graph, gridMetadata, chunkCount, samplesPerChunk,
+                        outputMetadata, blocksPerChunk, terrainBlockOutputRootIndexes())
+                : ring.submitGraphGridInterpolated(graph, gridMetadata, chunkCount, samplesPerChunk,
+                        outputMetadata, blocksPerChunk, terrainBlockOutputRootIndexes());
     }
 
     static boolean terrainBlockOutputEnabled() {

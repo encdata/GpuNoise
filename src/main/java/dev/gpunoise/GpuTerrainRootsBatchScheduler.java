@@ -410,7 +410,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         }
         long submittedAt = System.nanoTime();
         try {
-            GpuTerrainRuntime.submitTerrainGridInterpolated(metadata, batch.size(), samplesPerChunk,
+            GpuTerrainRuntime.submitTerrainGridInterpolatedOwned(metadata, batch.size(), samplesPerChunk,
                     outputMetadata, blocksPerChunk).whenComplete((values, failure) -> {
                 try {
                     long completedAt = System.nanoTime();
