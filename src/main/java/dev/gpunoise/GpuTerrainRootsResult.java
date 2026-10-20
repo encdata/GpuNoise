@@ -9,7 +9,7 @@ final class GpuTerrainRootsResult {
     private final int stride;
     private final int interpolatorCount;
     /** Maps logical router-root IDs to compact output positions; null means identity. */
-    private final int[] rootIndexes;
+    private final int[] rootToOutput;
 
     GpuTerrainRootsResult(float[] values, int offset, int length, int roots) {
         this(values, offset, length, roots, roots);
@@ -39,7 +39,18 @@ final class GpuTerrainRootsResult {
         this.roots = roots;
         this.stride = stride;
         this.interpolatorCount = interpolatorCount;
-        this.rootIndexes = rootIndexes == null ? null : rootIndexes.clone();
+        if (rootIndexes == null) {
+            this.rootToOutput = null;
+        } else {
+            this.rootToOutput = new int[roots];
+            java.util.Arrays.fill(this.rootToOutput, -1);
+            for (int output = 0; output < rootIndexes.length; output++) {
+                int root = rootIndexes[output];
+                if (root < 0 || root >= roots || this.rootToOutput[root] >= 0)
+                    throw new IllegalArgumentException("invalid compact GPU root index " + root);
+                this.rootToOutput[root] = output;
+            }
+        }
     }
 
     int sampleCount() { return length / stride; }
@@ -55,32 +66,32 @@ final class GpuTerrainRootsResult {
         if (sampleOffset < 0 || samples < 0 || sampleOffset + samples > sampleCount())
             throw new IndexOutOfBoundsException();
         return new GpuTerrainRootsResult(values, offset + sampleOffset * stride,
-                samples * stride, roots, stride, interpolatorCount, rootIndexes);
+                samples * stride, roots, stride, interpolatorCount,
+                rootToOutput == null ? null : outputRootsForSlice());
     }
+
+    private int[] outputRootsForSlice() {
+        int compactCount = stride - interpolatorCount;
+        int[] indexes = new int[compactCount];
+        for (int root = 0; root < rootToOutput.length; root++) {
+            int output = rootToOutput[root];
+            if (output >= 0) indexes[output] = root;
+        }
+        return indexes;
+    }
+
     float valueAt(int sample, int root) {
         if (sample < 0 || sample >= sampleCount() || root < 0 || root >= roots)
             throw new IndexOutOfBoundsException();
-        int outputIndex = root;
-        if (rootIndexes != null) {
-            outputIndex = -1;
-            for (int i = 0; i < rootIndexes.length; i++) {
-                if (rootIndexes[i] == root) { outputIndex = i; break; }
-            }
-            if (outputIndex < 0) throw new IndexOutOfBoundsException("root was not included in compact output");
-        }
+        int outputIndex = rootToOutput == null ? root : rootToOutput[root];
+        if (outputIndex < 0) throw new IndexOutOfBoundsException("root was not included in compact output");
         return values[offset + sample * stride + outputIndex];
     }
 
     /** Caller has already validated the sample and root coordinates. */
     float valueAtUnchecked(int sample, int root) {
-        int outputIndex = root;
-        if (rootIndexes != null) {
-            outputIndex = -1;
-            for (int i = 0; i < rootIndexes.length; i++) {
-                if (rootIndexes[i] == root) { outputIndex = i; break; }
-            }
-            if (outputIndex < 0) return Float.NaN;
-        }
+        int outputIndex = rootToOutput == null ? root : rootToOutput[root];
+        if (outputIndex < 0) return Float.NaN;
         return values[offset + sample * stride + outputIndex];
     }
 }

@@ -424,9 +424,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
      */
     synchronized CompletableFuture<float[]> submitGraphRootsAsync(GpuDensityGraph graph, float[] xs, float[] ys,
                                                                     float[] zs, int sampleCount) throws Exception {
-        int[] roots = new int[graph.routerRootCount()];
-        for (int i = 0; i < roots.length; i++) roots[i] = i;
-        return submitGraphRootsAsync(graph, xs, ys, zs, sampleCount, roots);
+        return submitGraphRootsAsync(graph, xs, ys, zs, sampleCount, null);
     }
 
     synchronized CompletableFuture<float[]> submitGraphRootsAsync(GpuDensityGraph graph, float[] xs, float[] ys,
@@ -436,17 +434,21 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         if (xs.length != ys.length || xs.length != zs.length || sampleCount < 0 || sampleCount > xs.length || sampleCount > CAPACITY)
             throw new IllegalArgumentException("invalid graph batch");
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
-        int rootCount = outputRootIndexes.length;
-        if (packed.nodeCount() > GRAPH_NODE_CAPACITY || graph.routerRootCount() > 16
+        int graphRootCount = graph.routerRootCount();
+        int rootCount = outputRootIndexes == null ? graphRootCount : outputRootIndexes.length;
+        if (packed.nodeCount() > GRAPH_NODE_CAPACITY || graphRootCount > 16
                 || rootCount <= 0 || rootCount > 16)
             throw new IllegalArgumentException("density graph output roots exceed GPU capacity");
-        int[] selectedRootRegisters = new int[rootCount];
         int[] graphRoots = graph.routerRoots();
-        for (int i = 0; i < rootCount; i++) {
-            int rootIndex = outputRootIndexes[i];
-            if (rootIndex < 0 || rootIndex >= graphRoots.length)
-                throw new IllegalArgumentException("invalid output router root index " + rootIndex);
-            selectedRootRegisters[i] = graphRoots[rootIndex];
+        int[] selectedRootRegisters = graphRoots;
+        if (outputRootIndexes != null) {
+            selectedRootRegisters = new int[rootCount];
+            for (int i = 0; i < rootCount; i++) {
+                int rootIndex = outputRootIndexes[i];
+                if (rootIndex < 0 || rootIndex >= graphRootCount)
+                    throw new IllegalArgumentException("invalid output router root index " + rootIndex);
+                selectedRootRegisters[i] = graphRoots[rootIndex];
+            }
         }
         long preparationStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
         try (MemoryStack stack = MemoryStack.stackPush()) {
