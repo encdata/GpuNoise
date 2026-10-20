@@ -43,6 +43,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
     private long queueDispatchSamples;
     private long totalQueueWaitNanos;
     private long maxQueueWaitNanos;
+    /** Next request class to inspect; prevents a busy producer class starving terrain. */
+    private int nextQueueClass;
     private final ScheduledExecutorService completion = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "GPU Vulkan completion");
         thread.setDaemon(true);
@@ -228,108 +230,125 @@ final class VulkanSubmissionRing implements AutoCloseable {
         return future;
     }
 
-    /** Starts at most one request per free slot; queue pressure never causes CPU fallback. */
+    /** Starts at most one request per free slot, rotating classes to avoid producer starvation. */
     private synchronized void drainGraphRoots() {
         for (PersistentVulkanNormalNoiseEngine slot : slots) {
             if (slot == null || slot.hasInFlightWork() || synchronousSlots.contains(slot)) continue;
-            GraphRootsRequest request = pendingGraphRoots.poll();
-            if (request == null) {
-                GraphRootsGridRequest grid = pendingGraphGrids.poll();
-                if (grid == null) {
-                    TerrainGridRequest terrain = pendingTerrainGrids.poll();
-                    if (terrain != null) {
-                        recordQueueWait(terrain.enqueuedNanos);
-                        try {
-                            slot.submitGraphGridInterpolated(terrain.graph, terrain.gridMetadata,
-                                            terrain.chunkCount, terrain.samplesPerChunk,
-                                            terrain.outputMetadata, terrain.blocksPerChunk, terrain.outputRootIndexes)
-                                    .whenComplete((result, failure) -> completeOnDispatchWorker(
-                                            terrain.future, result, failure));
-                        } catch (Throwable failure) {
-                            terrain.future.completeExceptionally(new IllegalStateException(
-                                    "GPU ring full terrain submission failed", failure));
-                        }
-                        continue;
-                    }
-                    // Full terrain dispatches are the producer's main unit of
-                    // work. Do not let a long queue of auxiliary aquifer
-                    // lookups starve them after graph-grid work is drained.
-                    BlockingRequest<?> blocking = pendingBlocking.poll();
-                    if (blocking != null) {
-                        recordQueueWait(blocking.enqueuedNanos);
-                        runBlocking(blocking, slot);
-                        continue;
-                    }
-                    AquiferPrefillRequest prefill = pendingAquiferPrefill.poll();
-                    AquiferNearestRequest nearest = prefill == null ? pendingAquiferNearest.poll() : null;
-                    AquiferSubstanceRequest substance = prefill == null && nearest == null
-                            ? pendingAquiferSubstance.poll() : null;
-                    AquiferFluidStatusRequest fluidStatus = prefill == null && nearest == null && substance == null
-                            ? pendingAquiferFluidStatus.poll() : null;
-                    if (prefill == null && nearest == null && substance == null && fluidStatus == null) break;
-                    recordQueueWait(prefill != null ? prefill.enqueuedNanos
-                            : nearest != null ? nearest.enqueuedNanos
-                            : substance != null ? substance.enqueuedNanos : fluidStatus.enqueuedNanos);
-                    synchronousSlots.add(slot);
-                    try {
-                        dispatchWorkers.execute(() -> {
-                            try {
-                                if (prefill != null) {
-                                    prefill.future.complete(slot.submitAquiferPrefill(
-                                            prefill.nearestRecords, prefill.nearestCount,
-                                            prefill.statusRecords, prefill.statusCount));
-                                } else if (nearest != null) {
-                                    nearest.future.complete(slot.submitAquiferNearestThree(
-                                            nearest.records, nearest.count));
-                                } else {
-                                    if (substance != null) {
-                                        substance.future.complete(slot.submitAquiferSubstance(
-                                                substance.records, substance.count));
-                                    } else {
-                                        fluidStatus.future.complete(slot.submitAquiferFluidStatus(
-                                                fluidStatus.records, fluidStatus.count));
-                                    }
-                                }
-                            } catch (Throwable failure) {
-                                if (prefill != null) prefill.future.completeExceptionally(new IllegalStateException(
-                                        "GPU ring combined aquifer prefill dispatch failed", failure));
-                                else if (nearest != null) nearest.future.completeExceptionally(new IllegalStateException(
-                                        "GPU ring aquifer nearest-three dispatch failed", failure));
-                                else if (substance != null) substance.future.completeExceptionally(new IllegalStateException(
-                                        "GPU ring aquifer substance dispatch failed", failure));
-                                else fluidStatus.future.completeExceptionally(new IllegalStateException(
-                                        "GPU ring aquifer fluid-status dispatch failed", failure));
-                            } finally {
-                                releaseSynchronousSlot(slot);
-                            }
-                        });
-                    } catch (RuntimeException stopped) {
-                        synchronousSlots.remove(slot);
-                        if (prefill != null) prefill.future.completeExceptionally(stopped);
-                        else if (nearest != null) nearest.future.completeExceptionally(stopped);
-                        else if (substance != null) substance.future.completeExceptionally(stopped);
-                        else fluidStatus.future.completeExceptionally(stopped);
-                    }
-                    continue;
+            for (int attempt = 0; attempt < QueueClass.values().length; attempt++) {
+                QueueClass requestClass = QueueClass.values()[nextQueueClass];
+                nextQueueClass = (nextQueueClass + 1) % QueueClass.values().length;
+                if (dispatchNext(slot, requestClass)) break;
+            }
+        }
+    }
+
+    /**
+     * Queue classes are scalar roots, root grids, full terrain, synchronous
+     * compatibility calls, and aquifer batches. Rotating even when a class is
+     * empty keeps the policy simple and bounds how long a continuously busy
+     * producer can delay any other class to a handful of slot completions.
+     */
+    private boolean dispatchNext(PersistentVulkanNormalNoiseEngine slot, QueueClass requestClass) {
+        switch (requestClass) {
+            case GRAPH_ROOTS -> {
+                GraphRootsRequest request = pendingGraphRoots.poll();
+                if (request == null) return false;
+                recordQueueWait(request.enqueuedNanos);
+                try {
+                    slot.submitGraphRootsAsync(request.graph, request.x, request.y, request.z, request.sampleCount)
+                            .whenComplete((values, failure) -> completeOnDispatchWorker(request.future, values, failure));
+                } catch (Throwable failure) {
+                    request.future.completeExceptionally(new IllegalStateException("GPU ring graph dispatch failed", failure));
                 }
+            }
+            case GRAPH_GRIDS -> {
+                GraphRootsGridRequest grid = pendingGraphGrids.poll();
+                if (grid == null) return false;
                 recordQueueWait(grid.enqueuedNanos);
                 try {
                     slot.submitGraphRootsGridAsync(grid.graph, grid.metadata, grid.chunkCount, grid.samplesPerChunk)
-                            .whenComplete((values, failure) -> completeOnDispatchWorker(
-                                    grid.future, values, failure));
+                            .whenComplete((values, failure) -> completeOnDispatchWorker(grid.future, values, failure));
                 } catch (Throwable failure) {
                     grid.future.completeExceptionally(new IllegalStateException("GPU ring grid dispatch failed", failure));
                 }
-                continue;
             }
-            recordQueueWait(request.enqueuedNanos);
-            try {
-                slot.submitGraphRootsAsync(request.graph, request.x, request.y, request.z, request.sampleCount)
-                        .whenComplete((values, failure) -> completeOnDispatchWorker(
-                                request.future, values, failure));
-            } catch (Throwable failure) {
-                request.future.completeExceptionally(new IllegalStateException("GPU ring graph dispatch failed", failure));
+            case FULL_TERRAIN -> {
+                TerrainGridRequest terrain = pendingTerrainGrids.poll();
+                if (terrain == null) return false;
+                recordQueueWait(terrain.enqueuedNanos);
+                try {
+                    slot.submitGraphGridInterpolated(terrain.graph, terrain.gridMetadata,
+                                    terrain.chunkCount, terrain.samplesPerChunk,
+                                    terrain.outputMetadata, terrain.blocksPerChunk, terrain.outputRootIndexes)
+                            .whenComplete((result, failure) -> completeOnDispatchWorker(terrain.future, result, failure));
+                } catch (Throwable failure) {
+                    terrain.future.completeExceptionally(new IllegalStateException(
+                            "GPU ring full terrain submission failed", failure));
+                }
             }
+            case BLOCKING -> {
+                BlockingRequest<?> blocking = pendingBlocking.poll();
+                if (blocking == null) return false;
+                recordQueueWait(blocking.enqueuedNanos);
+                runBlocking(blocking, slot);
+            }
+            case AQUIFER -> {
+                AquiferPrefillRequest prefill = pendingAquiferPrefill.poll();
+                AquiferNearestRequest nearest = prefill == null ? pendingAquiferNearest.poll() : null;
+                AquiferSubstanceRequest substance = prefill == null && nearest == null
+                        ? pendingAquiferSubstance.poll() : null;
+                AquiferFluidStatusRequest fluidStatus = prefill == null && nearest == null && substance == null
+                        ? pendingAquiferFluidStatus.poll() : null;
+                if (prefill == null && nearest == null && substance == null && fluidStatus == null) return false;
+                long enqueued = prefill != null ? prefill.enqueuedNanos
+                        : nearest != null ? nearest.enqueuedNanos
+                        : substance != null ? substance.enqueuedNanos : fluidStatus.enqueuedNanos;
+                recordQueueWait(enqueued);
+                dispatchAquifer(slot, prefill, nearest, substance, fluidStatus);
+            }
+        }
+        return true;
+    }
+
+    private enum QueueClass { GRAPH_ROOTS, GRAPH_GRIDS, FULL_TERRAIN, BLOCKING, AQUIFER }
+
+    private void dispatchAquifer(PersistentVulkanNormalNoiseEngine slot, AquiferPrefillRequest prefill,
+                                 AquiferNearestRequest nearest, AquiferSubstanceRequest substance,
+                                 AquiferFluidStatusRequest fluidStatus) {
+        synchronousSlots.add(slot);
+        try {
+            dispatchWorkers.execute(() -> {
+                try {
+                    if (prefill != null) {
+                        prefill.future.complete(slot.submitAquiferPrefill(
+                                prefill.nearestRecords, prefill.nearestCount,
+                                prefill.statusRecords, prefill.statusCount));
+                    } else if (nearest != null) {
+                        nearest.future.complete(slot.submitAquiferNearestThree(nearest.records, nearest.count));
+                    } else if (substance != null) {
+                        substance.future.complete(slot.submitAquiferSubstance(substance.records, substance.count));
+                    } else {
+                        fluidStatus.future.complete(slot.submitAquiferFluidStatus(fluidStatus.records, fluidStatus.count));
+                    }
+                } catch (Throwable failure) {
+                    if (prefill != null) prefill.future.completeExceptionally(
+                            new IllegalStateException("GPU ring combined aquifer prefill dispatch failed", failure));
+                    else if (nearest != null) nearest.future.completeExceptionally(
+                            new IllegalStateException("GPU ring aquifer nearest-three dispatch failed", failure));
+                    else if (substance != null) substance.future.completeExceptionally(
+                            new IllegalStateException("GPU ring aquifer substance dispatch failed", failure));
+                    else fluidStatus.future.completeExceptionally(
+                            new IllegalStateException("GPU ring aquifer fluid-status dispatch failed", failure));
+                } finally {
+                    releaseSynchronousSlot(slot);
+                }
+            });
+        } catch (RuntimeException stopped) {
+            synchronousSlots.remove(slot);
+            if (prefill != null) prefill.future.completeExceptionally(stopped);
+            else if (nearest != null) nearest.future.completeExceptionally(stopped);
+            else if (substance != null) substance.future.completeExceptionally(stopped);
+            else fluidStatus.future.completeExceptionally(stopped);
         }
     }
 
