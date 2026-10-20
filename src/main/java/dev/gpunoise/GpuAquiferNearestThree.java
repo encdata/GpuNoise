@@ -5,6 +5,7 @@ import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.function.ToIntFunction;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQuery;
@@ -119,15 +120,23 @@ public final class GpuAquiferNearestThree {
 
     /** Packs columnar chunk staging directly, without materializing per-query objects. */
     public static ByteBuffer pack(AquiferQueries queries, int offset, int count) {
-        return pack(queries, offset, count, false);
+        return pack(queries, offset, count, false, null);
+    }
+
+    /** Packs query seeds and stable status-row indices for the GPU-resident decision chain. */
+    public static ByteBuffer pack(AquiferQueries queries, int offset, int count,
+                                  ToIntFunction<int[]> centerStatusRows) {
+        if (centerStatusRows == null) throw new NullPointerException("centerStatusRows");
+        return pack(queries, offset, count, false, centerStatusRows);
     }
 
     /** Packs a reusable GPU submission slab; release it after its async future completes. */
     public static ByteBuffer packForAsync(AquiferQueries queries, int offset, int count) {
-        return pack(queries, offset, count, true);
+        return pack(queries, offset, count, true, null);
     }
 
-    private static ByteBuffer pack(AquiferQueries queries, int offset, int count, boolean pooled) {
+    private static ByteBuffer pack(AquiferQueries queries, int offset, int count, boolean pooled,
+                                   ToIntFunction<int[]> centerStatusRows) {
         if (queries == null || count <= 0 || count > MAX_QUERIES
                 || offset < 0 || offset > queries.size() - count)
             throw new IllegalArgumentException("invalid aquifer nearest-four batch range");
@@ -165,7 +174,9 @@ public final class GpuAquiferNearestThree {
         }
         for (int[][] neighborhood : uniqueCenters) {
             for (int[] center : neighborhood) {
-                packed.putInt(center[0]).putInt(center[1]).putInt(center[2]).putInt(0);
+                int statusRow = centerStatusRows == null ? -1 : centerStatusRows.applyAsInt(center);
+                if (statusRow < -1) throw new IllegalArgumentException("invalid aquifer center status row");
+                packed.putInt(center[0]).putInt(center[1]).putInt(center[2]).putInt(statusRow);
             }
         }
         return packed.flip();

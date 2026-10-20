@@ -803,6 +803,13 @@ public final class VulkanCiSmoke {
                             + 6 * Integer.BYTES) != 1) {
                 throw new IllegalStateException("columnar nearest staging lost decision seed metadata");
             }
+            ByteBuffer mappedNearest = GpuAquiferNearestThree.pack(columnarQueries, 0, queryCount,
+                    center -> center[0] + 20_000).order(ByteOrder.nativeOrder());
+            int firstCenter = GpuAquiferNearestThree.HEADER_BYTES
+                    + queryCount * GpuAquiferNearestThree.QUERY_RECORD_BYTES;
+            if (mappedNearest.getInt(firstCenter + 3 * Integer.BYTES) != centers[0][0][0] + 20_000) {
+                throw new IllegalStateException("nearest payload lost the stable center-status row mapping");
+            }
             ByteBuffer queuedGridMetadata = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder());
             queuedGridMetadata.putInt(-16).putInt(-8).putInt(32)
                     .putInt(2).putInt(2).putInt(2).putInt(1).putInt(1).flip();
