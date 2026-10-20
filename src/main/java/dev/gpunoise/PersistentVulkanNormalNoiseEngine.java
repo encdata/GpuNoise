@@ -480,7 +480,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         }
     }
 
-    synchronized void pollGraphRootsCompletion() {
+    synchronized void completeSignaledWork() {
         CompletableFuture<float[]> future = inFlightGraphRoots;
         CompletableFuture<GpuTerrainBatchResult> terrainFuture = inFlightTerrain;
         CompletableFuture<GpuAquiferPrefillResult> aquiferFuture = inFlightAquiferPrefill;
@@ -563,6 +563,17 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             if (aquiferFuture != null) aquiferFuture.completeExceptionally(failure);
             if (aquiferRowsFuture != null) aquiferRowsFuture.completeExceptionally(failure);
         }
+    }
+
+    /**
+     * Tests completion without copying mapped output. The ring owns the
+     * transition from fence polling to its bounded readback workers, so this
+     * method must stay short and must not reset the fence.
+     */
+    synchronized boolean fenceReadyForReadback() {
+        if (inFlightGraphRoots == null && inFlightTerrain == null
+                && inFlightAquiferPrefill == null && inFlightAquiferRows == null) return false;
+        return vkGetFenceStatus(device, fence) != VK_NOT_READY;
     }
 
     private void recordGraphFenceDuration(long preparationNanos, long fenceNanos,

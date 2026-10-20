@@ -26,6 +26,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
     private static final long COMPLETION_POLL_MICROS = 250L;
     private static final long IDLE_POLL_MILLIS = 1L;
     private final PersistentVulkanNormalNoiseEngine[] slots;
+    /** A slot stays unavailable from signaled-fence detection through host readback. */
+    private final AtomicBoolean[] readbackScheduled;
     private final AtomicBoolean drainScheduled = new AtomicBoolean();
     /** Requests wait here, not on a worldgen thread, while the shared slot is busy. */
     private final ConcurrentLinkedQueue<GraphRootsRequest> pendingGraphRoots = new ConcurrentLinkedQueue<>();
@@ -59,6 +61,12 @@ final class VulkanSubmissionRing implements AutoCloseable {
         thread.setDaemon(true);
         return thread;
     });
+    /** Large mapped-output copies must not hold up fence polling for other slots. */
+    private final ExecutorService readbacks = Executors.newFixedThreadPool(MAX_SLOT_COUNT, r -> {
+        Thread thread = new Thread(r, "GPU Vulkan readback");
+        thread.setDaemon(true);
+        return thread;
+    });
     /** Command recording/submission may take CPU time; keep it off the fence poller. */
     private final ExecutorService submissions = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "GPU Vulkan submit");
@@ -69,6 +77,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
     VulkanSubmissionRing(GpuDevice device) throws Exception {
         int requestedSlots = requestedSlotCount(device);
         slots = new PersistentVulkanNormalNoiseEngine[requestedSlots];
+        readbackScheduled = new AtomicBoolean[requestedSlots];
+        for (int i = 0; i < requestedSlots; i++) readbackScheduled[i] = new AtomicBoolean();
         int created = 0;
         try {
             slots[0] = new PersistentVulkanNormalNoiseEngine(device);
@@ -109,16 +119,28 @@ final class VulkanSubmissionRing implements AutoCloseable {
         long delay = TimeUnit.MILLISECONDS.toMicros(IDLE_POLL_MILLIS);
         try {
             boolean graphInFlight = false;
-            for (PersistentVulkanNormalNoiseEngine slot : slots) {
+            for (int i = 0; i < slots.length; i++) {
+                PersistentVulkanNormalNoiseEngine slot = slots[i];
                 if (slot == null) continue;
-                slot.pollGraphRootsCompletion();
-                graphInFlight |= slot.hasInFlightWork();
+                if (readbackScheduled[i].get()) {
+                    graphInFlight = true;
+                    continue;
+                }
+                if (slot.fenceReadyForReadback()) {
+                    if (readbackScheduled[i].compareAndSet(false, true)) {
+                        graphInFlight = true;
+                        scheduleReadback(i, slot);
+                    }
+                } else {
+                    graphInFlight |= slot.hasInFlightWork();
+                }
             }
             // Submission setup is handled on its own executor. Fence polling
             // must stay responsive even when command recording takes time.
             scheduleDrain();
-            for (PersistentVulkanNormalNoiseEngine slot : slots) {
-                if (slot != null) graphInFlight |= slot.hasInFlightWork();
+            for (int i = 0; i < slots.length; i++) {
+                PersistentVulkanNormalNoiseEngine slot = slots[i];
+                if (slot != null && !readbackScheduled[i].get()) graphInFlight |= slot.hasInFlightWork();
             }
             if (graphInFlight) delay = COMPLETION_POLL_MICROS;
         } catch (Throwable failure) {
@@ -130,6 +152,24 @@ final class VulkanSubmissionRing implements AutoCloseable {
             } catch (java.util.concurrent.RejectedExecutionException ignored) {
                 // Shutdown raced the next scheduled poll.
             }
+        }
+    }
+
+    private void scheduleReadback(int index, PersistentVulkanNormalNoiseEngine slot) {
+        try {
+            readbacks.execute(() -> {
+                try {
+                    slot.completeSignaledWork();
+                } catch (Throwable failure) {
+                    GpuNoise.LOGGER.error("GPU Vulkan result readback failed for slot {}", index, failure);
+                } finally {
+                    readbackScheduled[index].set(false);
+                    scheduleDrain();
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException stopped) {
+            readbackScheduled[index].set(false);
+            GpuNoise.LOGGER.error("GPU Vulkan readback worker rejected completed slot {}", index, stopped);
         }
     }
 
@@ -161,8 +201,10 @@ final class VulkanSubmissionRing implements AutoCloseable {
     }
 
     private synchronized boolean canStartQueuedWork() {
-        for (PersistentVulkanNormalNoiseEngine slot : slots) {
-            if (slot != null && !slot.hasInFlightWork() && !synchronousSlots.contains(slot)) return true;
+        for (int i = 0; i < slots.length; i++) {
+            PersistentVulkanNormalNoiseEngine slot = slots[i];
+            if (slot != null && !readbackScheduled[i].get()
+                    && !slot.hasInFlightWork() && !synchronousSlots.contains(slot)) return true;
         }
         return false;
     }
@@ -255,8 +297,10 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     /** Starts at most one request per free slot, rotating classes to avoid producer starvation. */
     private synchronized void drainGraphRoots() {
-        for (PersistentVulkanNormalNoiseEngine slot : slots) {
-            if (slot == null || slot.hasInFlightWork() || synchronousSlots.contains(slot)) continue;
+        for (int i = 0; i < slots.length; i++) {
+            PersistentVulkanNormalNoiseEngine slot = slots[i];
+            if (slot == null || readbackScheduled[i].get()
+                    || slot.hasInFlightWork() || synchronousSlots.contains(slot)) continue;
             for (int attempt = 0; attempt < QUEUE_CLASSES.length; attempt++) {
                 QueueClass requestClass = QUEUE_CLASSES[nextQueueClass];
                 nextQueueClass = (nextQueueClass + 1) % QUEUE_CLASSES.length;
@@ -534,6 +578,13 @@ final class VulkanSubmissionRing implements AutoCloseable {
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             submissions.shutdownNow();
+        }
+        readbacks.shutdown();
+        try {
+            if (!readbacks.awaitTermination(30, TimeUnit.SECONDS)) readbacks.shutdownNow();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            readbacks.shutdownNow();
         }
         dispatchWorkers.shutdown();
         try {

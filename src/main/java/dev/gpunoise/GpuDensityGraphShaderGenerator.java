@@ -165,10 +165,7 @@ final class GpuDensityGraphShaderGenerator {
                     out.append('(').append(a).append("!=0.0?").append(b).append(':').append(c).append(')');
                 }
                 case 24, 25 -> {
-                    requireChildren(index, childCount, operation == 6 ? 1 : 2);
-                    out.append(opcode == 24 ? "javaIntOperation(" : "javaFloatOperation(")
-                            .append(operation).append("u,").append(a).append(',')
-                            .append(operation == 6 ? "0.0" : b).append(')');
+                    emitNumericOperation(out, index, opcode, operation, childCount, a, b);
                 }
                 case 26 -> {
                     requireChildren(index, childCount, 1);
@@ -200,6 +197,21 @@ final class GpuDensityGraphShaderGenerator {
             case 10 -> "javaCopySign(" + a + "," + b + ")";
             default -> throw invalid(index, "unknown Java math operation " + operation);
         });
+    }
+
+    private static void emitNumericOperation(StringBuilder out, int index, int opcode, int operation,
+                                             int childCount, String left, String right) {
+        boolean integer = opcode == 24;
+        int maxOperation = integer ? 15 : 9;
+        if (operation < 1 || operation > maxOperation) {
+            throw invalid(index, "unknown " + (integer ? "Java integer" : "Java float")
+                    + " operation " + operation);
+        }
+        boolean unary = integer ? operation >= 6 && operation <= 9 : operation == 6;
+        requireChildren(index, childCount, unary ? 1 : 2);
+        out.append(integer ? "javaIntOperation(" : "javaFloatOperation(")
+                .append(operation).append("u,").append(left).append(',')
+                .append(unary ? "0.0" : right).append(')');
     }
 
     private static void emitMapping(StringBuilder out, int index, int operation, String value) {
