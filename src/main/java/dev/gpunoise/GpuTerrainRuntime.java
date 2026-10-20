@@ -380,7 +380,8 @@ public final class GpuTerrainRuntime {
             }
             targets.flip();
             ByteBuffer parityTargets = targets.asReadOnlyBuffer().order(ByteOrder.nativeOrder());
-            return scheduler.submit(targets, tree, sampleCount).thenAccept(ids -> {
+            return scheduler.submit(targets, tree, sampleCount,
+                    chunk.getPos().x, chunk.getPos().z).thenAccept(ids -> {
                 @SuppressWarnings("unchecked")
                 Holder<Biome>[] mapped = (Holder<Biome>[]) new Holder<?>[ids.length];
                 ByteBuffer verify = parityTargets.duplicate().order(ByteOrder.nativeOrder());
@@ -401,7 +402,7 @@ public final class GpuTerrainRuntime {
                     mapped[i] = tree.biome(ids[i]);
                     if (mapped[i] == null) return;
                 }
-                GpuBiomeRegionResults.publish(chunk.getPos().x, chunk.getPos().z, minBiomeY, height, mapped);
+                GpuBiomeRegionResults.publish(chunk, minBiomeY, height, mapped);
             });
         }).exceptionally(failure -> {
             GpuNoise.LOGGER.debug("GPU multi-noise biome batch unavailable; biome search remains Java: {}",

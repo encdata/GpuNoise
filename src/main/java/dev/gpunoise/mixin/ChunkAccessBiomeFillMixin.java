@@ -22,7 +22,7 @@ abstract class ChunkAccessBiomeFillMixin {
                                                 Operation<Void> original) {
         ChunkAccess chunk = (ChunkAccess) (Object) this;
         GpuBiomeRegionResults results = chunk.isUpgrading()
-                ? null : GpuBiomeRegionResults.take(chunk.getPos().x, chunk.getPos().z);
+                ? null : GpuBiomeRegionResults.take(chunk);
         if (results == null) {
             original.call(resolver, sampler);
             return;

@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit;
 final class GpuBiomeSearchBatchScheduler implements AutoCloseable {
     private static final int MAX_PENDING = 256;
     private static final int MAX_BATCH_CHUNKS = 16;
+    private static final int BATCH_CHUNKS_AXIS = 4;
     private static final long BATCH_WINDOW_NANOS = TimeUnit.MILLISECONDS.toNanos(1);
 
     private final VulkanSubmissionRing ring;
@@ -28,14 +29,16 @@ final class GpuBiomeSearchBatchScheduler implements AutoCloseable {
         worker.start();
     }
 
-    CompletableFuture<int[]> submit(ByteBuffer targets, GpuBiomeSearchTree tree, int count) {
+    CompletableFuture<int[]> submit(ByteBuffer targets, GpuBiomeSearchTree tree, int count,
+                                   int chunkX, int chunkZ) {
         CompletableFuture<int[]> future = new CompletableFuture<>();
         if (tree == null || count <= 0 || count > PersistentVulkanNormalNoiseEngine.CAPACITY
                 || targets.remaining() != (long) count * 16L) {
             future.completeExceptionally(new IllegalArgumentException("invalid GPU biome request"));
             return future;
         }
-        Pending request = new Pending(targets.duplicate(), tree, count, future);
+        Pending request = new Pending(targets.duplicate(), tree, count,
+                Math.floorDiv(chunkX, BATCH_CHUNKS_AXIS), Math.floorDiv(chunkZ, BATCH_CHUNKS_AXIS), future);
         if (closed || !queue.offer(request)) {
             future.completeExceptionally(new IllegalStateException("GPU biome batch queue is full or stopped"));
         }
@@ -69,6 +72,7 @@ final class GpuBiomeSearchBatchScheduler implements AutoCloseable {
                 }
                 if (next == null) break;
                 if (next.tree == first.tree && next.count == first.count
+                        && next.tileX == first.tileX && next.tileZ == first.tileZ
                         && next.targets.remaining() == (long) next.count * 16L) {
                     batch.add(next);
                     rows += next.count;
@@ -117,6 +121,6 @@ final class GpuBiomeSearchBatchScheduler implements AutoCloseable {
         }
     }
 
-    private record Pending(ByteBuffer targets, GpuBiomeSearchTree tree, int count,
+    private record Pending(ByteBuffer targets, GpuBiomeSearchTree tree, int count, int tileX, int tileZ,
                            CompletableFuture<int[]> future) {}
 }
