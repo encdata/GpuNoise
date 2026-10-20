@@ -16,11 +16,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * overwrite resources still used by another dispatch.
  */
 final class VulkanSubmissionRing implements AutoCloseable {
-    // Each independent engine owns large persistent Vulkan buffers. Four
-    // engines used several gigabytes of committed JVM/direct memory on a
-    // normal 6 GB VRAM laptop and could freeze the desktop. Keep one engine
-    // until slots share one device allocation with buffer offsets.
-    private static final int SLOT_COUNT = 1;
+    private static final int MAX_SLOT_COUNT = 2;
     // Terrain callers block on their futures after submitting. Poll more
     // frequently while a graph dispatch is in flight, then back off while idle
     // so low handoff latency does not become constant CPU wakeup overhead.
@@ -49,7 +45,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
     });
 
     VulkanSubmissionRing(GpuDevice device) throws Exception {
-        slots = new PersistentVulkanNormalNoiseEngine[SLOT_COUNT];
+        int requestedSlots = requestedSlotCount(device);
+        slots = new PersistentVulkanNormalNoiseEngine[requestedSlots];
         int created = 0;
         try {
             slots[0] = new PersistentVulkanNormalNoiseEngine(device);
@@ -59,9 +56,30 @@ final class VulkanSubmissionRing implements AutoCloseable {
             for (int i = 0; i < created; i++) slots[i].close();
             throw failure;
         }
+        GpuNoise.LOGGER.info("GPU Vulkan submission slots: {} (requested {}); set gpunoise.submissionSlots=1..{} to tune resource use",
+                created, requestedSlots, MAX_SLOT_COUNT);
         // Fence checks are non-blocking. Polling is frequent only while useful;
         // the executor never waits synchronously for a terrain submission.
         completion.execute(this::pollAndDrain);
+    }
+
+    /** Keep independent command/fence and scratch ownership bounded per physical device. */
+    private static int requestedSlotCount(GpuDevice device) {
+        String configured = System.getProperty("gpunoise.submissionSlots");
+        if (configured != null) {
+            try {
+                int value = Integer.parseInt(configured.trim());
+                if (value >= 1 && value <= MAX_SLOT_COUNT) return value;
+                GpuNoise.LOGGER.warn("Ignoring gpunoise.submissionSlots={}; expected 1..{}",
+                        configured, MAX_SLOT_COUNT);
+            } catch (NumberFormatException invalid) {
+                GpuNoise.LOGGER.warn("Ignoring invalid gpunoise.submissionSlots={}", configured);
+            }
+        }
+        // Discrete GPUs usually have enough dedicated memory to keep two
+        // terrain batches resident. Integrated and software Vulkan devices
+        // stay single-slot by default to avoid competing with the CPU/server.
+        return device.deviceType() == org.lwjgl.vulkan.VK10.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 2 : 1;
     }
 
     private void pollAndDrain() {
@@ -196,7 +214,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                             terrain.future.completeExceptionally(new IllegalStateException(
                                     "GPU ring full terrain submission failed", failure));
                         }
-                        return;
+                        continue;
                     }
                     // Full terrain dispatches are the producer's main unit of
                     // work. Do not let a long queue of auxiliary aquifer
