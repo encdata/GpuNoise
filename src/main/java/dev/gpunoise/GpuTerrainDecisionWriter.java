@@ -11,7 +11,6 @@ import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.levelgen.NoiseChunk;
 import java.util.ArrayList;
 import java.util.EnumSet;
-import java.util.BitSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -196,8 +195,7 @@ public final class GpuTerrainDecisionWriter {
         int minY = minCellY * cellHeight;
         int minDecisionY = decisions.minY();
         boolean debugVoid = fillState.debugVoidTerrain;
-        int[] blockPaletteIds = new int[cellCountY * cellHeight * 256];
-        BitSet fluidPostProcessing = new BitSet(blockPaletteIds.length);
+        BlockPaletteBuffer blockPaletteIds = new BlockPaletteBuffer(cellCountY * cellHeight * 256);
         ArrayList<BlockState> palette = new ArrayList<>();
         Map<BlockState, Integer> paletteIds = new HashMap<>();
         BlockState air = Blocks.AIR.defaultBlockState();
@@ -294,13 +292,13 @@ public final class GpuTerrainDecisionWriter {
                                     palette.add(blockState);
                                     return palette.size() - 1;
                                 });
-                                blockPaletteIds[blockIndex] = paletteId;
+                                blockPaletteIds.setStateId(blockIndex, paletteId);
                                 if (paletteId != 0) {
                                     boolean scheduleFluidUpdate = gpuStateResolved
                                             ? decisions.schedulesFluidUpdate(decisionIndex)
                                             : aquifer.shouldScheduleFluidUpdate();
                                     if (scheduleFluidUpdate && !state.getFluidState().isEmpty()) {
-                                        fluidPostProcessing.set(blockIndex);
+                                        blockPaletteIds.markFluidPostProcessing(blockIndex);
                                     }
                                 }
                             }
@@ -312,7 +310,7 @@ public final class GpuTerrainDecisionWriter {
         }
         noiseChunk.stopInterpolation();
         return new PreparedChunk(chunk, minY, cellCountY * cellHeight, fillState,
-                blockPaletteIds, palette, fluidPostProcessing);
+                blockPaletteIds, palette);
     }
 
     /**
@@ -325,29 +323,30 @@ public final class GpuTerrainDecisionWriter {
         long writeStart = GpuTerrainProfiler.beginPhase();
         for (int yOffset = 0; yOffset < verticalSize; yOffset++) {
             int y = minY + yOffset;
-            for (int z = 0; z < 64; z++) {
-                for (int x = 0; x < 64; x++) {
-                    PreparedChunk output = byTile[((z >> 4) << 2) | (x >> 4)];
+            for (int tileZ = 0; tileZ < 4; tileZ++) {
+                for (int tileX = 0; tileX < 4; tileX++) {
+                    PreparedChunk output = byTile[(tileZ << 2) | tileX];
                     if (output == null) continue;
-                    int blockIndex = (yOffset << 8) | ((z & 15) << 4) | (x & 15);
-                    int paletteId = output.blockPaletteIds()[blockIndex];
-                    if (paletteId == 0) continue;
-                    BlockState state = output.palette().get(paletteId);
-                    int worldX = (regionX << 6) + x;
-                    int worldZ = (regionZ << 6) + z;
-                    int localX = x & 15;
-                    int localZ = z & 15;
                     LevelChunkSection section = output.chunk().getSection(
                             output.chunk().getSectionIndex(y));
-                    if (output.fillState().directWritesSafe) {
-                        ((GpuLevelChunkSectionAccess) (Object) section)
-                                .gpunoise$writeGpuBlock(((y & 15) << 8) | (localZ << 4) | localX, state);
-                    } else {
-                        section.setBlockState(localX, y & 15, localZ, state, false);
-                    }
-                    if (output.fluidPostProcessing().get(blockIndex)) {
-                        mutable.set(worldX, y, worldZ);
-                        output.chunk().markPosForPostprocessing(mutable);
+                    for (int localZ = 0; localZ < 16; localZ++) {
+                        int worldZ = (regionZ << 6) + (tileZ << 4) + localZ;
+                        for (int localX = 0; localX < 16; localX++) {
+                            int blockIndex = (yOffset << 8) | (localZ << 4) | localX;
+                            int paletteId = output.blockPaletteIds().stateId(blockIndex);
+                            if (paletteId == 0) continue;
+                            BlockState state = output.palette().get(paletteId);
+                            if (output.fillState().directWritesSafe) {
+                                ((GpuLevelChunkSectionAccess) (Object) section)
+                                        .gpunoise$writeGpuBlock(((y & 15) << 8) | (localZ << 4) | localX, state);
+                            } else {
+                                section.setBlockState(localX, y & 15, localZ, state, false);
+                            }
+                            if (output.blockPaletteIds().needsFluidPostProcessing(blockIndex)) {
+                                mutable.set((regionX << 6) + (tileX << 4) + localX, y, worldZ);
+                                output.chunk().markPosForPostprocessing(mutable);
+                            }
+                        }
                     }
                 }
             }
@@ -365,6 +364,76 @@ public final class GpuTerrainDecisionWriter {
     }
 
     private record PreparedChunk(ChunkAccess chunk, int minY, int verticalSize,
-                                 GpuFillState fillState, int[] blockPaletteIds,
-                                 ArrayList<BlockState> palette, BitSet fluidPostProcessing) {}
+                                 GpuFillState fillState, BlockPaletteBuffer blockPaletteIds,
+                                 ArrayList<BlockState> palette) {}
+
+    /** OCL-compatible compact IDs with automatic widening for large mod palettes. */
+    private static final class BlockPaletteBuffer {
+        private byte[] compactIds;
+        private char[] extendedIds;
+        private int[] wideIds;
+        private java.util.BitSet fluidPostProcessing;
+
+        private BlockPaletteBuffer(int size) {
+            compactIds = new byte[size];
+        }
+
+        private void setStateId(int index, int stateId) {
+            if (stateId < 0) throw new IllegalArgumentException("negative block palette ID");
+            if (wideIds != null) {
+                wideIds[index] = stateId;
+            } else if (extendedIds != null) {
+                if (stateId > Character.MAX_VALUE) {
+                    widenToInt();
+                    wideIds[index] = stateId;
+                } else {
+                    extendedIds[index] = (char) stateId;
+                }
+            } else if (stateId <= 0x7f) {
+                compactIds[index] = (byte) ((compactIds[index] & 0x80) | stateId);
+            } else {
+                widenToChar();
+                setStateId(index, stateId);
+            }
+        }
+
+        private void markFluidPostProcessing(int index) {
+            if (compactIds != null) {
+                compactIds[index] |= (byte) 0x80;
+            } else {
+                if (fluidPostProcessing == null) fluidPostProcessing = new java.util.BitSet();
+                fluidPostProcessing.set(index);
+            }
+        }
+
+        private int stateId(int index) {
+            if (wideIds != null) return wideIds[index];
+            if (extendedIds != null) return extendedIds[index];
+            return compactIds[index] & 0x7f;
+        }
+
+        private boolean needsFluidPostProcessing(int index) {
+            if (compactIds != null) return (compactIds[index] & 0x80) != 0;
+            return fluidPostProcessing != null && fluidPostProcessing.get(index);
+        }
+
+        private void widenToChar() {
+            char[] widened = new char[compactIds.length];
+            fluidPostProcessing = new java.util.BitSet();
+            for (int i = 0; i < compactIds.length; i++) {
+                int encoded = compactIds[i] & 0xff;
+                widened[i] = (char) (encoded & 0x7f);
+                if ((encoded & 0x80) != 0) fluidPostProcessing.set(i);
+            }
+            compactIds = null;
+            extendedIds = widened;
+        }
+
+        private void widenToInt() {
+            int[] widened = new int[extendedIds.length];
+            for (int i = 0; i < extendedIds.length; i++) widened[i] = extendedIds[i];
+            extendedIds = null;
+            wideIds = widened;
+        }
+    }
 }
