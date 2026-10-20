@@ -1231,6 +1231,10 @@ public final class VulkanCiSmoke {
         } catch (java.util.concurrent.CompletionException expectedFailure) {
             disabledOwner.fail(expectedFailure);
         }
+        disabledOwner.complete(expected);
+        if (GpuAquiferStatusRegionCache.get(disabledGraph, fluidPicker, disabledPosition) != null) {
+            throw new IllegalStateException("late aquifer owner completion repopulated a disabled cache scope");
+        }
         Object otherGraph = new Object();
         GpuAquiferStatusRegionCache.put(otherGraph, fluidPicker, position, expected);
         if (!GpuAquiferStatusRegionCache.disable(graph, fluidPicker)

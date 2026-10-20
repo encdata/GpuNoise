@@ -111,10 +111,15 @@ public final class GpuAquiferStatusRegionCache {
         public void complete(Aquifer.FluidStatus status) {
             if (!owner) throw new IllegalStateException("only the aquifer reservation owner may complete it");
             if (status == null) throw new NullPointerException("aquifer fluid status");
-            if (completed.get()) return;
-            if (tracked && !DISABLED_SCOPES.contains(scope)) ENTRIES.put(key, status);
             if (!completed.compareAndSet(false, true)) return;
-            future.complete(status);
+            // Publish the future first. A concurrent clear/disable can complete
+            // it exceptionally; in that case its result must not be reinserted
+            // into the persistent cache after invalidation.
+            boolean accepted = future.complete(status);
+            if (accepted && tracked && !DISABLED_SCOPES.contains(scope)) {
+                ENTRIES.put(key, status);
+                if (DISABLED_SCOPES.contains(scope)) ENTRIES.remove(key);
+            }
             if (tracked) removeInFlight(key, future);
         }
 
@@ -221,6 +226,8 @@ public final class GpuAquiferStatusRegionCache {
 
         private void put(K key, V value) { segment(key).put(key, value); }
 
+        private void remove(K key) { segment(key).remove(key); }
+
         private void clear() { segments.forEach(Segment::clear); }
 
         private void removeIf(Predicate<K> predicate) {
@@ -244,6 +251,8 @@ public final class GpuAquiferStatusRegionCache {
         }
 
         private synchronized void clear() { entries.clear(); }
+
+        private synchronized void remove(K key) { entries.remove(key); }
 
         private synchronized void removeIf(Predicate<K> predicate) {
             entries.keySet().removeIf(predicate);
