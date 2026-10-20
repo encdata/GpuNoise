@@ -162,26 +162,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     @Override
     public void gpunoise$prepareGpuDecisions(GpuChunkDensityCache cache, NoiseChunk noiseChunk) {
         if (gpunoise$decisions != null) return;
-        if (!(noiseChunk instanceof dev.gpunoise.GpuNoiseChunkAccess noiseAccess)) {
-            gpunoise$logAquiferPreflightSkip("NoiseChunk GPU access bridge is missing");
-            return;
-        }
-        if (!noiseAccess.gpunoise$matchesGpuCache(cache)) {
-            gpunoise$logAquiferPreflightSkip("GPU density cache does not match NoiseChunk coordinates");
-            return;
-        }
-        if (!cache.hasFullBlockOutput()) {
-            gpunoise$logAquiferPreflightSkip("full block density output is unavailable");
-            return;
-        }
-        if (!cache.supportsRoot(GpuTerrainRoots.FINAL_DENSITY)) {
-            gpunoise$logAquiferPreflightSkip("finalDensity root is unsupported");
-            return;
-        }
-        if (!cache.supportsRoot(GpuTerrainRoots.BARRIER)) {
-            gpunoise$logAquiferPreflightSkip("aquifer barrier root is unsupported");
-            return;
-        }
+        dev.gpunoise.GpuNoiseChunkAccess noiseAccess = gpunoise$validatedNoiseAccess(cache, noiseChunk);
+        if (noiseAccess == null) return;
         boolean acquired = false;
         long decisionBuildStart = GpuTerrainProfiler.beginPhase();
         try {
@@ -206,26 +188,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     @Override
     public void gpunoise$beginGpuDecisions(GpuChunkDensityCache cache, NoiseChunk noiseChunk) {
         if (gpunoise$decisions != null || cache == null || noiseChunk == null) return;
-        if (!(noiseChunk instanceof dev.gpunoise.GpuNoiseChunkAccess noiseAccess)) {
-            gpunoise$logAquiferPreflightSkip("NoiseChunk GPU access bridge is missing");
-            return;
-        }
-        if (!noiseAccess.gpunoise$matchesGpuCache(cache)) {
-            gpunoise$logAquiferPreflightSkip("GPU density cache does not match NoiseChunk coordinates");
-            return;
-        }
-        if (!cache.hasFullBlockOutput()) {
-            gpunoise$logAquiferPreflightSkip("full block density output is unavailable");
-            return;
-        }
-        if (!cache.supportsRoot(GpuTerrainRoots.FINAL_DENSITY)) {
-            gpunoise$logAquiferPreflightSkip("finalDensity root is unsupported");
-            return;
-        }
-        if (!cache.supportsRoot(GpuTerrainRoots.BARRIER)) {
-            gpunoise$logAquiferPreflightSkip("aquifer barrier root is unsupported");
-            return;
-        }
+        if (gpunoise$validatedNoiseAccess(cache, noiseChunk) == null) return;
         synchronized (this) {
             if (gpunoise$decisions != null || gpunoise$decisionBuild != null) return;
             try {
@@ -246,6 +209,33 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 }
             }
         }
+    }
+
+    @org.spongepowered.asm.mixin.Unique
+    private dev.gpunoise.GpuNoiseChunkAccess gpunoise$validatedNoiseAccess(
+            GpuChunkDensityCache cache, NoiseChunk noiseChunk) {
+        if (cache == null || noiseChunk == null
+                || !(noiseChunk instanceof dev.gpunoise.GpuNoiseChunkAccess noiseAccess)) {
+            gpunoise$logAquiferPreflightSkip("NoiseChunk GPU access bridge is missing");
+            return null;
+        }
+        if (!noiseAccess.gpunoise$matchesGpuCache(cache)) {
+            gpunoise$logAquiferPreflightSkip("GPU density cache does not match NoiseChunk coordinates");
+            return null;
+        }
+        if (!cache.hasFullBlockOutput()) {
+            gpunoise$logAquiferPreflightSkip("full block density output is unavailable");
+            return null;
+        }
+        if (!cache.supportsRoot(GpuTerrainRoots.FINAL_DENSITY)) {
+            gpunoise$logAquiferPreflightSkip("finalDensity root is unsupported");
+            return null;
+        }
+        if (!cache.supportsRoot(GpuTerrainRoots.BARRIER)) {
+            gpunoise$logAquiferPreflightSkip("aquifer barrier root is unsupported");
+            return null;
+        }
+        return noiseAccess;
     }
 
     @org.spongepowered.asm.mixin.Unique
