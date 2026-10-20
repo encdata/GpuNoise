@@ -73,6 +73,17 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
 
         boolean lwjglCoreAvailable = lwjglCoreAvailable();
         for (String libraryName : SERVER_LIBRARIES) {
+            if (libraryName.equals("lwjgl-core-gpunoise-server.jar") && !FMLLoader.isProduction()) {
+                // NeoGradle's development launch already puts Minecraft's
+                // LWJGL core on the server module path. FMLLoader's module
+                // graph is not available yet at candidate-discovery time, so
+                // the boot-layer probe cannot see it; registering our bundled
+                // copy creates two org.lwjgl providers when the game layer is
+                // resolved. Production servers still receive the embedded
+                // core when their launcher does not provide a named module.
+                LOGGER.info("Using the LWJGL core supplied by the development server runtime");
+                continue;
+            }
             if (libraryName.equals("lwjgl-core-gpunoise-server.jar") && lwjglCoreAvailable) {
                 LOGGER.info("Using the LWJGL core already present in the dedicated server runtime");
                 continue;
