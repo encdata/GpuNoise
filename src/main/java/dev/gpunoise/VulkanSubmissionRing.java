@@ -39,6 +39,10 @@ final class VulkanSubmissionRing implements AutoCloseable {
     /** Synchronous Vulkan APIs run off the completion thread and reserve one slot each. */
     private final Set<PersistentVulkanNormalNoiseEngine> synchronousSlots =
             Collections.newSetFromMap(new IdentityHashMap<>());
+    /** Ring queue latency stays separate from terrain batch collection and GPU fence time. */
+    private long queueDispatchSamples;
+    private long totalQueueWaitNanos;
+    private long maxQueueWaitNanos;
     private final ScheduledExecutorService completion = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "GPU Vulkan completion");
         thread.setDaemon(true);
@@ -182,6 +186,19 @@ final class VulkanSubmissionRing implements AutoCloseable {
         }
     }
 
+    private void recordQueueWait(long enqueuedNanos) {
+        if (!GpuTerrainProfiler.enabled() || enqueuedNanos == 0L) return;
+        long waitNanos = Math.max(0L, System.nanoTime() - enqueuedNanos);
+        totalQueueWaitNanos += waitNanos;
+        maxQueueWaitNanos = Math.max(maxQueueWaitNanos, waitNanos);
+        long samples = ++queueDispatchSamples;
+        if ((samples & 127L) == 0L) {
+            GpuNoise.LOGGER.info("GPU Vulkan submission queue: dispatches={}, avgQueueWaitMs={}, maxQueueWaitMs={}, slots={}",
+                    samples, totalQueueWaitNanos / (double) samples / 1_000_000.0,
+                    maxQueueWaitNanos / 1_000_000.0, slots.length);
+        }
+    }
+
     PersistentVulkanNormalNoiseEngine primary() { return slots[0]; }
 
     CompletableFuture<float[]> submitGraphRoots(GpuDensityGraph graph, float[] x, float[] y, float[] z) {
@@ -190,7 +207,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     CompletableFuture<float[]> submitGraphRoots(GpuDensityGraph graph, float[] x, float[] y, float[] z, int sampleCount) {
         CompletableFuture<float[]> future = new CompletableFuture<>();
-        pendingGraphRoots.add(new GraphRootsRequest(graph, x.clone(), y.clone(), z.clone(), sampleCount, future));
+        pendingGraphRoots.add(new GraphRootsRequest(graph, x.clone(), y.clone(), z.clone(), sampleCount,
+                future, System.nanoTime()));
         scheduleDrain();
         return future;
     }
@@ -204,7 +222,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
         if (graph == null) return CompletableFuture.failedFuture(
                 new IllegalStateException("GPU terrain graph is not installed"));
         CompletableFuture<float[]> future = new CompletableFuture<>();
-        pendingGraphGrids.add(new GraphRootsGridRequest(graph, snapshot(metadata), chunkCount, samplesPerChunk, future));
+        pendingGraphGrids.add(new GraphRootsGridRequest(graph, snapshot(metadata), chunkCount,
+                samplesPerChunk, future, System.nanoTime()));
         scheduleDrain();
         return future;
     }
@@ -219,6 +238,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 if (grid == null) {
                     TerrainGridRequest terrain = pendingTerrainGrids.poll();
                     if (terrain != null) {
+                        recordQueueWait(terrain.enqueuedNanos);
                         try {
                             slot.submitGraphGridInterpolated(terrain.graph, terrain.gridMetadata,
                                             terrain.chunkCount, terrain.samplesPerChunk,
@@ -236,6 +256,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                     // lookups starve them after graph-grid work is drained.
                     BlockingRequest<?> blocking = pendingBlocking.poll();
                     if (blocking != null) {
+                        recordQueueWait(blocking.enqueuedNanos);
                         runBlocking(blocking, slot);
                         continue;
                     }
@@ -246,6 +267,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
                     AquiferFluidStatusRequest fluidStatus = prefill == null && nearest == null && substance == null
                             ? pendingAquiferFluidStatus.poll() : null;
                     if (prefill == null && nearest == null && substance == null && fluidStatus == null) break;
+                    recordQueueWait(prefill != null ? prefill.enqueuedNanos
+                            : nearest != null ? nearest.enqueuedNanos
+                            : substance != null ? substance.enqueuedNanos : fluidStatus.enqueuedNanos);
                     synchronousSlots.add(slot);
                     try {
                         dispatchWorkers.execute(() -> {
@@ -288,6 +312,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                     }
                     continue;
                 }
+                recordQueueWait(grid.enqueuedNanos);
                 try {
                     slot.submitGraphRootsGridAsync(grid.graph, grid.metadata, grid.chunkCount, grid.samplesPerChunk)
                             .whenComplete((values, failure) -> completeOnDispatchWorker(
@@ -297,6 +322,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 }
                 continue;
             }
+            recordQueueWait(request.enqueuedNanos);
             try {
                 slot.submitGraphRootsAsync(request.graph, request.x, request.y, request.z, request.sampleCount)
                         .whenComplete((values, failure) -> completeOnDispatchWorker(
@@ -309,7 +335,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     private <T> CompletableFuture<T> submitBlocking(String description, SlotOperation<T> operation) {
         CompletableFuture<T> future = new CompletableFuture<>();
-        pendingBlocking.add(new BlockingRequest<>(description, operation, future));
+        pendingBlocking.add(new BlockingRequest<>(description, operation, future, System.nanoTime()));
         scheduleDrain();
         return future;
     }
@@ -363,21 +389,21 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     CompletableFuture<int[]> submitAquiferNearestThree(ByteBuffer records, int count) {
         CompletableFuture<int[]> future = new CompletableFuture<>();
-        pendingAquiferNearest.add(new AquiferNearestRequest(records.duplicate(), count, future));
+        pendingAquiferNearest.add(new AquiferNearestRequest(records.duplicate(), count, future, System.nanoTime()));
         scheduleDrain();
         return future;
     }
 
     CompletableFuture<int[]> submitAquiferSubstance(ByteBuffer records, int count) {
         CompletableFuture<int[]> future = new CompletableFuture<>();
-        pendingAquiferSubstance.add(new AquiferSubstanceRequest(records.duplicate(), count, future));
+        pendingAquiferSubstance.add(new AquiferSubstanceRequest(records.duplicate(), count, future, System.nanoTime()));
         scheduleDrain();
         return future;
     }
 
     CompletableFuture<int[]> submitAquiferFluidStatus(ByteBuffer records, int count) {
         CompletableFuture<int[]> future = new CompletableFuture<>();
-        pendingAquiferFluidStatus.add(new AquiferFluidStatusRequest(records.duplicate(), count, future));
+        pendingAquiferFluidStatus.add(new AquiferFluidStatusRequest(records.duplicate(), count, future, System.nanoTime()));
         scheduleDrain();
         return future;
     }
@@ -386,7 +412,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
             ByteBuffer nearestRecords, int nearestCount, ByteBuffer statusRecords, int statusCount) {
         CompletableFuture<GpuAquiferPrefillResult> future = new CompletableFuture<>();
         pendingAquiferPrefill.add(new AquiferPrefillRequest(nearestRecords.duplicate(), nearestCount,
-                statusRecords.duplicate(), statusCount, future));
+                statusRecords.duplicate(), statusCount, future, System.nanoTime()));
         scheduleDrain();
         return future;
     }
@@ -435,7 +461,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
         int[] roots = outputRootIndexes.clone();
         CompletableFuture<GpuTerrainBatchResult> future = new CompletableFuture<>();
         pendingTerrainGrids.add(new TerrainGridRequest(graph, inputGridMetadata, chunkCount,
-                samplesPerChunk, inputOutputMetadata, blocksPerChunk, roots, future));
+                samplesPerChunk, inputOutputMetadata, blocksPerChunk, roots, future, System.nanoTime()));
         scheduleDrain();
         return future;
     }
@@ -501,22 +527,26 @@ final class VulkanSubmissionRing implements AutoCloseable {
     }
 
     private record GraphRootsRequest(GpuDensityGraph graph, float[] x, float[] y, float[] z,
-                                     int sampleCount, CompletableFuture<float[]> future) {}
+                                     int sampleCount, CompletableFuture<float[]> future, long enqueuedNanos) {}
     private record GraphRootsGridRequest(GpuDensityGraph graph, ByteBuffer metadata, int chunkCount, int samplesPerChunk,
-                                         CompletableFuture<float[]> future) {}
+                                         CompletableFuture<float[]> future, long enqueuedNanos) {}
     private record TerrainGridRequest(GpuDensityGraph graph, ByteBuffer gridMetadata, int chunkCount,
                                       int samplesPerChunk, ByteBuffer outputMetadata, int blocksPerChunk,
-                                      int[] outputRootIndexes, CompletableFuture<GpuTerrainBatchResult> future) {}
-    private record AquiferNearestRequest(ByteBuffer records, int count, CompletableFuture<int[]> future) {}
-    private record AquiferSubstanceRequest(ByteBuffer records, int count, CompletableFuture<int[]> future) {}
-    private record AquiferFluidStatusRequest(ByteBuffer records, int count, CompletableFuture<int[]> future) {}
+                                      int[] outputRootIndexes, CompletableFuture<GpuTerrainBatchResult> future,
+                                      long enqueuedNanos) {}
+    private record AquiferNearestRequest(ByteBuffer records, int count, CompletableFuture<int[]> future,
+                                        long enqueuedNanos) {}
+    private record AquiferSubstanceRequest(ByteBuffer records, int count, CompletableFuture<int[]> future,
+                                           long enqueuedNanos) {}
+    private record AquiferFluidStatusRequest(ByteBuffer records, int count, CompletableFuture<int[]> future,
+                                             long enqueuedNanos) {}
     private record AquiferPrefillRequest(ByteBuffer nearestRecords, int nearestCount,
                                          ByteBuffer statusRecords, int statusCount,
-                                         CompletableFuture<GpuAquiferPrefillResult> future) {}
+                                         CompletableFuture<GpuAquiferPrefillResult> future, long enqueuedNanos) {}
     @FunctionalInterface
     private interface SlotOperation<T> {
         T call(PersistentVulkanNormalNoiseEngine slot) throws Exception;
     }
     private record BlockingRequest<T>(String description, SlotOperation<T> operation,
-                                      CompletableFuture<T> future) {}
+                                      CompletableFuture<T> future, long enqueuedNanos) {}
 }
