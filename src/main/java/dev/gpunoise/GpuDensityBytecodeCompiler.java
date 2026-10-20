@@ -751,6 +751,8 @@ final class GpuDensityBytecodeCompiler {
                 stack.add(Value.object(holder));
             } else if (fieldValue instanceof Enum<?> enumValue) {
                 stack.add(Value.object(enumValue));
+            } else if (fieldValue instanceof String stringValue && instruction.desc.equals("Ljava/lang/String;")) {
+                stack.add(Value.object(stringValue));
             } else if (fieldValue != null && fieldValue.getClass().isArray()) {
                 stack.add(Value.array(fieldValue));
             } else if (isInlineableHelperValue(fieldValue)) {
@@ -851,6 +853,26 @@ final class GpuDensityBytecodeCompiler {
                     && name.equals("ordinal")
                     && call.desc.equals("()I") && arguments.length == 0) {
                 pushIntegerConstant(enumValue.ordinal());
+                return;
+            }
+
+            // Java string switches lower to String.hashCode(), String.equals(),
+            // then an integer switch. Captured strings and literals are
+            // immutable, so fold these operations exactly while translating.
+            if (receiver != null && receiver.kind() == Kind.OBJECT
+                    && receiver.referenceValue() instanceof String stringValue
+                    && owner.equals("java/lang/String") && arguments.length == 0
+                    && name.equals("hashCode") && call.desc.equals("()I")) {
+                pushIntegerConstant(stringValue.hashCode());
+                return;
+            }
+            if (receiver != null && receiver.kind() == Kind.OBJECT
+                    && receiver.referenceValue() instanceof String stringValue
+                    && owner.equals("java/lang/String") && arguments.length == 1
+                    && name.equals("equals") && call.desc.equals("(Ljava/lang/Object;)Z")
+                    && arguments[0].kind() == Kind.OBJECT
+                    && arguments[0].referenceValue() instanceof String candidate) {
+                pushIntegerConstant(stringValue.equals(candidate) ? 1 : 0);
                 return;
             }
 
@@ -959,6 +981,8 @@ final class GpuDensityBytecodeCompiler {
                 stack.add(Value.density(density));
             } else if (value instanceof Enum<?> enumValue) {
                 stack.add(Value.object(enumValue));
+            } else if (value instanceof String stringValue) {
+                stack.add(Value.object(stringValue));
             } else if (value != null && value.getClass().isArray()) {
                 stack.add(Value.array(value));
             } else if (isInlineableHelperValue(value)) {
@@ -1836,6 +1860,10 @@ final class GpuDensityBytecodeCompiler {
         }
 
         private void ldc(Object constant) {
+            if (constant instanceof String stringValue) {
+                stack.add(Value.object(stringValue));
+                return;
+            }
             if (constant instanceof Number number) {
                 if (constant instanceof Integer integer) pushIntegerConstant(integer);
                 else if (constant instanceof Long) reject("long constants are not represented by the density IR");

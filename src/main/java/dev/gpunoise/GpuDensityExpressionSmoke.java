@@ -177,6 +177,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new EnumSwitchConfigurationDensity());
     }
 
+    static VulkanBranchFixture stringSwitchConfigurationFixture() {
+        return graphFixture(new StringSwitchConfigurationDensity());
+    }
+
     static VulkanBranchFixture enumEqualityConfigurationFixture() {
         return graphFixture(new EnumEqualityConfigurationDensity());
     }
@@ -1035,6 +1039,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new DefaultInterfaceDensity(), "default interface terrain compute implementation");
         verifyStandaloneMath(new RecordConfigurationDensity(), "immutable terrain record configuration");
         verifyStandaloneMath(new EnumSwitchConfigurationDensity(), "enum-switch terrain configuration");
+        verifyStandaloneMath(new StringSwitchConfigurationDensity(), "string-switch terrain configuration");
         verifyStandaloneMath(new EnumEqualityConfigurationDensity(), "enum-equality terrain configuration");
         verifyStandaloneMath(new HolderBackedEnumConfigurationDensity(), "holder-backed enum terrain configuration");
         verifyStandaloneMath(new HolderTypeGuardConfigurationDensity(), "holder-backed typed terrain configuration");
@@ -1879,6 +1884,19 @@ final class GpuDensityExpressionSmoke {
                 case RIDGE -> context.blockX() * 0.125 + context.blockY() * 0.0625;
                 case BASIN -> context.blockZ() * 0.25 - context.blockY() * 0.03125;
                 case SHELF -> Math.abs(context.blockX() - context.blockZ()) * 0.5;
+            };
+        }
+    }
+
+    private static final class StringSwitchConfigurationDensity extends NumericSmokeDensity {
+        private final String mode = "terraced";
+
+        @Override public double compute(FunctionContext context) {
+            return switch (mode) {
+                case "terraced" -> context.blockX() * 0.125 + context.blockY() * 0.0625;
+                case "basin" -> context.blockZ() * 0.25 - context.blockY() * 0.03125;
+                case "ridge" -> Math.abs(context.blockX() - context.blockZ()) * 0.5;
+                default -> context.blockY() * 0.125;
             };
         }
     }
