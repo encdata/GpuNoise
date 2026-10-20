@@ -538,6 +538,16 @@ final class GpuDensityBytecodeCompiler {
         }
 
         private int branchCondition(int opcode, String relation) {
+            if (opcode == Opcodes.IF_ACMPEQ || opcode == Opcodes.IF_ACMPNE) {
+                Value right = pop("object conditional branch");
+                Value left = pop("object conditional branch");
+                if (left.kind() != Kind.OBJECT || right.kind() != Kind.OBJECT
+                        || left.referenceValue() == null || right.referenceValue() == null) {
+                    reject("object conditional branch requires captured non-null constants");
+                }
+                boolean equal = left.referenceValue() == right.referenceValue();
+                return builder.constant((opcode == Opcodes.IF_ACMPEQ) == equal ? 1.0 : 0.0);
+            }
             if (opcode >= Opcodes.IF_ICMPEQ && opcode <= Opcodes.IF_ICMPLE) {
                 Value right = popValue("two-operand conditional branch");
                 Value left = popValue("two-operand conditional branch");
@@ -554,6 +564,8 @@ final class GpuDensityBytecodeCompiler {
 
         private static String branchRelation(int opcode) {
             return switch (opcode) {
+                case Opcodes.IF_ACMPEQ -> "EQ";
+                case Opcodes.IF_ACMPNE -> "NE";
                 case Opcodes.IFEQ, Opcodes.IF_ICMPEQ -> "EQ";
                 case Opcodes.IFNE, Opcodes.IF_ICMPNE -> "NE";
                 case Opcodes.IFLT, Opcodes.IF_ICMPLT -> "LT";
@@ -732,6 +744,8 @@ final class GpuDensityBytecodeCompiler {
                             + instruction.name + " is unbound at density graph compilation");
                 }
                 stack.add(Value.object(holder));
+            } else if (fieldValue instanceof Enum<?> enumValue) {
+                stack.add(Value.object(enumValue));
             } else if (fieldValue != null && fieldValue.getClass().isArray()) {
                 stack.add(Value.array(fieldValue));
             } else if (isInlineableHelperValue(fieldValue)) {
@@ -822,6 +836,16 @@ final class GpuDensityBytecodeCompiler {
                     && call.desc.equals("()Ljava/lang/Object;") && arguments.length == 0) {
                 if (!holder.isBound()) reject("holder.value() is unbound at density graph compilation");
                 pushCapturedObject(holder.value());
+                return;
+            }
+
+            if (receiver != null && receiver.kind() == Kind.OBJECT
+                    && receiver.referenceValue() instanceof Enum<?> enumValue
+                    && (owner.equals("java/lang/Enum")
+                    || owner.equals(Type.getInternalName(enumValue.getDeclaringClass())))
+                    && name.equals("ordinal")
+                    && call.desc.equals("()I") && arguments.length == 0) {
+                pushIntegerConstant(enumValue.ordinal());
                 return;
             }
 
@@ -928,6 +952,8 @@ final class GpuDensityBytecodeCompiler {
                 stack.add(Value.noise(noise));
             } else if (value instanceof DensityFunction density) {
                 stack.add(Value.density(density));
+            } else if (value instanceof Enum<?> enumValue) {
+                stack.add(Value.object(enumValue));
             } else if (value != null && value.getClass().isArray()) {
                 stack.add(Value.array(value));
             } else if (isInlineableHelperValue(value)) {
@@ -1848,7 +1874,9 @@ final class GpuDensityBytecodeCompiler {
 
     private static Object readField(Object instance, String owner, String name, String descriptor,
                                     boolean staticAccess) {
-        Class<?> root = staticAccess ? resolveOwnerClass(instance.getClass(), owner) : instance.getClass();
+        Class<?> root = staticAccess
+                ? resolveOwnerClass(instance == null ? GpuDensityBytecodeCompiler.class : instance.getClass(), owner)
+                : instance.getClass();
         Field field = findField(root, owner, name);
         if (field == null) {
             throw new UnsupportedBytecode("field owner is not in the density class/interface hierarchy: " + owner);

@@ -173,6 +173,14 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new HolderBackedConfigurationDensity());
     }
 
+    static VulkanBranchFixture enumSwitchConfigurationFixture() {
+        return graphFixture(new EnumSwitchConfigurationDensity());
+    }
+
+    static VulkanBranchFixture enumEqualityConfigurationFixture() {
+        return graphFixture(new EnumEqualityConfigurationDensity());
+    }
+
     static VulkanBranchFixture mixedTerrainRootFixture() {
         DensityFunction supported = new FinalFieldConfigurationDensity();
         GpuDensityGraph baseline = GpuDensityGraphLowerer.lower(
@@ -1018,6 +1026,8 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new InheritedComputeDensity(), "inherited terrain compute implementation");
         verifyStandaloneMath(new DefaultInterfaceDensity(), "default interface terrain compute implementation");
         verifyStandaloneMath(new RecordConfigurationDensity(), "immutable terrain record configuration");
+        verifyStandaloneMath(new EnumSwitchConfigurationDensity(), "enum-switch terrain configuration");
+        verifyStandaloneMath(new EnumEqualityConfigurationDensity(), "enum-equality terrain configuration");
         verifyStandaloneMath(new HolderBackedConfigurationDensity(), "bound registry-holder terrain configuration");
         verifyStandaloneMath(new MinecraftMathOverloadsDensity(), "Mth float and integer overloads");
         verifyStandaloneMath(new DynamicClampDensity(), "dynamic Mth.clamp overloads");
@@ -1841,6 +1851,30 @@ final class GpuDensityExpressionSmoke {
     private static final class DefaultInterfaceDensity implements DefaultInterfaceTerrainDensity {}
 
     private record TerrainShapeParameters(double horizontalScale, double verticalScale) {}
+
+    private enum TerrainMode { RIDGE, BASIN, SHELF }
+
+    private static final class EnumSwitchConfigurationDensity extends NumericSmokeDensity {
+        private final TerrainMode mode = TerrainMode.BASIN;
+
+        @Override public double compute(FunctionContext context) {
+            return switch (mode) {
+                case RIDGE -> context.blockX() * 0.125 + context.blockY() * 0.0625;
+                case BASIN -> context.blockZ() * 0.25 - context.blockY() * 0.03125;
+                case SHELF -> Math.abs(context.blockX() - context.blockZ()) * 0.5;
+            };
+        }
+    }
+
+    private static final class EnumEqualityConfigurationDensity extends NumericSmokeDensity {
+        private static final TerrainMode MODE = TerrainMode.SHELF;
+
+        @Override public double compute(FunctionContext context) {
+            if (MODE == TerrainMode.RIDGE) return context.blockX() * 0.125;
+            if (MODE == TerrainMode.SHELF) return context.blockZ() * 0.25 + 3.0;
+            return context.blockY() * 0.5;
+        }
+    }
 
     private static final class TerrainShapeParametersObject {
         private final double horizontalScale;

@@ -212,6 +212,10 @@ public final class VulkanCiSmoke {
                     "default interface terrain compute implementation", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.recordConfigurationFixture(),
                     "immutable terrain record configuration", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.enumSwitchConfigurationFixture(),
+                    "enum-switch terrain configuration", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.enumEqualityConfigurationFixture(),
+                    "enum-equality terrain configuration", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.finalFieldConfigurationFixture(),
                     "final-field terrain helper object", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.holderBackedConfigurationFixture(),
