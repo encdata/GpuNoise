@@ -713,10 +713,10 @@ public final class GpuTerrainRuntime {
                 16 / cellWidth + 1, cellWidth, cellHeight);
         try {
             // Validate the actual grid metadata directly. The spatial batcher
-            // is exercised by worldgen. Software Vulkan uses a pruned
-            // initial-density-only block pass below, which keeps surface
-            // estimation available without materializing three full roots
-            // during startup.
+            // is exercised by worldgen. Software Vulkan verifies only the
+            // final-density block root: this is the dense input required by
+            // the batched aquifer material pass, while avoiding the larger
+            // multi-root readback that previously made Mesa startup time out.
             VulkanSubmissionRing ring = submissionRing;
             if (ring == null) throw new IllegalStateException("Vulkan submission pool is not installed");
             java.nio.ByteBuffer metadata = java.nio.ByteBuffer.allocateDirect(32)
@@ -725,8 +725,8 @@ public final class GpuTerrainRuntime {
                     .putInt(grid.gridX()).putInt(grid.gridY()).putInt(grid.gridZ())
                     .putInt(grid.cellWidth()).putInt(grid.cellHeight()).flip();
             int[] blockRoots = terrainBlockOutputRootIndexes();
-            int[] softwareBlockRoots = graph.supportsRouterRoot(GpuTerrainRoots.INITIAL_DENSITY)
-                    ? new int[]{GpuTerrainRoots.INITIAL_DENSITY} : new int[0];
+            int[] softwareBlockRoots = graph.supportsRouterRoot(GpuTerrainRoots.FINAL_DENSITY)
+                    ? new int[]{GpuTerrainRoots.FINAL_DENSITY} : new int[0];
             int blocksPerChunk = Math.multiplyExact(256, settings.height());
             java.nio.ByteBuffer outputMetadata = GpuInterpolationBatch.metadata(1, grid.gridX() - 1,
                     grid.gridY() - 1, grid.gridZ() - 1, grid.cellWidth(), grid.cellHeight(),
