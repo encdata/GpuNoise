@@ -424,12 +424,30 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
      */
     synchronized CompletableFuture<float[]> submitGraphRootsAsync(GpuDensityGraph graph, float[] xs, float[] ys,
                                                                     float[] zs, int sampleCount) throws Exception {
+        int[] roots = new int[graph.routerRootCount()];
+        for (int i = 0; i < roots.length; i++) roots[i] = i;
+        return submitGraphRootsAsync(graph, xs, ys, zs, sampleCount, roots);
+    }
+
+    synchronized CompletableFuture<float[]> submitGraphRootsAsync(GpuDensityGraph graph, float[] xs, float[] ys,
+                                                                    float[] zs, int sampleCount,
+                                                                    int[] outputRootIndexes) throws Exception {
         if (inFlightGraphRoots != null) throw new IllegalStateException("graph-roots slot is still in flight");
         if (xs.length != ys.length || xs.length != zs.length || sampleCount < 0 || sampleCount > xs.length || sampleCount > CAPACITY)
             throw new IllegalArgumentException("invalid graph batch");
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
-        int rootCount = graph.routerRootCount();
-        if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16) throw new IllegalArgumentException("density graph exceeds GPU capacity");
+        int rootCount = outputRootIndexes.length;
+        if (packed.nodeCount() > GRAPH_NODE_CAPACITY || graph.routerRootCount() > 16
+                || rootCount <= 0 || rootCount > 16)
+            throw new IllegalArgumentException("density graph output roots exceed GPU capacity");
+        int[] selectedRootRegisters = new int[rootCount];
+        int[] graphRoots = graph.routerRoots();
+        for (int i = 0; i < rootCount; i++) {
+            int rootIndex = outputRootIndexes[i];
+            if (rootIndex < 0 || rootIndex >= graphRoots.length)
+                throw new IllegalArgumentException("invalid output router root index " + rootIndex);
+            selectedRootRegisters[i] = graphRoots[rootIndex];
+        }
         long preparationStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
@@ -440,7 +458,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 put(permutations, packed.permutations(), stack); put(octaves, packed.octaves(), stack);
                 put(samplerMetadata, packed.samplerMetadata(), stack); graphResourcesGraph = graph; graphResourcesPacked = packed;
             }
-            uploadGraphRoots(graph.routerRoots(), stack);
+            uploadGraphRoots(selectedRootRegisters, stack);
             check(vkResetCommandBuffer(commandBuffer, 0), "reset async graph-roots command buffer");
             check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin async graph-roots command buffer");
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipeline);

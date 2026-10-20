@@ -416,7 +416,25 @@ final class VulkanSubmissionRing implements AutoCloseable {
     CompletableFuture<float[]> submitGraphRoots(GpuDensityGraph graph, float[] x, float[] y, float[] z, int sampleCount) {
         CompletableFuture<float[]> future = new CompletableFuture<>();
         enqueue(pendingGraphRoots, () -> new GraphRootsRequest(graph, x.clone(), y.clone(), z.clone(), sampleCount,
-                future, System.nanoTime()), future, "graph roots");
+                null, future, System.nanoTime()), future, "graph roots");
+        return future;
+    }
+
+    CompletableFuture<float[]> submitGraphRoots(GpuDensityGraph graph, float[] x, float[] y, float[] z,
+                                                  int[] outputRootIndexes) {
+        return submitGraphRoots(graph, x, y, z, x.length, outputRootIndexes);
+    }
+
+    CompletableFuture<float[]> submitGraphRoots(GpuDensityGraph graph, float[] x, float[] y, float[] z,
+                                                  int sampleCount, int[] outputRootIndexes) {
+        CompletableFuture<float[]> future = new CompletableFuture<>();
+        if (outputRootIndexes == null || outputRootIndexes.length == 0 || outputRootIndexes.length > 16
+                || sampleCount < 0 || sampleCount > x.length || x.length != y.length || x.length != z.length) {
+            future.completeExceptionally(new IllegalArgumentException("invalid selected graph roots request"));
+            return future;
+        }
+        enqueue(pendingGraphRoots, () -> new GraphRootsRequest(graph, x.clone(), y.clone(), z.clone(), sampleCount,
+                outputRootIndexes.clone(), future, System.nanoTime()), future, "selected graph roots");
         return future;
     }
 
@@ -567,6 +585,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 while (totalSamples < PersistentVulkanNormalNoiseEngine.CAPACITY) {
                     GraphRootsRequest next = pendingGraphRoots.peek();
                     if (next == null || next.future.isDone() || next.graph != first.graph
+                            || !java.util.Arrays.equals(next.outputRootIndexes, first.outputRootIndexes)
                             || next.sampleCount <= 0
                             || next.sampleCount > PersistentVulkanNormalNoiseEngine.CAPACITY - totalSamples
                             || next.sampleCount > next.x.length
@@ -582,7 +601,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
         }
         if (requests.size() == 1) {
             try {
-                slot.submitGraphRootsAsync(first.graph, first.x, first.y, first.z, first.sampleCount)
+                submitGraphRootsAsync(slot, first)
                         .whenComplete((result, failure) ->
                                 completeOnDispatchWorker(first.future, result, failure));
             } catch (Throwable failure) {
@@ -610,7 +629,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
                         completeOnDispatchWorker(request.future, null, failure);
                     return;
                 }
-                int roots = first.graph.routerRootCount();
+                int roots = first.outputRootIndexes == null
+                        ? first.graph.routerRootCount() : first.outputRootIndexes.length;
                 int expected = Math.multiplyExact(batchSamples, roots);
                 if (result == null || result.length != expected) {
                     IllegalStateException invalid = new IllegalStateException(
@@ -636,6 +656,23 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 request.future.completeExceptionally(new IllegalStateException(
                         "GPU ring graph-roots batch submission failed", failure));
         }
+    }
+
+    private static CompletableFuture<float[]> submitGraphRootsAsync(PersistentVulkanNormalNoiseEngine slot,
+                                                                      GraphRootsRequest request) throws Exception {
+        if (request.outputRootIndexes == null)
+            return slot.submitGraphRootsAsync(request.graph, request.x, request.y, request.z, request.sampleCount);
+        return slot.submitGraphRootsAsync(request.graph, request.x, request.y, request.z,
+                request.sampleCount, request.outputRootIndexes);
+    }
+
+    private static CompletableFuture<float[]> submitGraphRootsAsync(PersistentVulkanNormalNoiseEngine slot,
+                                                                      GraphRootsRequest request, float[] x,
+                                                                      float[] y, float[] z, int sampleCount)
+            throws Exception {
+        if (request.outputRootIndexes == null)
+            return slot.submitGraphRootsAsync(request.graph, x, y, z, sampleCount);
+        return slot.submitGraphRootsAsync(request.graph, x, y, z, sampleCount, request.outputRootIndexes);
     }
 
     @SuppressWarnings("unchecked")
@@ -1435,7 +1472,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
     }
 
     private record GraphRootsRequest(GpuDensityGraph graph, float[] x, float[] y, float[] z,
-                                     int sampleCount, CompletableFuture<float[]> future, long enqueuedNanos)
+                                     int sampleCount, int[] outputRootIndexes,
+                                     CompletableFuture<float[]> future, long enqueuedNanos)
             implements DispatchRequest {}
     private record GraphRootsGridRequest(GpuDensityGraph graph, ByteBuffer metadata, int chunkCount, int samplesPerChunk,
                                          CompletableFuture<float[]> future, long enqueuedNanos)

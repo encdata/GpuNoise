@@ -336,10 +336,15 @@ public final class GpuTerrainRuntime {
         }
         GpuBiomeSearchBatchScheduler scheduler = biomeSearchScheduler;
         if (scheduler == null) return CompletableFuture.completedFuture(null);
-        return submitTerrainRootsDirect(xs, ys, zs, sampleCount).thenCompose(climateRoots -> {
-            int[] climateRootIds = {GpuTerrainRoots.TEMPERATURE, GpuTerrainRoots.VEGETATION,
-                    GpuTerrainRoots.CONTINENTS, GpuTerrainRoots.EROSION,
-                    GpuTerrainRoots.DEPTH, GpuTerrainRoots.RIDGES};
+        int[] climateRootIds = {GpuTerrainRoots.TEMPERATURE, GpuTerrainRoots.VEGETATION,
+                GpuTerrainRoots.CONTINENTS, GpuTerrainRoots.EROSION,
+                GpuTerrainRoots.DEPTH, GpuTerrainRoots.RIDGES};
+        GpuDensityGraph graph = terrainGraph;
+        if (graph == null) return CompletableFuture.completedFuture(null);
+        for (int root : climateRootIds) {
+            if (!graph.supportsRouterRoot(root)) return CompletableFuture.completedFuture(null);
+        }
+        return submitTerrainRootsDirect(xs, ys, zs, sampleCount, climateRootIds).thenCompose(climateRoots -> {
             for (int root : climateRootIds) {
                 if (root >= climateRoots.roots()) return CompletableFuture.completedFuture(null);
             }
@@ -661,6 +666,19 @@ public final class GpuTerrainRuntime {
         return ring.submitGraphRoots(graph, x, y, z, sampleCount)
                 .thenApply(values -> new GpuTerrainRootsResult(values, 0, values.length,
                         graph.routerRootCount()));
+    }
+
+    /** Compact climate-only readback for biome search; root IDs remain addressable in the result view. */
+    static java.util.concurrent.CompletionStage<GpuTerrainRootsResult> submitTerrainRootsDirect(
+            float[] x, float[] y, float[] z, int sampleCount, int[] outputRootIndexes) {
+        VulkanSubmissionRing ring = terrainRing;
+        GpuDensityGraph graph = terrainGraph;
+        if (ring == null || graph == null) return java.util.concurrent.CompletableFuture.failedStage(
+                new IllegalStateException("GPU terrain graph provider is not installed"));
+        int[] rootIndexes = outputRootIndexes.clone();
+        return ring.submitGraphRoots(graph, x, y, z, sampleCount, rootIndexes)
+                .thenApply(values -> new GpuTerrainRootsResult(values, 0, values.length,
+                        graph.routerRootCount(), rootIndexes.length, 0, rootIndexes));
     }
 
     static java.util.concurrent.CompletionStage<float[]> submitInterpolation(float[] corners, java.nio.ByteBuffer metadata,
