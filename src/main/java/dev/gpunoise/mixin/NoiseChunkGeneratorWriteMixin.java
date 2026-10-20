@@ -19,6 +19,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.List;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -195,15 +196,9 @@ abstract class NoiseChunkGeneratorWriteMixin {
         int cellHeight = generatorSettings().value().noiseSettings().getCellHeight();
         int top = chunk.getSectionIndex(cellCountY * cellHeight - 1 + minY);
         int bottom = chunk.getSectionIndex(minY);
-        // ChunkAccess already owns this array. Reusing it avoids allocating a
-        // temporary section array and avoids a getSection() call for every
-        // section on every chunk fill.
         LevelChunkSection[] sections = chunk.getSections();
-        for (int sectionIndex = top; sectionIndex >= bottom; sectionIndex--) {
-            sections[sectionIndex].acquire();
-        }
+        GpuFillState state = new GpuFillState();
         try {
-            GpuFillState state = new GpuFillState();
             // Byepregen replaces the normal PalettedContainer resize path
             // with its own raw-ID palette handling. Our direct section writer
             // calls PalettedContainer.set directly, which can reach a
@@ -233,18 +228,31 @@ abstract class NoiseChunkGeneratorWriteMixin {
                                 chunk.getPos().getMinBlockZ(), cellCountY * cellHeight)) {
                     if (gpunoise$loggedDecisionWriter.compareAndSet(false, true)) {
                         dev.gpunoise.GpuNoise.LOGGER.info(
-                                "GPU terrain material decisions are available; using the hybrid decision-driven CPU fill writer.");
+                                "GPU terrain material decisions are available; using the aligned region-owned CPU writer.");
                     }
-                    return dev.gpunoise.GpuTerrainDecisionWriter.write(chunk, noiseChunk, decisions,
-                            minCellY, cellCountY,
-                            generatorSettings().value().noiseSettings().getCellWidth(),
-                            cellHeight, generatorSettings().value().defaultBlock(), state);
+                    return dev.gpunoise.GpuTerrainDecisionWriter.writeRegion(List.of(
+                            new dev.gpunoise.GpuTerrainDecisionWriter.ChunkFill(chunk, noiseChunk,
+                                    decisions, minCellY, cellCountY,
+                                    generatorSettings().value().noiseSettings().getCellWidth(),
+                                    cellHeight, generatorSettings().value().defaultBlock(), state))).get(0);
                 }
                 if (gpunoise$loggedDecisionWriterFallback.compareAndSet(false, true)) {
                     dev.gpunoise.GpuNoise.LOGGER.info(
                             "GPU terrain material table is incomplete or unavailable; using vanilla block-state fill for this chunk.");
                 }
-                return gpunoise$doFill(blender, structures, randomState, chunk, minCellY, cellCountY);
+                // The compatibility branch keeps section ownership around
+                // Minecraft's normal palette resizing and material rules.
+                state.directWritesSafe = false;
+                for (int sectionIndex = top; sectionIndex >= bottom; sectionIndex--) {
+                    sections[sectionIndex].acquire();
+                }
+                try {
+                    return gpunoise$doFill(blender, structures, randomState, chunk, minCellY, cellCountY);
+                } finally {
+                    for (int sectionIndex = bottom; sectionIndex <= top; sectionIndex++) {
+                        sections[sectionIndex].release();
+                    }
+                }
             } finally {
                 dev.gpunoise.GpuTerrainDensityParity.reportChunk(
                         chunk.getPos().x, chunk.getPos().z);
@@ -255,9 +263,6 @@ abstract class NoiseChunkGeneratorWriteMixin {
         } finally {
             gpunoise$fillState.remove();
             GpuTerrainRuntime.releaseGpuCache(cache);
-            for (int sectionIndex = top; sectionIndex >= bottom; sectionIndex--) {
-                sections[sectionIndex].release();
-            }
         }
     }
 

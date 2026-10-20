@@ -8,6 +8,10 @@ import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.levelgen.NoiseChunk;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 /** CPU terrain writer driven by parity-admitted Vulkan aquifer decisions. */
 public final class GpuTerrainDecisionWriter {
@@ -16,6 +20,77 @@ public final class GpuTerrainDecisionWriter {
     private static final int TRACE_Z = Integer.getInteger("gpunoise.traceAquiferBlockZ", Integer.MIN_VALUE);
 
     private GpuTerrainDecisionWriter() {}
+
+    /** A fully prepared chunk that can be written as part of one aligned region. */
+    public record ChunkFill(ChunkAccess chunk, NoiseChunk noiseChunk,
+                            GpuAquiferDecisionTable decisions, int minCellY, int cellCountY,
+                            int cellWidth, int cellHeight, BlockState defaultBlock,
+                            GpuFillState fillState) {
+        public ChunkFill {
+            if (chunk == null || noiseChunk == null || decisions == null || defaultBlock == null
+                    || fillState == null || cellCountY <= 0 || cellWidth <= 0 || cellHeight <= 0
+                    || 16 % cellWidth != 0 || decisions.validCount() == 0) {
+                throw new IllegalArgumentException("invalid GPU terrain chunk fill");
+            }
+            if (!decisions.coversChunk(chunk.getPos().getMinBlockX(), minCellY * cellHeight,
+                    chunk.getPos().getMinBlockZ(), cellCountY * cellHeight)) {
+                throw new IllegalArgumentException("aquifer decision table does not cover chunk fill");
+            }
+        }
+    }
+
+    /**
+     * Writes a compatible aligned chunk region with all participating
+     * sections acquired together, following OCL's region ownership strategy.
+     * The request may contain a partial region when neighboring chunks are not
+     * ready yet; each supplied chunk is still written exactly once.
+     */
+    public static List<ChunkAccess> writeRegion(List<ChunkFill> fills) {
+        if (fills == null || fills.isEmpty() || fills.size() > 16) {
+            throw new IllegalArgumentException("terrain write region must contain 1..16 chunks");
+        }
+        ChunkFill first = fills.get(0);
+        int regionX = Math.floorDiv(first.chunk().getPos().x, 4);
+        int regionZ = Math.floorDiv(first.chunk().getPos().z, 4);
+        Set<ChunkAccess> uniqueChunks = new HashSet<>(fills.size());
+        ArrayList<LevelChunkSection> acquired = new ArrayList<>(fills.size() * 8);
+        ArrayList<ChunkAccess> written = new ArrayList<>(fills.size());
+        try {
+            for (ChunkFill fill : fills) {
+                if (Math.floorDiv(fill.chunk().getPos().x, 4) != regionX
+                        || Math.floorDiv(fill.chunk().getPos().z, 4) != regionZ
+                        || fill.minCellY() != first.minCellY()
+                        || fill.cellCountY() != first.cellCountY()
+                        || fill.cellWidth() != first.cellWidth()
+                        || fill.cellHeight() != first.cellHeight()
+                        || !fill.defaultBlock().equals(first.defaultBlock())
+                        || !uniqueChunks.add(fill.chunk())) {
+                    throw new IllegalArgumentException("incompatible or duplicate chunk in terrain write region");
+                }
+                int minY = fill.minCellY() * fill.cellHeight();
+                int top = fill.chunk().getSectionIndex(
+                        fill.cellCountY() * fill.cellHeight() - 1 + minY);
+                int bottom = fill.chunk().getSectionIndex(minY);
+                LevelChunkSection[] sections = fill.chunk().getSections();
+                if (bottom < 0 || top >= sections.length || bottom > top) {
+                    throw new IllegalArgumentException("terrain write range is outside chunk sections");
+                }
+                for (int sectionIndex = top; sectionIndex >= bottom; sectionIndex--) {
+                    LevelChunkSection section = sections[sectionIndex];
+                    section.acquire();
+                    acquired.add(section);
+                }
+            }
+            for (ChunkFill fill : fills) {
+                written.add(write(fill.chunk(), fill.noiseChunk(), fill.decisions(),
+                        fill.minCellY(), fill.cellCountY(), fill.cellWidth(), fill.cellHeight(),
+                        fill.defaultBlock(), fill.fillState()));
+            }
+            return List.copyOf(written);
+        } finally {
+            for (int i = acquired.size() - 1; i >= 0; i--) acquired.get(i).release();
+        }
+    }
 
     /**
      * Preserves NoiseChunk's cell-interpolation lifecycle and uses resolved
