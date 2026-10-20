@@ -29,6 +29,7 @@ final class GpuRuntimeShaderCompiler {
         // UTF-8 terminator from the source payload. File and entry names below
         // are C strings and remain null-terminated.
         ByteBuffer sourceText = MemoryUtil.memUTF8(source, false);
+        int sourceByteCount = sourceText.remaining();
         ByteBuffer inputFile = MemoryUtil.memUTF8(resource, true);
         ByteBuffer entryPoint = MemoryUtil.memUTF8("main", true);
         long compiler = shaderc_compiler_initialize();
@@ -86,9 +87,9 @@ final class GpuRuntimeShaderCompiler {
             ByteBuffer compiled = shaderc_result_get_bytes(result);
             ByteBuffer owned = MemoryUtil.memAlloc(compiled.remaining());
             owned.put(compiled).flip();
-            GpuNoise.LOGGER.info("Runtime Vulkan shader compiled: program={}, instructions={}, customDensityTypes={}, sourceBytes={}, spirvBytes={}, elapsedMs={}",
+            GpuNoise.LOGGER.info("Runtime Vulkan shader compiled: program={}, instructions={}, customDensityTypes={}, sourceBytes={}, spirvBytes={}, elapsedMicros={}",
                     programName, blockProgram ? packed.blockNodeCount() : packed.nodeCount(), customTypes,
-                    source.length(), owned.remaining(), (System.nanoTime() - started) / 1_000_000L);
+                    sourceByteCount, owned.remaining(), (System.nanoTime() - started) / 1_000L);
             return owned;
         } finally {
             if (result != 0L) shaderc_result_release(result);

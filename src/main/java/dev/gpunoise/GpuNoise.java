@@ -25,6 +25,8 @@ public final class GpuNoise {
     public static final Logger LOGGER = LogUtils.getLogger();
     private GpuDevice warmedDevice;
     private boolean worldGraphSetupAttempted;
+    /** Prevents the ServerStarting fallback from replaying a completed startup probe. */
+    private boolean worldPreparationAttempted;
 
     public GpuNoise(IEventBus modEventBus, ModContainer modContainer) {
         // Defer Vulkan probing until ServerAboutToStart. That event still
@@ -41,6 +43,7 @@ public final class GpuNoise {
         GpuTerrainRuntime.stop();
         warmedDevice = null;
         worldGraphSetupAttempted = false;
+        worldPreparationAttempted = false;
         GpuCompileStatus.clear();
     }
 
@@ -57,7 +60,9 @@ public final class GpuNoise {
     }
 
     private void onServerAboutToStart(ServerAboutToStartEvent event) {
-        GpuCompileStatus.begin("Preparing the world terrain pipeline");
+        if (worldPreparationAttempted) return;
+        worldPreparationAttempted = true;
+        GpuCompileStatus.begin("Preparing world terrain");
         if (Boolean.getBoolean("gpunoise.vulkanSmoke")) {
             VulkanCiSmoke.prepareTranslatorIntegration();
         }
@@ -69,14 +74,19 @@ public final class GpuNoise {
         if (warmedDevice == null) {
             warmGpuBeforeWorldgen(GpuNoiseConfig.GPU_VENDOR.get());
         }
-        if (warmedDevice != null && event.getServer().overworld() != null) {
-            installWorldGraph(event.getServer());
+        if (warmedDevice != null) {
+            if (event.getServer().overworld() != null) {
+                installWorldGraph(event.getServer());
+            } else {
+                GpuCompileStatus.clear();
+            }
         }
     }
 
     private void onServerStarting(ServerStartingEvent event) {
-        if (Boolean.getBoolean("gpunoise.forceCpuTerrain")) return;
-        GpuCompileStatus.begin("Preparing the world terrain pipeline");
+        if (Boolean.getBoolean("gpunoise.forceCpuTerrain") || worldPreparationAttempted) return;
+        worldPreparationAttempted = true;
+        GpuCompileStatus.begin("Preparing world terrain");
         if (warmedDevice == null) warmGpuBeforeWorldgen(GpuNoiseConfig.GPU_VENDOR.get());
         if (worldGraphSetupAttempted || warmedDevice == null || event.getServer().overworld() == null) {
             GpuCompileStatus.clear();
