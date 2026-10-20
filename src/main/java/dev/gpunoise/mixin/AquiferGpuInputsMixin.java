@@ -77,6 +77,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private volatile CompletableFuture<Void> gpunoise$decisionBuild;
 
     @org.spongepowered.asm.mixin.Unique
+    private volatile boolean gpunoise$decisionBuildFallback;
+
+    @org.spongepowered.asm.mixin.Unique
     private static final AtomicBoolean gpunoise$aquiferBatchWarning = new AtomicBoolean();
 
     @org.spongepowered.asm.mixin.Unique
@@ -219,8 +222,13 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         synchronized (this) {
             if (gpunoise$decisions != null || gpunoise$decisionBuild != null) return;
             try {
-                gpunoise$decisionBuild = CompletableFuture.runAsync(
+                CompletableFuture<Void> build = CompletableFuture.runAsync(
                         () -> gpunoise$prepareGpuDecisions(cache, noiseChunk), gpunoise$aquiferDecisionExecutor);
+                build.whenComplete((ignored, failure) -> {
+                    if (failure != null || gpunoise$decisions == null)
+                        gpunoise$decisionBuildFallback = true;
+                });
+                gpunoise$decisionBuild = build;
             } catch (RuntimeException rejected) {
                 if (gpunoise$aquiferBatchWarning.compareAndSet(false, true)) {
                     dev.gpunoise.GpuNoise.LOGGER.warn(
@@ -266,7 +274,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         GpuAquiferDecisionTable decisions = gpunoise$decisions;
         if (decisions == null) {
             CompletableFuture<Void> build = gpunoise$decisionBuild;
-            if (build != null) {
+            if (build != null && !gpunoise$decisionBuildFallback) {
                 long waitStart = build.isDone() ? 0L : GpuTerrainProfiler.beginPhase();
                 try {
                     build.join();
@@ -279,6 +287,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     GpuTerrainProfiler.recordAquiferDecisionWait(waitStart);
                 }
                 decisions = gpunoise$decisions;
+                if (decisions == null) gpunoise$decisionBuildFallback = true;
             }
         }
         if (decisions == null) {
