@@ -21,6 +21,7 @@ import net.minecraft.world.level.levelgen.NoiseRouter;
 /** Runtime bridge used by the vanilla DensityFunctions.Noise fill hook. */
 public final class GpuTerrainRuntime {
     public static final float GRAPH_PARITY_EPSILON = 5.0E-3f;
+    private static final long STARTUP_PARITY_TIMEOUT_SECONDS = 120L;
     private static volatile GpuDevice device;
     private static volatile PersistentVulkanNormalNoiseEngine engine;
     private static volatile VulkanSubmissionRing submissionRing;
@@ -663,7 +664,9 @@ public final class GpuTerrainRuntime {
                 16 / cellWidth + 1, settings.height() / cellHeight + 1,
                 16 / cellWidth + 1, cellWidth, cellHeight);
         try {
-            GpuTerrainBatchResult batch = scheduler.submit(grid).toCompletableFuture().join();
+            GpuTerrainBatchResult batch = scheduler.submit(grid).toCompletableFuture()
+                    .orTimeout(STARTUP_PARITY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+                    .join();
             GpuTerrainRootsResult values = batch.corners();
             DensityFunction[] cpu = {
                     router.finalDensity(), router.initialDensityWithoutJaggedness(),
@@ -904,7 +907,9 @@ public final class GpuTerrainRuntime {
     private static float[] submitGraphRootsForParity(GpuDensityGraph graph, float[] x, float[] y, float[] z) {
         VulkanSubmissionRing ring = submissionRing;
         if (ring == null) throw new IllegalStateException("Vulkan submission ring is not installed");
-        return ring.submitGraphRoots(graph, x, y, z).join();
+        return ring.submitGraphRoots(graph, x, y, z)
+                .orTimeout(STARTUP_PARITY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+                .join();
     }
 
     private static void fillVolumeParitySamples(float[] x, float[] y, float[] z) {

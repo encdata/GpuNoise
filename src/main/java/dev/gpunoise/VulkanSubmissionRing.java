@@ -320,6 +320,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
             case GRAPH_ROOTS -> {
                 GraphRootsRequest request = pendingGraphRoots.poll();
                 if (request == null) return false;
+                if (request.future.isDone()) return false;
                 recordQueueWait(request.enqueuedNanos, requestClass);
                 try {
                     slot.submitGraphRootsAsync(request.graph, request.x, request.y, request.z, request.sampleCount)
@@ -342,6 +343,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
             case FULL_TERRAIN -> {
                 TerrainGridRequest terrain = pendingTerrainGrids.poll();
                 if (terrain == null) return false;
+                if (terrain.future.isDone()) return false;
                 recordQueueWait(terrain.enqueuedNanos, requestClass);
                 try {
                     slot.submitGraphGridInterpolated(terrain.graph, terrain.gridMetadata,
