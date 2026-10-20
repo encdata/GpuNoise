@@ -325,6 +325,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         final int height = cache.height();
         int decisionCapacity = Math.multiplyExact(height, 256);
         GpuAquiferDecisionTable decisions = new GpuAquiferDecisionTable(minX, minY, minZ, height);
+        GpuChunkDensityCache.FinalDensityBlockView finalDensityBlockView = cache.finalDensityBlockView();
         AquiferQueries queries = new AquiferQueries(decisionCapacity);
         GpuAquiferSubstance.BatchWriter substanceWriter =
                 new GpuAquiferSubstance.BatchWriter(decisionCapacity, gpunoise$substanceRowsPerDispatch);
@@ -351,7 +352,11 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         for (int y = minY; y < minY + height; y++) {
             for (int z = minZ; z < minZ + 16; z++) {
                 for (int x = minX; x < minX + 16; x++) {
-                    double cachedDensity = cache.finalDensity(x, y, z);
+                    int localX = x - minX, localY = y - minY, localZ = z - minZ;
+                    double cachedDensity = finalDensityBlockView != null
+                            && finalDensityBlockView.containsLocal(localX, localY, localZ)
+                            ? finalDensityBlockView.valueAtLocalUnchecked(localX, localY, localZ)
+                            : cache.finalDensity(x, y, z);
                     double density = noiseAccess.gpunoise$withBeardifier(cachedDensity, x, y, z);
                     if (!Double.isFinite(density)) continue;
                     int index = (y - minY) * 256 + (z - minZ) * 16 + (x - minX);

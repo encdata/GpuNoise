@@ -66,6 +66,12 @@ final class GpuTerrainBlockResult {
         return root < 0 || root >= outputIndexesByRoot.length ? -1 : outputIndexesByRoot[root];
     }
 
+    RootView rootView(int root) {
+        int outputRoot = outputIndexForRoot(root);
+        return outputRoot < 0 ? null : new RootView(values, offset, roots, outputRoot,
+                blocksX, blocksY, blocksZ);
+    }
+
     float valueAt(int x, int y, int z, int root) {
         if (!contains(x, y, z) || outputIndexForRoot(root) < 0) throw new IndexOutOfBoundsException();
         return valueAtUnchecked(x, y, z, root);
@@ -89,5 +95,32 @@ final class GpuTerrainBlockResult {
         int[] roots = new int[count];
         for (int i = 0; i < count; i++) roots[i] = i;
         return roots;
+    }
+
+    /** Prebound read access for hot loops that scan a complete root volume. */
+    static final class RootView {
+        private final float[] values;
+        private final int offset, roots, outputRoot, blocksX, blocksY, blocksZ;
+
+        private RootView(float[] values, int offset, int roots, int outputRoot,
+                         int blocksX, int blocksY, int blocksZ) {
+            this.values = values;
+            this.offset = offset;
+            this.roots = roots;
+            this.outputRoot = outputRoot;
+            this.blocksX = blocksX;
+            this.blocksY = blocksY;
+            this.blocksZ = blocksZ;
+        }
+
+        boolean contains(int x, int y, int z) {
+            return x >= 0 && y >= 0 && z >= 0
+                    && x < blocksX && y < blocksY && z < blocksZ;
+        }
+
+        float valueAtUnchecked(int x, int y, int z) {
+            int block = (y * blocksZ + z) * blocksX + x;
+            return values[offset + block * roots + outputRoot];
+        }
     }
 }

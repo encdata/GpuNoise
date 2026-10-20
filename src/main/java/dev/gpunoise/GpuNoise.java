@@ -75,12 +75,15 @@ public final class GpuNoise {
         if (warmedDevice == null) {
             warmGpuBeforeWorldgen(GpuNoiseConfig.GPU_VENDOR.get());
         }
+        if (event.getServer().overworld() == null) {
+            // Preserve the later ServerStarting fallback if this lifecycle
+            // event arrives before NeoForge has created the overworld.
+            worldPreparationAttempted = false;
+            GpuCompileStatus.clear();
+            return;
+        }
         if (warmedDevice != null) {
-            if (event.getServer().overworld() != null) {
-                installWorldGraph(event.getServer());
-            } else {
-                GpuCompileStatus.clear();
-            }
+            installWorldGraph(event.getServer());
         }
     }
 

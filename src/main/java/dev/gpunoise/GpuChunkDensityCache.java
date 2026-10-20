@@ -351,6 +351,32 @@ public final class GpuChunkDensityCache {
         GpuTerrainBlockResult blocks = readyBlocks;
         return FULL_BLOCK_OUTPUT && blocks != null && !blocks.isEmpty();
     }
+
+    /** Returns a prebound exact-root reader for full-volume CPU consumers such as the aquifer scan. */
+    public FinalDensityBlockView finalDensityBlockView() {
+        if (!supportsRoot(GpuTerrainRoots.FINAL_DENSITY) || exact != null || !FULL_BLOCK_OUTPUT) return null;
+        GpuTerrainBlockResult blocks = readyBlocks;
+        if (blocks == null || blocks.isEmpty()) return null;
+        GpuTerrainBlockResult.RootView root = blocks.rootView(GpuTerrainRoots.FINAL_DENSITY);
+        return root == null ? null : new FinalDensityBlockView(root);
+    }
+
+    /** Narrow, public read contract for callers outside the cache package. */
+    public static final class FinalDensityBlockView {
+        private final GpuTerrainBlockResult.RootView root;
+
+        private FinalDensityBlockView(GpuTerrainBlockResult.RootView root) {
+            this.root = root;
+        }
+
+        public boolean containsLocal(int x, int y, int z) {
+            return root.contains(x, y, z);
+        }
+
+        public double valueAtLocalUnchecked(int x, int y, int z) {
+            return root.valueAtUnchecked(x, y, z);
+        }
+    }
     public double aquiferFloodedness(int x, int y, int z) {
         return rootDensity(x, y, z, GpuTerrainRoots.FLOODEDNESS);
     }
