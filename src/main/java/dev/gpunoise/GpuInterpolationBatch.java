@@ -19,7 +19,7 @@ final class GpuInterpolationBatch {
             result.putInt(chunk * blocksPerChunk);
             result.putInt(cellsX).putInt(cellsY).putInt(cellsZ);
             result.putInt(blocksPerCellX).putInt(blocksPerCellY);
-            result.putInt(0).putInt(0).putInt(0).putInt(0);
+            result.putInt(0).putInt(0).putInt(0).putInt(0).putInt(0);
         }
         return (ByteBuffer) result.flip();
     }
