@@ -214,6 +214,8 @@ public final class VulkanCiSmoke {
                     "immutable terrain record configuration", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.finalFieldConfigurationFixture(),
                     "final-field terrain helper object", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.holderBackedConfigurationFixture(),
+                    "bound-holder terrain helper object", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.transformedNoiseFixture(),
                     "generic transformed NormalNoise coordinates",
                     new float[]{-193.0f, -1.0f, 37.0f, 256.0f},

@@ -179,6 +179,16 @@ final class VulkanSubmissionRing implements AutoCloseable {
             if (request == null) {
                 GraphRootsGridRequest grid = pendingGraphGrids.poll();
                 if (grid == null) {
+                    // Full terrain dispatches are the producer's main unit of
+                    // work. Do not let a long queue of auxiliary aquifer
+                    // lookups starve them after graph-grid work is drained.
+                    if (slot == slots[0]) {
+                        BlockingRequest<?> blocking = pendingBlocking.poll();
+                        if (blocking != null) {
+                            runBlocking(blocking);
+                            return;
+                        }
+                    }
                     AquiferPrefillRequest prefill = pendingAquiferPrefill.poll();
                     AquiferNearestRequest nearest = prefill == null ? pendingAquiferNearest.poll() : null;
                     AquiferSubstanceRequest substance = prefill == null && nearest == null
@@ -251,14 +261,6 @@ final class VulkanSubmissionRing implements AutoCloseable {
             } catch (Throwable failure) {
                 request.future.completeExceptionally(new IllegalStateException("GPU ring graph dispatch failed", failure));
             }
-        }
-        // The synchronous kernels below wait on the same fence and reuse the
-        // same command buffer as asynchronous graph roots. Dispatch one only
-        // after graph-root work has been polled to completion.
-        PersistentVulkanNormalNoiseEngine slot = slots[0];
-        if (slot != null && !slot.graphRootsInFlight()) {
-            BlockingRequest<?> request = pendingBlocking.poll();
-            if (request != null) runBlocking(request);
         }
     }
 

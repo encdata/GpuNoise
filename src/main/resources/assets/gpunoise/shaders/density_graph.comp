@@ -128,6 +128,8 @@ double javaRemainder(double x,double y){
     if(isinf(y)&&!isinf(x)) return x;
     return x-trunc(x/y)*y;
 }
+bool negativeDouble(double value){return (unpackDouble2x32(value).y&0x80000000u)!=0u;}
+double signedZero64(bool negative){return packDouble2x32(uvec2(0u,negative?0x80000000u:0u));}
 int signedIntFromBits(uint bits){
     return bits<=2147483647u?int(bits):int(double(bits)-4294967296.0);
 }
@@ -203,17 +205,16 @@ double javaNumericCast(uint operation,double value){
     if(operation==4u)return javaDoubleToInt(value);
     return value;
 }
-bool negativeDouble(double value){return (unpackDouble2x32(value).y&0x80000000u)!=0u;}
 double javaMin(double x,double y){
     if(isnan(x))return x;
     if(isnan(y))return y;
-    if(x==0.0&&y==0.0)return negativeDouble(x)||negativeDouble(y)?-0.0:0.0;
+    if(x==0.0&&y==0.0)return signedZero64(negativeDouble(x)||negativeDouble(y));
     return x<y?x:y;
 }
 double javaMax(double x,double y){
     if(isnan(x))return x;
     if(isnan(y))return y;
-    if(x==0.0&&y==0.0)return negativeDouble(x)&&negativeDouble(y)?-0.0:0.0;
+    if(x==0.0&&y==0.0)return signedZero64(negativeDouble(x)&&negativeDouble(y));
     return x>y?x:y;
 }
 double javaAtan2(double y,double x){
@@ -330,9 +331,13 @@ double graphSubtract(double x, double y){
 }
 double graphMultiply(double x, double y){
 #ifdef FAST_MATH
-    return double(float(x)*float(y));
+    float left=float(x),right=float(y),result=left*right;
+    if(result==0.0){uint sign=(floatBitsToUint(left)^floatBitsToUint(right))&0x80000000u;return double(uintBitsToFloat(sign));}
+    return double(result);
 #else
-    return x*y;
+    double result=x*y;
+    if(result==0.0){bool negative=negativeDouble(x)!=negativeDouble(y);return signedZero64(negative);}
+    return result;
 #endif
 }
 double graphDivide(double x, double y){

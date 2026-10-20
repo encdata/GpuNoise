@@ -1,6 +1,7 @@
 package dev.gpunoise;
 
 import net.minecraft.util.RandomSource;
+import net.minecraft.core.Holder;
 import net.minecraft.world.level.levelgen.DensityFunction;
 import net.minecraft.world.level.levelgen.DensityFunctions;
 import net.minecraft.world.level.levelgen.synth.NormalNoise;
@@ -166,6 +167,10 @@ final class GpuDensityExpressionSmoke {
 
     static VulkanBranchFixture finalFieldConfigurationFixture() {
         return graphFixture(new FinalFieldConfigurationDensity());
+    }
+
+    static VulkanBranchFixture holderBackedConfigurationFixture() {
+        return graphFixture(new HolderBackedConfigurationDensity());
     }
 
     static VulkanBranchFixture mixedTerrainRootFixture() {
@@ -1013,6 +1018,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new InheritedComputeDensity(), "inherited terrain compute implementation");
         verifyStandaloneMath(new DefaultInterfaceDensity(), "default interface terrain compute implementation");
         verifyStandaloneMath(new RecordConfigurationDensity(), "immutable terrain record configuration");
+        verifyStandaloneMath(new HolderBackedConfigurationDensity(), "bound registry-holder terrain configuration");
         verifyStandaloneMath(new MinecraftMathOverloadsDensity(), "Mth float and integer overloads");
         verifyStandaloneMath(new DynamicClampDensity(), "dynamic Mth.clamp overloads");
 
@@ -1857,6 +1863,18 @@ final class GpuDensityExpressionSmoke {
 
         @Override public double compute(FunctionContext context) {
             return parameters.terrainContribution(context.blockX(), context.blockY());
+        }
+    }
+
+    private static final class HolderBackedConfigurationDensity extends NumericSmokeDensity {
+        private final Holder<TerrainShapeParameters> parameters = Holder.direct(
+                new TerrainShapeParameters(0.03125, 0.125));
+        private final Holder<Float> floatScale = Holder.direct(0.125F);
+
+        @Override public double compute(FunctionContext context) {
+            TerrainShapeParameters shape = parameters.value();
+            return Math.sin(context.blockX() * shape.horizontalScale()) * 0.25
+                    + Math.abs(context.blockY() * floatScale.value()) * 0.01;
         }
     }
 

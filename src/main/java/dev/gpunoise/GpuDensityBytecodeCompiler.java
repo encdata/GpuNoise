@@ -30,6 +30,7 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.LookupSwitchInsnNode;
 import org.objectweb.asm.tree.TableSwitchInsnNode;
+import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.VarInsnNode;
 
 /**
@@ -417,6 +418,10 @@ final class GpuDensityBytecodeCompiler {
                         if (constant.getOpcode() != Opcodes.BIPUSH && constant.getOpcode() != Opcodes.SIPUSH)
                             reject("unsupported integer operand instruction " + opcodeName(constant.getOpcode()));
                         pushIntegerConstant(constant.operand);
+                    } else if (instruction instanceof TypeInsnNode typeInstruction) {
+                        if (typeInstruction.getOpcode() != Opcodes.CHECKCAST)
+                            reject("unsupported object-type instruction " + opcodeName(typeInstruction.getOpcode()));
+                        checkCast(typeInstruction.desc);
                     } else if (instruction instanceof JumpInsnNode jump) {
                         Integer target = labels.get(jump.label);
                         if (target == null) reject("jump target is missing from the method instruction stream");
@@ -698,13 +703,20 @@ final class GpuDensityBytecodeCompiler {
                 switch (instruction.desc) {
                     case "B", "C", "I", "S", "Z" -> pushIntegerConstant(number.intValue());
                     case "F", "D" -> pushConstant(number.doubleValue());
-                    default -> reject("wide numeric field is not represented by the density IR: "
-                            + instruction.name);
+                    default -> {
+                        if (isBoxedNumber(instruction.desc, fieldValue)) stack.add(Value.object(fieldValue));
+                        else reject("numeric field has a non-primitive, unsupported descriptor: "
+                                + instruction.name + instruction.desc);
+                    }
                 }
             } else if (fieldValue instanceof Boolean booleanValue && instruction.desc.equals("Z")) {
                 pushIntegerConstant(booleanValue ? 1 : 0);
             } else if (fieldValue instanceof Character characterValue && instruction.desc.equals("C")) {
                 pushIntegerConstant(characterValue);
+            } else if (fieldValue instanceof Boolean || fieldValue instanceof Character) {
+                if (isBoxedNumber(instruction.desc, fieldValue)) stack.add(Value.object(fieldValue));
+                else reject("boxed scalar field descriptor does not match runtime value: "
+                        + instruction.name + instruction.desc);
             } else if (fieldValue instanceof NormalNoise noise) {
                 stack.add(Value.noise(noise));
             } else if (fieldValue instanceof DensityFunction.NoiseHolder holder) {
@@ -813,6 +825,12 @@ final class GpuDensityBytecodeCompiler {
                 return;
             }
 
+            if (receiver != null && receiver.kind() == Kind.OBJECT
+                    && call.getOpcode() != Opcodes.INVOKESTATIC
+                    && arguments.length == 0 && unbox(receiver.referenceValue(), owner, name, call.desc)) {
+                return;
+            }
+
             if (owner.equals("net/minecraft/world/level/levelgen/DensityFunction$FunctionContext")
                     && receiver != null && receiver.kind() == Kind.CONTEXT && arguments.length == 0) {
                 Axis axis = switch (name) {
@@ -902,12 +920,10 @@ final class GpuDensityBytecodeCompiler {
         }
 
         private void pushCapturedObject(Object value) {
-            if (value instanceof Number number) {
-                pushConstant(number.doubleValue());
-            } else if (value instanceof Boolean booleanValue) {
-                pushIntegerConstant(booleanValue ? 1 : 0);
-            } else if (value instanceof Character characterValue) {
-                pushIntegerConstant(characterValue);
+            if (value instanceof Number || value instanceof Boolean || value instanceof Character) {
+                // Keep the wrapper identity until CHECKCAST/unboxing is
+                // interpreted; flattening here could erase a Java cast failure.
+                stack.add(Value.object(value));
             } else if (value instanceof NormalNoise noise) {
                 stack.add(Value.noise(noise));
             } else if (value instanceof DensityFunction density) {
@@ -920,6 +936,69 @@ final class GpuDensityBytecodeCompiler {
                 reject("bound holder value has unsupported runtime type "
                         + (value == null ? "null" : value.getClass().getName()));
             }
+        }
+
+        private void checkCast(String internalName) {
+            Value value = peek("CHECKCAST");
+            if (value.kind() != Kind.OBJECT) {
+                reject("CHECKCAST requires a captured object value");
+            }
+            Class<?> target = resolveOwnerClass(function.getClass(), internalName);
+            if (!target.isInstance(value.referenceValue())) {
+                reject("captured value type " + value.referenceValue().getClass().getName()
+                        + " cannot pass CHECKCAST to " + target.getName());
+            }
+        }
+
+        private boolean unbox(Object value, String owner, String name, String descriptor) {
+            if (value == null) return false;
+            if (value instanceof Number number) {
+                if (value instanceof Double && owner.equals("java/lang/Double")
+                        && name.equals("doubleValue") && descriptor.equals("()D")) {
+                    pushConstant(number.doubleValue()); return true;
+                }
+                if (value instanceof Float && owner.equals("java/lang/Float")
+                        && name.equals("floatValue") && descriptor.equals("()F")) {
+                    pushConstant(number.floatValue()); return true;
+                }
+                if (value instanceof Integer && owner.equals("java/lang/Integer")
+                        && name.equals("intValue") && descriptor.equals("()I")) {
+                    pushIntegerConstant(number.intValue()); return true;
+                }
+                if (value instanceof Long && owner.equals("java/lang/Long")
+                        && name.equals("longValue") && descriptor.equals("()J")) {
+                    reject("long holder values are not represented by the density IR");
+                }
+                if (value instanceof Short && owner.equals("java/lang/Short")
+                        && name.equals("shortValue") && descriptor.equals("()S")) {
+                    pushIntegerConstant(number.shortValue()); return true;
+                }
+                if (value instanceof Byte && owner.equals("java/lang/Byte")
+                        && name.equals("byteValue") && descriptor.equals("()B")) {
+                    pushIntegerConstant(number.byteValue()); return true;
+                }
+            } else if (value instanceof Character character && owner.equals("java/lang/Character")
+                    && name.equals("charValue") && descriptor.equals("()C")) {
+                pushIntegerConstant(character); return true;
+            } else if (value instanceof Boolean booleanValue && owner.equals("java/lang/Boolean")
+                    && name.equals("booleanValue") && descriptor.equals("()Z")) {
+                pushIntegerConstant(booleanValue ? 1 : 0); return true;
+            }
+            return false;
+        }
+
+        private boolean isBoxedNumber(String descriptor, Object value) {
+            return switch (descriptor) {
+                case "Ljava/lang/Double;" -> value instanceof Double;
+                case "Ljava/lang/Float;" -> value instanceof Float;
+                case "Ljava/lang/Integer;" -> value instanceof Integer;
+                case "Ljava/lang/Long;" -> value instanceof Long;
+                case "Ljava/lang/Short;" -> value instanceof Short;
+                case "Ljava/lang/Byte;" -> value instanceof Byte;
+                case "Ljava/lang/Character;" -> value instanceof Character;
+                case "Ljava/lang/Boolean;" -> value instanceof Boolean;
+                default -> false;
+            };
         }
 
         private void mathCall(String owner, String name, String descriptor, Value[] arguments) {
