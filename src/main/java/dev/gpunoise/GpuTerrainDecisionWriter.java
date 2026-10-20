@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** CPU terrain writer driven by parity-admitted Vulkan aquifer decisions. */
 public final class GpuTerrainDecisionWriter {
@@ -25,10 +26,12 @@ public final class GpuTerrainDecisionWriter {
     public record ChunkFill(ChunkAccess chunk, NoiseChunk noiseChunk,
                             GpuAquiferDecisionTable decisions, int minCellY, int cellCountY,
                             int cellWidth, int cellHeight, BlockState defaultBlock,
-                            GpuFillState fillState) {
+                            GpuFillState fillState, GpuChunkDensityCache cache,
+                            long fillStartNanos, AtomicBoolean cancellationRequested) {
         public ChunkFill {
             if (chunk == null || noiseChunk == null || decisions == null || defaultBlock == null
-                    || fillState == null || cellCountY <= 0 || cellWidth <= 0 || cellHeight <= 0
+                    || fillState == null || cache == null || cancellationRequested == null
+                    || cellCountY <= 0 || cellWidth <= 0 || cellHeight <= 0
                     || 16 % cellWidth != 0 || decisions.validCount() == 0) {
                 throw new IllegalArgumentException("invalid GPU terrain chunk fill");
             }
@@ -82,9 +85,14 @@ public final class GpuTerrainDecisionWriter {
                 }
             }
             for (ChunkFill fill : fills) {
-                written.add(write(fill.chunk(), fill.noiseChunk(), fill.decisions(),
-                        fill.minCellY(), fill.cellCountY(), fill.cellWidth(), fill.cellHeight(),
-                        fill.defaultBlock(), fill.fillState()));
+                GpuTerrainRuntime.bindFillCache(fill.cache());
+                try {
+                    written.add(write(fill.chunk(), fill.noiseChunk(), fill.decisions(),
+                            fill.minCellY(), fill.cellCountY(), fill.cellWidth(), fill.cellHeight(),
+                            fill.defaultBlock(), fill.fillState()));
+                } finally {
+                    GpuTerrainRuntime.clearFillCache();
+                }
             }
             return List.copyOf(written);
         } finally {

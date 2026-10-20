@@ -19,7 +19,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.List;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -182,12 +181,12 @@ abstract class NoiseChunkGeneratorWriteMixin {
             return gpunoise$writeGpuFilled(blender, randomState, structures, chunk,
                     minCellY, cellCountY, cache, noiseChunk,
                     gpunoise$getPublishedDecisionTable(noiseChunk));
-        }, net.minecraft.Util.backgroundExecutor()).whenComplete((result, failure) -> {
+        }, net.minecraft.Util.backgroundExecutor()).thenCompose(stage -> stage).whenComplete((result, failure) -> {
             if (failure != null) GpuTerrainRuntime.releaseGpuCache(cache);
         });
     }
 
-    private ChunkAccess gpunoise$writeGpuFilled(Blender blender, RandomState randomState,
+    private CompletionStage<ChunkAccess> gpunoise$writeGpuFilled(Blender blender, RandomState randomState,
                                                 StructureManager structures, ChunkAccess chunk,
                                                 int minCellY, int cellCountY,
                                                 GpuChunkDensityCache cache, NoiseChunk noiseChunk,
@@ -198,69 +197,68 @@ abstract class NoiseChunkGeneratorWriteMixin {
         int bottom = chunk.getSectionIndex(minY);
         LevelChunkSection[] sections = chunk.getSections();
         GpuFillState state = new GpuFillState();
-        try {
-            // Byepregen replaces the normal PalettedContainer resize path
-            // with its own raw-ID palette handling. Our direct section writer
-            // calls PalettedContainer.set directly, which can reach a
-            // SingleValuePalette with no resize callback and crash while a
-            // new chunk is upgraded. Keep GPU density generation enabled,
-            // but let the normal chunk writer handle block states there.
-            boolean byepregenLoaded = ModList.get().isLoaded("byepregen");
-            state.directWritesSafe = !byepregenLoaded;
-            if (byepregenLoaded && gpunoise$loggedPaletteCompatibility.compareAndSet(false, true)) {
-                dev.gpunoise.GpuNoise.LOGGER.info(
-                        "Byepregen palette compatibility detected; using normal block writes while GPU density generation remains active.");
-            }
-            for (int sectionIndex = top; sectionIndex >= bottom; sectionIndex--) {
-                if (!sections[sectionIndex].hasOnlyAir()) {
-                    state.directWritesSafe = false;
-                    break;
-                }
-            }
-            gpunoise$fillState.set(state);
-            GpuTerrainRuntime.bindFillCache(cache);
-            state.debugVoidTerrain = SharedConstants.debugVoidTerrain(chunk.getPos());
-            state.debugVoidTerrainCached = true;
-            long fillStart = GpuTerrainProfiler.beginFill();
-            try {
-                if (decisions != null && decisions.validCount() > 0
-                        && decisions.coversChunk(chunk.getPos().getMinBlockX(), minCellY * cellHeight,
-                                chunk.getPos().getMinBlockZ(), cellCountY * cellHeight)) {
-                    if (gpunoise$loggedDecisionWriter.compareAndSet(false, true)) {
-                        dev.gpunoise.GpuNoise.LOGGER.info(
-                                "GPU terrain material decisions are available; using the aligned region-owned CPU writer.");
-                    }
-                    return dev.gpunoise.GpuTerrainDecisionWriter.writeRegion(List.of(
-                            new dev.gpunoise.GpuTerrainDecisionWriter.ChunkFill(chunk, noiseChunk,
-                                    decisions, minCellY, cellCountY,
-                                    generatorSettings().value().noiseSettings().getCellWidth(),
-                                    cellHeight, generatorSettings().value().defaultBlock(), state))).get(0);
-                }
-                if (gpunoise$loggedDecisionWriterFallback.compareAndSet(false, true)) {
-                    dev.gpunoise.GpuNoise.LOGGER.info(
-                            "GPU terrain material table is incomplete or unavailable; using vanilla block-state fill for this chunk.");
-                }
-                // The compatibility branch keeps section ownership around
-                // Minecraft's normal palette resizing and material rules.
+        state.debugVoidTerrain = SharedConstants.debugVoidTerrain(chunk.getPos());
+        state.debugVoidTerrainCached = true;
+        long fillStart = GpuTerrainProfiler.beginFill();
+        // Byepregen changes palette resize behavior. Direct palette writes are
+        // safe only for fresh air sections while this writer owns their locks.
+        boolean byepregenLoaded = ModList.get().isLoaded("byepregen");
+        state.directWritesSafe = !byepregenLoaded;
+        if (byepregenLoaded && gpunoise$loggedPaletteCompatibility.compareAndSet(false, true)) {
+            dev.gpunoise.GpuNoise.LOGGER.info(
+                    "Byepregen palette compatibility detected; using normal block writes while GPU density generation remains active.");
+        }
+        for (int sectionIndex = top; sectionIndex >= bottom; sectionIndex--) {
+            if (!sections[sectionIndex].hasOnlyAir()) {
                 state.directWritesSafe = false;
-                for (int sectionIndex = top; sectionIndex >= bottom; sectionIndex--) {
-                    sections[sectionIndex].acquire();
-                }
-                try {
-                    return gpunoise$doFill(blender, structures, randomState, chunk, minCellY, cellCountY);
-                } finally {
-                    for (int sectionIndex = bottom; sectionIndex <= top; sectionIndex++) {
-                        sections[sectionIndex].release();
-                    }
-                }
-            } finally {
-                dev.gpunoise.GpuTerrainDensityParity.reportChunk(
-                        chunk.getPos().x, chunk.getPos().z);
+                break;
+            }
+        }
+        if (decisions != null && decisions.validCount() > 0
+                && decisions.coversChunk(chunk.getPos().getMinBlockX(), minCellY * cellHeight,
+                        chunk.getPos().getMinBlockZ(), cellCountY * cellHeight)) {
+            if (gpunoise$loggedDecisionWriter.compareAndSet(false, true)) {
+                dev.gpunoise.GpuNoise.LOGGER.info(
+                        "GPU terrain material decisions are available; queueing the aligned region-owned CPU writer.");
+            }
+            CompletionStage<ChunkAccess> write = GpuTerrainRuntime.submitTerrainRegionWrite(
+                    new dev.gpunoise.GpuTerrainDecisionWriter.ChunkFill(chunk, noiseChunk,
+                            decisions, minCellY, cellCountY,
+                            generatorSettings().value().noiseSettings().getCellWidth(),
+                            cellHeight, generatorSettings().value().defaultBlock(), state, cache,
+                            fillStart, cancellationRequested));
+            return write.whenComplete((written, failure) -> {
+                dev.gpunoise.GpuTerrainDensityParity.reportChunk(chunk.getPos().x, chunk.getPos().z);
                 GpuTerrainProfiler.endFill(fillStart);
                 state.debugVoidTerrainCached = false;
-                GpuTerrainRuntime.clearFillCache();
+                GpuTerrainRuntime.releaseGpuCache(cache);
+            });
+        }
+
+        gpunoise$fillState.set(state);
+        GpuTerrainRuntime.bindFillCache(cache);
+        try {
+            if (gpunoise$loggedDecisionWriterFallback.compareAndSet(false, true)) {
+                dev.gpunoise.GpuNoise.LOGGER.info(
+                        "GPU terrain material table is incomplete or unavailable; using vanilla block-state fill for this chunk.");
+            }
+            for (int sectionIndex = top; sectionIndex >= bottom; sectionIndex--) {
+                sections[sectionIndex].acquire();
+            }
+            try {
+                return CompletableFuture.completedFuture(
+                        gpunoise$doFill(blender, structures, randomState, chunk, minCellY, cellCountY));
+            } finally {
+                for (int sectionIndex = bottom; sectionIndex <= top; sectionIndex++) {
+                    sections[sectionIndex].release();
+                }
             }
         } finally {
+            dev.gpunoise.GpuTerrainDensityParity.reportChunk(
+                    chunk.getPos().x, chunk.getPos().z);
+            GpuTerrainProfiler.endFill(fillStart);
+            state.debugVoidTerrainCached = false;
+            GpuTerrainRuntime.clearFillCache();
             gpunoise$fillState.remove();
             GpuTerrainRuntime.releaseGpuCache(cache);
         }

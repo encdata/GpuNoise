@@ -39,6 +39,7 @@ public final class GpuTerrainRuntime {
     private static volatile GpuChunkFillCoordinator chunkFillCoordinator;
     private static volatile GpuFusedChunkBatchScheduler fusedChunkScheduler;
     private static volatile GpuTerrainRootsBatchScheduler terrainRootsScheduler;
+    private static volatile GpuTerrainRegionWriter terrainRegionWriter;
     private static volatile GpuBiomeSearchBatchScheduler biomeSearchScheduler;
     private static volatile GpuTerrainGraphProvider terrainProvider;
     private static volatile VulkanSubmissionRing terrainRing;
@@ -478,6 +479,7 @@ public final class GpuTerrainRuntime {
         if (terrainScheduler != null) terrainScheduler.close();
         if (terrainProvider != null) terrainProvider.close();
         if (terrainRootsScheduler != null) terrainRootsScheduler.close();
+        if (terrainRegionWriter != null) terrainRegionWriter.close();
         if (biomeSearchScheduler != null) biomeSearchScheduler.close();
         terrainRing = submissionRing;
         terrainGraph = graph;
@@ -488,6 +490,7 @@ public final class GpuTerrainRuntime {
         GpuNoise.LOGGER.info("GPU terrain graph: nodes={}, registers={}, block pass skips {} marker-only nodes",
                 graph.nodes().size(), graph.registerCount(), skippedBlockNodes);
         terrainRootsScheduler = new GpuTerrainRootsBatchScheduler();
+        terrainRegionWriter = new GpuTerrainRegionWriter();
         biomeSearchScheduler = new GpuBiomeSearchBatchScheduler(terrainRing);
         terrainProvider = null;
         terrainScheduler = null;
@@ -512,6 +515,20 @@ public final class GpuTerrainRuntime {
         if (scheduler != null) return scheduler.submit(grid);
         return java.util.concurrent.CompletableFuture.failedStage(
                 new IllegalStateException("GPU terrain roots scheduler is not installed"));
+    }
+
+    public static java.util.concurrent.CompletionStage<net.minecraft.world.level.chunk.ChunkAccess> submitTerrainRegionWrite(
+            GpuTerrainDecisionWriter.ChunkFill fill) {
+        GpuTerrainRegionWriter writer = terrainRegionWriter;
+        if (writer == null) {
+            try {
+                return CompletableFuture.completedFuture(
+                        GpuTerrainDecisionWriter.writeRegion(java.util.List.of(fill)).get(0));
+            } catch (RuntimeException failure) {
+                return CompletableFuture.failedFuture(failure);
+            }
+        }
+        return writer.submit(fill);
     }
 
     static java.util.concurrent.CompletionStage<GpuTerrainRootsResult> submitTerrainGridDirect(
@@ -1264,6 +1281,7 @@ public final class GpuTerrainRuntime {
         if (chunkFillCoordinator != null) chunkFillCoordinator.close();
         if (fusedChunkScheduler != null) fusedChunkScheduler.close();
         if (terrainRootsScheduler != null) terrainRootsScheduler.close();
+        if (terrainRegionWriter != null) terrainRegionWriter.close();
         if (biomeSearchScheduler != null) biomeSearchScheduler.close();
         if (terrainProvider != null) terrainProvider.close();
         VulkanSubmissionRing ring = submissionRing;
@@ -1277,6 +1295,7 @@ public final class GpuTerrainRuntime {
         chunkFillCoordinator = null;
         fusedChunkScheduler = null;
         terrainRootsScheduler = null;
+        terrainRegionWriter = null;
         biomeSearchScheduler = null;
         terrainProvider = null;
         verifiedTerrainRootMask = 0;
