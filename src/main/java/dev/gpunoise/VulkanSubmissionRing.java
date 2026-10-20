@@ -169,6 +169,19 @@ final class VulkanSubmissionRing implements AutoCloseable {
         while ((blocking = pendingBlocking.poll()) != null) blocking.future.completeExceptionally(failure);
     }
 
+    /** Keep worldgen continuations and chunk-result fanout off the fence-poll thread. */
+    private <T> void completeOnDispatchWorker(CompletableFuture<T> future, T value, Throwable failure) {
+        try {
+            dispatchWorkers.execute(() -> {
+                if (failure != null) future.completeExceptionally(failure);
+                else future.complete(value);
+            });
+        } catch (RuntimeException stopped) {
+            if (failure != null) stopped.addSuppressed(failure);
+            future.completeExceptionally(stopped);
+        }
+    }
+
     PersistentVulkanNormalNoiseEngine primary() { return slots[0]; }
 
     CompletableFuture<float[]> submitGraphRoots(GpuDensityGraph graph, float[] x, float[] y, float[] z) {
@@ -210,10 +223,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
                             slot.submitGraphGridInterpolated(terrain.graph, terrain.gridMetadata,
                                             terrain.chunkCount, terrain.samplesPerChunk,
                                             terrain.outputMetadata, terrain.blocksPerChunk, terrain.outputRootIndexes)
-                                    .whenComplete((result, failure) -> {
-                                        if (failure != null) terrain.future.completeExceptionally(failure);
-                                        else terrain.future.complete(result);
-                                    });
+                                    .whenComplete((result, failure) -> completeOnDispatchWorker(
+                                            terrain.future, result, failure));
                         } catch (Throwable failure) {
                             terrain.future.completeExceptionally(new IllegalStateException(
                                     "GPU ring full terrain submission failed", failure));
@@ -279,10 +290,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 }
                 try {
                     slot.submitGraphRootsGridAsync(grid.graph, grid.metadata, grid.chunkCount, grid.samplesPerChunk)
-                            .whenComplete((values, failure) -> {
-                                if (failure != null) grid.future.completeExceptionally(failure);
-                                else grid.future.complete(values);
-                            });
+                            .whenComplete((values, failure) -> completeOnDispatchWorker(
+                                    grid.future, values, failure));
                 } catch (Throwable failure) {
                     grid.future.completeExceptionally(new IllegalStateException("GPU ring grid dispatch failed", failure));
                 }
@@ -290,10 +299,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
             }
             try {
                 slot.submitGraphRootsAsync(request.graph, request.x, request.y, request.z, request.sampleCount)
-                        .whenComplete((values, failure) -> {
-                            if (failure != null) request.future.completeExceptionally(failure);
-                            else request.future.complete(values);
-                        });
+                        .whenComplete((values, failure) -> completeOnDispatchWorker(
+                                request.future, values, failure));
             } catch (Throwable failure) {
                 request.future.completeExceptionally(new IllegalStateException("GPU ring graph dispatch failed", failure));
             }
