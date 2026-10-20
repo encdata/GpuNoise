@@ -3,7 +3,9 @@ package dev.gpunoise;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.levelgen.Aquifer;
@@ -36,6 +38,7 @@ public final class VulkanCiSmoke {
             throw new IllegalStateException("Registered density adapter smoke was not prepared before graph compilation");
         }
         verifyTerrainParityRules();
+        verifyChunkPipelineCancellation();
         GpuDensityExpressionSmoke.verify();
         verifyTranslatorRegistry();
         verifyAquiferStatusRegionCache();
@@ -1040,6 +1043,45 @@ public final class VulkanCiSmoke {
 
         System.out.println("Vulkan CI smoke passed on " + device.name()
                 + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, shared 12-root terrain lattices, and non-associative Y-X-Z float rounding; aquifer pressure, four-center selection, and vanilla/C2ME substance decisions matched Java reference cases.");
+    }
+
+    private static void verifyChunkPipelineCancellation() throws Exception {
+        GpuChunkPipelineGate queuedGate = new GpuChunkPipelineGate(1);
+        CompletableFuture<Void> holdFirst = new CompletableFuture<>();
+        AtomicInteger started = new AtomicInteger();
+        CompletableFuture<Void> first = queuedGate.submit(() -> {
+            started.incrementAndGet();
+            return holdFirst;
+        });
+        CompletableFuture<Void> cancelledQueued = queuedGate.submit(() -> {
+            started.incrementAndGet();
+            return CompletableFuture.completedFuture(null);
+        });
+        if (!cancelledQueued.cancel(false)) {
+            throw new IllegalStateException("queued GPU terrain request could not be cancelled");
+        }
+        holdFirst.complete(null);
+        first.get(5, TimeUnit.SECONDS);
+        if (started.get() != 1) {
+            throw new IllegalStateException("cancelled queued GPU terrain request still started");
+        }
+        queuedGate.submit(() -> CompletableFuture.completedFuture(null)).get(5, TimeUnit.SECONDS);
+
+        GpuChunkPipelineGate activeGate = new GpuChunkPipelineGate(1);
+        CompletableFuture<Void> activeStage = new CompletableFuture<>();
+        CompletableFuture<Void> active = activeGate.submit(() -> activeStage);
+        if (!active.cancel(true) || !activeStage.isCancelled()) {
+            throw new IllegalStateException("running GPU terrain request did not receive cancellation");
+        }
+        AtomicInteger resumed = new AtomicInteger();
+        activeGate.submit(() -> {
+            resumed.incrementAndGet();
+            return CompletableFuture.completedFuture(null);
+        }).get(5, TimeUnit.SECONDS);
+        if (resumed.get() != 1) {
+            throw new IllegalStateException("GPU terrain gate did not release its cancelled active slot");
+        }
+        System.out.println("Vulkan CI smoke: chunk pipeline cancellation verified");
     }
 
     /** Exercise independent command buffers/fences even on Mesa's CPU Vulkan device. */
