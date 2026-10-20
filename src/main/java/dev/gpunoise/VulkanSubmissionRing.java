@@ -738,15 +738,17 @@ final class VulkanSubmissionRing implements AutoCloseable {
         requests.add(first);
         int nearestRows = first.nearestCount;
         int statusRows = first.statusCount;
+        int statusStride = aquiferStatusStride(first);
         long nearestGroups = validPrefill(first)
                 ? nearestGroupCount(first.nearestRecords, first.nearestCount) : -1;
-        if (nearestGroups > 0 && coalescedPrefillBytes(nearestRows, nearestGroups, statusRows)
+        if (nearestGroups > 0 && coalescedPrefillBytes(nearestRows, nearestGroups, statusRows, statusStride)
                 <= MAX_COALESCED_NEAREST_BYTES) {
             synchronized (this) {
                 while (nearestRows < GpuAquiferNearestThree.MAX_QUERIES
                         && statusRows < GpuAquiferFluidStatus.MAX_PREFILL_CENTERS) {
                     AquiferPrefillRequest next = pendingAquiferPrefill.peek();
                     if (next == null || next.future.isDone() || !validPrefill(next)
+                            || aquiferStatusStride(next) != statusStride
                             || next.decisionChain != first.decisionChain
                             || next.nearestCount > GpuAquiferNearestThree.MAX_QUERIES - nearestRows
                             || next.statusCount > GpuAquiferFluidStatus.MAX_PREFILL_CENTERS - statusRows)
@@ -754,7 +756,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                     long nextGroups = nearestGroups
                             + nearestGroupCount(next.nearestRecords, next.nearestCount);
                     long bytes = coalescedPrefillBytes(nearestRows + next.nearestCount,
-                            nextGroups, statusRows + next.statusCount);
+                            nextGroups, statusRows + next.statusCount, statusStride);
                     if (bytes > MAX_COALESCED_NEAREST_BYTES) break;
                     next = pendingAquiferPrefill.poll();
                     if (next == null) break;
@@ -802,7 +804,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
         ByteBuffer mergedStatus;
         try {
             mergedStatus = GpuAquiferInputBufferPool.acquire(
-                    Math.multiplyExact(batchStatusRows, GpuAquiferFluidStatus.RECORD_BYTES));
+                    Math.multiplyExact(batchStatusRows, statusStride));
         } catch (Throwable failure) {
             GpuAquiferInputBufferPool.release(mergedNearest);
             for (AquiferPrefillRequest request : requests)
@@ -868,8 +870,14 @@ final class VulkanSubmissionRing implements AutoCloseable {
         return GpuAquiferNearestThree.isValidPacked(request.nearestRecords, request.nearestCount)
                 && request.statusCount > 0
                 && request.statusCount <= GpuAquiferFluidStatus.MAX_PREFILL_CENTERS
-                && request.statusRecords.remaining()
-                == request.statusCount * GpuAquiferFluidStatus.RECORD_BYTES;
+                && (request.statusRecords.remaining()
+                        == request.statusCount * GpuAquiferFluidStatus.RECORD_BYTES
+                    || request.statusRecords.remaining()
+                        == request.statusCount * GpuAquiferFluidStatus.COMPACT_PRECOMPUTED_RECORD_BYTES);
+    }
+
+    private static int aquiferStatusStride(AquiferPrefillRequest request) {
+        return request.statusCount <= 0 ? 0 : request.statusRecords.remaining() / request.statusCount;
     }
 
     private static int nearestGroupCount(ByteBuffer records, int count) {
@@ -877,13 +885,13 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 .getInt(records.position() + Integer.BYTES);
     }
 
-    private static long coalescedPrefillBytes(long nearestRows, long nearestGroups, long statusRows) {
+    private static long coalescedPrefillBytes(long nearestRows, long nearestGroups, long statusRows,
+                                              int statusStride) {
         long nearestBytes = GpuAquiferNearestThree.HEADER_BYTES
                 + nearestRows * GpuAquiferNearestThree.QUERY_RECORD_BYTES
                 + nearestGroups * GpuAquiferNearestThree.CENTER_RECORD_BYTES;
-        long statusOffset = (nearestBytes + GpuAquiferFluidStatus.RECORD_BYTES - 1)
-                / GpuAquiferFluidStatus.RECORD_BYTES * GpuAquiferFluidStatus.RECORD_BYTES;
-        return statusOffset + statusRows * GpuAquiferFluidStatus.RECORD_BYTES;
+        long statusOffset = (nearestBytes + 3L) & ~3L;
+        return statusOffset + statusRows * statusStride;
     }
 
     /** Coalesces already-queued chunk decisions into one OCL-style area dispatch. */

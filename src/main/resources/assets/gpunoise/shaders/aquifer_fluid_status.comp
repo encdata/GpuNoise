@@ -24,9 +24,14 @@ struct InputRecord {
     uint precomputedKind;
 };
 
-layout(std430, set = 0, binding = 0) readonly buffer Inputs { InputRecord items[]; };
+layout(std430, set = 0, binding = 0) readonly buffer Inputs { uint words[]; };
 layout(std430, set = 0, binding = 1) writeonly buffer Outputs { int values[]; };
-layout(push_constant) uniform Parameters { uint count; uint baseRecord; uint outputBaseInt; };
+layout(push_constant) uniform Parameters {
+    uint count;
+    uint baseByteOffset;
+    uint outputBaseInt;
+    uint compactPrecomputed;
+};
 
 const uint AIR = 0u;
 const uint LAVA = 2u;
@@ -50,10 +55,46 @@ void emit(uint row, int level, int source, uint flags, int stateId, uint kind) {
 
 void fallback(uint row) { emit(row, 0, 0, FLAG_CPU_FALLBACK, 0, 3u); }
 
+InputRecord loadRecord(uint row) {
+    InputRecord r;
+    uint base = baseByteOffset / 4u;
+    if (compactPrecomputed != 0u) {
+        base += row * 4u;
+        r.y = int(words[base]);
+        r.precomputed = 1;
+        r.precomputedLevel = int(words[base + 1u]);
+        r.precomputedStateId = int(words[base + 2u]);
+        r.precomputedKind = words[base + 3u];
+        return r;
+    }
+    base += row * 66u;
+    r.y = int(words[base]);
+    r.defaultLevel = int(words[base + 1u]);
+    r.defaultKind = words[base + 2u];
+    r.defaultStateId = int(words[base + 3u]);
+    r.lavaStateId = int(words[base + 4u]);
+    r.floodedness = uintBitsToFloat(words[base + 5u]);
+    r.spread = uintBitsToFloat(words[base + 6u]);
+    r.lava = uintBitsToFloat(words[base + 7u]);
+    r.erosion = uintBitsToFloat(words[base + 8u]);
+    r.depth = uintBitsToFloat(words[base + 9u]);
+    for (uint i = 0u; i < 13u; i++) {
+        r.surfaceHeights[i] = uintBitsToFloat(words[base + 10u + i]);
+        r.globalLevels[i] = int(words[base + 23u + i]);
+        r.globalKinds[i] = words[base + 36u + i];
+        r.globalStateIds[i] = int(words[base + 49u + i]);
+    }
+    r.precomputed = int(words[base + 62u]);
+    r.precomputedLevel = int(words[base + 63u]);
+    r.precomputedStateId = int(words[base + 64u]);
+    r.precomputedKind = words[base + 65u];
+    return r;
+}
+
 void main() {
     uint row = gl_GlobalInvocationID.x;
     if (row >= count) return;
-    InputRecord r = items[baseRecord + row];
+    InputRecord r = loadRecord(row);
     if (r.precomputed != 0) {
         emit(row, r.precomputedLevel, 0, 0u, r.precomputedStateId, r.precomputedKind);
         return;

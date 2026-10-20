@@ -12,6 +12,8 @@ public final class GpuAquiferFluidStatus {
     public static final int GLOBAL_LEVEL_SAMPLES = SURFACE_SAMPLES;
     /** Header + scalar roots + surface/level/kind/state arrays, std430 stride 4. */
     public static final int RECORD_BYTES = 264;
+    /** Compact [y, level, exact state ID, kind] row for Java-precomputed statuses. */
+    public static final int COMPACT_PRECOMPUTED_RECORD_BYTES = 16;
     /** Upper bound for a single C2ME chunk's unique center neighborhood. */
     public static final int MAX_PREFILL_CENTERS = 8192;
     /** Level, selected source, flags, exact fluid block-state ID, and broad kind. */
@@ -37,12 +39,35 @@ public final class GpuAquiferFluidStatus {
         return packed.flip();
     }
 
+    /** Packs exact Java status rows into the compact representation used by the fused path. */
+    static ByteBuffer packPrecomputed(Input[] inputs) {
+        if (inputs == null || inputs.length == 0 || inputs.length > MAX_PREFILL_CENTERS)
+            throw new IllegalArgumentException("invalid precomputed aquifer status batch");
+        BatchWriter writer = new BatchWriter(inputs.length);
+        try {
+            for (Input input : inputs) {
+                if (input == null || !input.precomputed())
+                    throw new IllegalArgumentException("compact aquifer rows must be Java-precomputed");
+                writer.add(input.y(), input.defaultLevel(), input.defaultKind(), input.defaultStateId(),
+                        input.lavaStateId(), input.floodedness(), input.spread(), input.lava(), input.erosion(),
+                        input.depth(), input.surfaceHeights(), input.globalLevels(), input.globalKinds(),
+                        input.globalStateIds(), true, input.precomputedLevel(), input.precomputedStateId(),
+                        input.precomputedKind());
+            }
+            return writer.finish();
+        } catch (RuntimeException | Error failure) {
+            writer.close();
+            throw failure;
+        }
+    }
+
     /** Incremental direct-buffer writer for center prefill without per-center input objects. */
     public static final class BatchWriter {
         private final int expectedRows;
         private final ByteBuffer packed;
         private int rows;
         private boolean finished;
+        private boolean allPrecomputed = true;
 
         public BatchWriter(int expectedRows) {
             if (expectedRows <= 0 || expectedRows > MAX_QUERIES)
@@ -89,6 +114,7 @@ public final class GpuAquiferFluidStatus {
             for (int value : globalStateIds) packed.putInt(value);
             packed.putInt(precomputed ? 1 : 0).putInt(precomputedLevel)
                     .putInt(precomputedStateId).putInt(precomputedKind);
+            allPrecomputed &= precomputed;
             rows++;
         }
 
@@ -101,7 +127,33 @@ public final class GpuAquiferFluidStatus {
                         + expectedRows + ", actual=" + actualRows);
             }
             finished = true;
-            return packed.flip();
+            packed.flip();
+            if (!allPrecomputed) return packed;
+
+            ByteBuffer compact;
+            try {
+                compact = GpuAquiferInputBufferPool.acquire(Math.multiplyExact(
+                        expectedRows, COMPACT_PRECOMPUTED_RECORD_BYTES));
+            } catch (RuntimeException | Error failure) {
+                GpuAquiferInputBufferPool.release(packed);
+                throw failure;
+            }
+            try {
+                for (int row = 0; row < expectedRows; row++) {
+                    int source = row * RECORD_BYTES;
+                    compact.putInt(packed.getInt(source));
+                    compact.putInt(packed.getInt(source + 252));
+                    compact.putInt(packed.getInt(source + 256));
+                    compact.putInt(packed.getInt(source + 260));
+                }
+                compact.flip();
+                GpuAquiferInputBufferPool.release(packed);
+                return compact;
+            } catch (RuntimeException | Error failure) {
+                GpuAquiferInputBufferPool.release(compact);
+                GpuAquiferInputBufferPool.release(packed);
+                throw failure;
+            }
         }
 
         /** Returns an unfinished staging slab after a failed CPU prefill. */

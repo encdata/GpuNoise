@@ -1144,6 +1144,23 @@ public final class VulkanCiSmoke {
                             + actualDecision[base + 1] + "," + actualDecision[base + 2] + "]");
                 }
             }
+            ByteBuffer compactChainStatuses = GpuAquiferFluidStatus.packPrecomputed(chainStatusInputs);
+            if (compactChainStatuses.remaining() != chainStatusInputs.length
+                    * GpuAquiferFluidStatus.COMPACT_PRECOMPUTED_RECORD_BYTES) {
+                throw new IllegalStateException("Java-precomputed aquifer statuses were not compacted");
+            }
+            GpuAquiferPrefillResult compactChainResult = ring.submitAquiferPrefill(
+                    GpuAquiferNearestThree.pack(chainQueries, 0, queryCount, center ->
+                            chainStatusRows.get(net.minecraft.core.BlockPos.asLong(
+                                    center[0], center[1], center[2]))),
+                    queryCount, compactChainStatuses, chainStatusInputs.length, true)
+                    .get(60, TimeUnit.SECONDS);
+            if (!java.util.Arrays.equals(chainResult.nearestRows(), compactChainResult.nearestRows())
+                    || !java.util.Arrays.equals(chainResult.fluidStatusRows(), compactChainResult.fluidStatusRows())
+                    || !java.util.Arrays.equals(chainResult.decisionRows(), compactChainResult.decisionRows())) {
+                throw new IllegalStateException("compact precomputed aquifer chain changed its outputs");
+            }
+            System.out.println("Vulkan CI smoke: compact precomputed aquifer rows preserve fused-chain parity");
             System.out.println("Vulkan CI smoke: GPU-resident nearest/status/substance chain parity passed");
             var combinedAquiferFutureA = ring.submitAquiferPrefill(
                     combinedNearest, 1, GpuAquiferFluidStatus.pack(fluidStatusCases),
