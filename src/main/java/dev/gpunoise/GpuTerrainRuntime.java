@@ -216,6 +216,14 @@ public final class GpuTerrainRuntime {
         return installed != null && randomState != null && randomState.router() == installed;
     }
 
+    public static boolean matchesTerrainOreRoots(DensityFunction toggle,
+                                                  DensityFunction ridged,
+                                                  DensityFunction gap) {
+        NoiseRouter installed = terrainRouter;
+        return installed != null && installed.veinToggle() == toggle
+                && installed.veinRidged() == ridged && installed.veinGap() == gap;
+    }
+
     /**
      * Starts exactly one cell-lattice request for a chunk.  This is the only
      * submission point for authoritative fillFromNoise work: callers receive
@@ -395,6 +403,14 @@ public final class GpuTerrainRuntime {
         if (ring == null) return java.util.concurrent.CompletableFuture.failedStage(
                 new IllegalStateException("GPU terrain graph provider is not installed"));
         return ring.submitAquiferSubstance(records, queryCount);
+    }
+
+    static java.util.concurrent.CompletionStage<int[]> submitOreVeinDecisions(
+            java.nio.ByteBuffer records, int blockCount) {
+        VulkanSubmissionRing ring = submissionRing;
+        if (ring == null) return java.util.concurrent.CompletableFuture.failedStage(
+                new IllegalStateException("Vulkan submission ring is not installed"));
+        return ring.submitOreVeinDecisions(records, blockCount);
     }
 
     public static java.util.concurrent.CompletionStage<int[]> submitAquiferFluidStatus(

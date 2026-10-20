@@ -155,25 +155,24 @@ abstract class NoiseChunkGeneratorWriteMixin {
             access.gpunoise$beginGpuDecisions(cache, noiseChunk);
             decisionBuild = access.gpunoise$decisionBuild();
         }
-        if (decisionBuild == null) {
-            return CompletableFuture.supplyAsync(
-                    () -> {
-                        if (cancellationRequested.get()) {
-                            GpuTerrainRuntime.releaseGpuCache(cache);
-                            throw new CancellationException(
-                                    "chunk generation cancelled before terrain writes");
-                        }
-                        return gpunoise$writeGpuFilled(blender, randomState, structures, chunk,
-                                minCellY, cellCountY, cache, noiseChunk,
-                                gpunoise$getPublishedDecisionTable(noiseChunk));
-                    },
-                    net.minecraft.Util.backgroundExecutor()).whenComplete((result, failure) -> {
-                if (failure != null) GpuTerrainRuntime.releaseGpuCache(cache);
-            });
-        }
+        // OCL applies OreVeinifier after aquifer resolution for every block.
+        // Submit the same per-block classifier while aquifer rows are in
+        // flight; an unavailable root or failed dispatch leaves its filler on
+        // the original Java implementation.
+        CompletableFuture<Void> oreVeinBuild = cache.prepareOreVeinDecisions(randomState.oreRandom())
+                .handle((table, failure) -> {
+                    if (failure != null) {
+                        dev.gpunoise.GpuNoise.LOGGER.warn(
+                                "GPU ore-vein preparation failed; OreVeinifier stays on Java", failure);
+                    }
+                    return null;
+                }).toCompletableFuture();
+        CompletableFuture<Void> allDecisionsReady = CompletableFuture.allOf(
+                decisionBuild == null ? CompletableFuture.completedFuture(null) : decisionBuild,
+                oreVeinBuild);
 
-        long waitStart = decisionBuild.isDone() ? 0L : GpuTerrainProfiler.beginPhase();
-        return decisionBuild.handleAsync((ignored, failure) -> {
+        long waitStart = allDecisionsReady.isDone() ? 0L : GpuTerrainProfiler.beginPhase();
+        return allDecisionsReady.handleAsync((ignored, failure) -> {
             GpuTerrainProfiler.recordAquiferDecisionWait(waitStart);
             if (cancellationRequested.get()) {
                 GpuTerrainRuntime.releaseGpuCache(cache);

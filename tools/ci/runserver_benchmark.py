@@ -277,6 +277,8 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
             command.append("-Dgpunoise.experimentalInterpolatedBlockOutput=true")
         if VERIFY_AQUIFER_GPU:
             command.append("-Dgpunoise.verifyAquiferGpu=true")
+        if FULL_BLOCK_OUTPUT:
+            command.append("-Dgpunoise.verifyOreVeinGpu=true")
         command.append(f"-Dgpunoise.terrainBatchWindowMs={BATCH_WINDOW_MS}")
         command.append(f"-Dgpunoise.terrainBatchTargetChunks={BATCH_TARGET_CHUNKS}")
         command.append(f"-Dgpunoise.terrainBatchRegionRadius={BATCH_REGION_RADIUS}")
@@ -563,6 +565,12 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                         or "finalDensity" not in block_roots[-1][1] + block_roots[-1][2]):
                     raise RuntimeError(
                         "GPU worldgen did not exercise interpolation-dependent finalDensity block output")
+                if "GPU ore-vein decision preparation completed:" not in run_log:
+                    raise RuntimeError("GPU terrain did not submit per-block ore-vein decisions to Vulkan")
+                if "GPU OreVeinifier decision applied at" not in run_log:
+                    raise RuntimeError("GPU terrain did not consume a Vulkan ore-vein block decision")
+                if "GPU OreVeinifier parity mismatch" in run_log:
+                    raise RuntimeError("Vulkan OreVeinifier decision differed from Minecraft's Java rule")
             batch_window = GPU_BATCH_WINDOW.search(run_log)
             if (batch_window is None or int(batch_window.group(1)) != BATCH_WINDOW_MS
                     or int(batch_window.group(2)) != BATCH_TARGET_CHUNKS

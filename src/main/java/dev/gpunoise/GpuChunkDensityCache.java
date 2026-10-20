@@ -38,6 +38,9 @@ public final class GpuChunkDensityCache {
     private GpuTerrainBlockResult.RootView[] readyBlockRoots;
     private GpuTerrainBlockResult.RootView fullFinalDensityBlockRoot;
     private GpuTerrainBlockResult.RootView fullInitialDensityBlockRoot;
+    private volatile GpuOreVeinDecisionTable oreVeinDecisions;
+    private CompletableFuture<GpuOreVeinDecisionTable> oreVeinDecisionBuild;
+    private volatile PositionalRandomFactory oreVeinRandomFactory;
     private final AtomicBoolean consumed = new AtomicBoolean();
     // A cache is consumed by one NoiseChunk fill task. After the first
     // observation, keep the hot path entirely non-atomic.
@@ -236,6 +239,42 @@ public final class GpuChunkDensityCache {
         if (roots == null) return null;
         GpuTerrainBlockResult.RootView view = roots[root];
         return view != null && view.covers(16, maxRelativeY, 16) ? view : null;
+    }
+
+    boolean hasOreVeinBlockRoots() {
+        return FULL_BLOCK_OUTPUT && exact == null
+                && supportsRoot(GpuTerrainRoots.VEIN_TOGGLE)
+                && supportsRoot(GpuTerrainRoots.VEIN_RIDGED)
+                && supportsRoot(GpuTerrainRoots.VEIN_GAP)
+                && fullBlockRoot(GpuTerrainRoots.VEIN_TOGGLE) != null
+                && fullBlockRoot(GpuTerrainRoots.VEIN_RIDGED) != null
+                && fullBlockRoot(GpuTerrainRoots.VEIN_GAP) != null;
+    }
+
+    double blockRootValue(int root, int x, int y, int z) {
+        if (!supportsRoot(root) || exact != null) return Double.NaN;
+        int localX = x - minX, localY = y - minY, localZ = z - minZ;
+        if (localX < 0 || localX >= 16 || localY < 0 || localY >= maxRelativeY
+                || localZ < 0 || localZ >= 16) return Double.NaN;
+        GpuTerrainBlockResult.RootView view = fullBlockRoot(root);
+        return view == null ? Double.NaN : view.valueAtUnchecked(localX, localY, localZ);
+    }
+
+    public synchronized CompletionStage<GpuOreVeinDecisionTable> prepareOreVeinDecisions(
+            PositionalRandomFactory randomFactory) {
+        if (oreVeinDecisionBuild != null) return oreVeinDecisionBuild;
+        oreVeinRandomFactory = randomFactory;
+        oreVeinDecisionBuild = GpuOreVeinDecisionTable.build(this, randomFactory)
+                .thenApply(table -> {
+                    oreVeinDecisions = table;
+                    return table;
+                }).toCompletableFuture();
+        return oreVeinDecisionBuild;
+    }
+
+    public GpuOreVeinDecisionTable oreVeinDecisions() { return oreVeinDecisions; }
+    public boolean matchesOreVeinRandomFactory(PositionalRandomFactory randomFactory) {
+        return oreVeinRandomFactory == randomFactory;
     }
 
     public boolean matchesChunk(int minX, int minZ) {

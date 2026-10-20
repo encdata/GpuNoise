@@ -1,0 +1,72 @@
+#version 450
+layout(local_size_x = 64) in;
+
+struct InputRecord {
+    float veinToggle;
+    float veinRidged;
+    float veinGap;
+    int y;
+    float roll0;
+    float roll1;
+    float roll2;
+    int copperOre;
+    int copperRaw;
+    int copperFiller;
+    int ironOre;
+    int ironRaw;
+    int ironFiller;
+};
+layout(std430, set = 0, binding = 0) readonly buffer Inputs { InputRecord items[]; };
+layout(std430, set = 0, binding = 1) writeonly buffer Outputs { int states[]; };
+layout(push_constant) uniform Parameters { uint count; };
+
+const int NO_VEIN = -1;
+const int CPU_FALLBACK = -2;
+const float DECISION_EPSILON = 5.0e-3;
+
+float clampedMap(float value, float inMin, float inMax, float outMin, float outMax) {
+    float t = clamp((value - inMin) / (inMax - inMin), 0.0, 1.0);
+    return outMin + t * (outMax - outMin);
+}
+
+bool near(float first, float second) {
+    return abs(first - second) <= DECISION_EPSILON;
+}
+
+int evaluate(InputRecord r) {
+    if (isnan(r.veinToggle) || isinf(r.veinToggle)
+            || isnan(r.veinRidged) || isinf(r.veinRidged)
+            || isnan(r.veinGap) || isinf(r.veinGap)
+            || isnan(r.roll0) || isinf(r.roll0)
+            || isnan(r.roll1) || isinf(r.roll1)
+            || isnan(r.roll2) || isinf(r.roll2)) return CPU_FALLBACK;
+    if (near(r.veinToggle, 0.0) || near(r.veinRidged, 0.0)) return CPU_FALLBACK;
+
+    bool copper = r.veinToggle > 0.0;
+    int minY = copper ? 0 : -60;
+    int maxY = copper ? 50 : -8;
+    int lowerEdge = r.y - minY;
+    int upperEdge = maxY - r.y;
+    if (lowerEdge < 0 || upperEdge < 0) return NO_VEIN;
+
+    float richness = abs(r.veinToggle);
+    float threshold = richness + clampedMap(float(min(lowerEdge, upperEdge)), 0.0, 20.0, -0.2, 0.0);
+    if (near(threshold, 0.4)) return CPU_FALLBACK;
+    if (threshold < 0.4 || r.roll0 > 0.7) return NO_VEIN;
+    if (r.veinRidged >= 0.0) return NO_VEIN;
+
+    float oreChance = clampedMap(richness, 0.4, 0.6, 0.1, 0.3);
+    if (near(r.roll1, oreChance) || near(r.veinGap, -0.3)) return CPU_FALLBACK;
+    if (r.roll1 < oreChance && r.veinGap > -0.3) {
+        if (near(r.roll2, 0.02)) return CPU_FALLBACK;
+        if (r.roll2 < 0.02) return copper ? r.copperRaw : r.ironRaw;
+        return copper ? r.copperOre : r.ironOre;
+    }
+    return copper ? r.copperFiller : r.ironFiller;
+}
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= count) return;
+    states[index] = evaluate(items[index]);
+}

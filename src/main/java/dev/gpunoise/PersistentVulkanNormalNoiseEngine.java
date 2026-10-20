@@ -67,6 +67,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private final long aquiferNearestShader, aquiferNearestDescriptorLayout, aquiferNearestPipelineLayout,
             aquiferNearestPipeline, aquiferNearestDescriptorPool, aquiferNearestDescriptorSet;
     private final long aquiferSubstanceShader, aquiferSubstancePipelineLayout, aquiferSubstancePipeline;
+    private final long oreVeinShader, oreVeinPipelineLayout, oreVeinPipeline;
     private final long aquiferFluidStatusShader, aquiferFluidStatusPipelineLayout, aquiferFluidStatusPipeline;
     private final boolean ownsDevice;
     /** Vulkan requires host-side external synchronization for queue operations. */
@@ -199,6 +200,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             aquiferSubstanceShader = loadShader(stack, "/assets/gpunoise/shaders/aquifer_substance.comp.spv", "aquifer substance shader");
             aquiferSubstancePipelineLayout = aquiferSubstancePipelineLayout(stack);
             aquiferSubstancePipeline = aquiferSubstancePipeline(stack);
+            oreVeinShader = loadShader(stack, "/assets/gpunoise/shaders/ore_vein.comp.spv", "ore vein shader");
+            oreVeinPipelineLayout = aquiferSubstancePipelineLayout(stack);
+            oreVeinPipeline = aquiferPipeline(oreVeinShader, oreVeinPipelineLayout, stack, "ore vein pipeline");
             aquiferFluidStatusShader = loadShader(stack, "/assets/gpunoise/shaders/aquifer_fluid_status.comp.spv", "aquifer fluid-status shader");
             aquiferFluidStatusPipelineLayout = aquiferFluidStatusPipelineLayout(stack);
             aquiferFluidStatusPipeline = aquiferPipeline(aquiferFluidStatusShader, aquiferFluidStatusPipelineLayout, stack, "aquifer fluid-status pipeline");
@@ -274,6 +278,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             aquiferSubstanceShader = loadShader(stack, "/assets/gpunoise/shaders/aquifer_substance.comp.spv", "aquifer substance shader");
             aquiferSubstancePipelineLayout = aquiferSubstancePipelineLayout(stack);
             aquiferSubstancePipeline = aquiferSubstancePipeline(stack);
+            oreVeinShader = loadShader(stack, "/assets/gpunoise/shaders/ore_vein.comp.spv", "ore vein shader");
+            oreVeinPipelineLayout = aquiferSubstancePipelineLayout(stack);
+            oreVeinPipeline = aquiferPipeline(oreVeinShader, oreVeinPipelineLayout, stack, "ore vein pipeline");
             aquiferFluidStatusShader = loadShader(stack, "/assets/gpunoise/shaders/aquifer_fluid_status.comp.spv", "aquifer fluid-status shader");
             aquiferFluidStatusPipelineLayout = aquiferFluidStatusPipelineLayout(stack);
             aquiferFluidStatusPipeline = aquiferPipeline(aquiferFluidStatusShader, aquiferFluidStatusPipelineLayout, stack, "aquifer fluid-status pipeline");
@@ -1111,6 +1118,46 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         }
     }
 
+    /** Runs OCL's per-block OreVeinifier classification on Vulkan. */
+    synchronized int[] submitOreVeinDecisions(ByteBuffer records, int count) throws Exception {
+        if (hasInFlightWork()) throw new IllegalStateException("Vulkan slot is still in flight");
+        if (count <= 0 || count > CAPACITY
+                || records.remaining() != count * GpuOreVeinDecisions.RECORD_BYTES)
+            throw new IllegalArgumentException("invalid ore-vein decision batch");
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            put(aquiferNearestInputs, records, stack);
+            check(vkResetCommandBuffer(commandBuffer, 0), "reset ore-vein command buffer");
+            check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()),
+                    "begin ore-vein command buffer");
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, oreVeinPipeline);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                    oreVeinPipelineLayout, 0, stack.longs(aquiferNearestDescriptorSet), null);
+            ByteBuffer push = stack.malloc(4).order(ByteOrder.nativeOrder()).putInt(count).flip();
+            vkCmdPushConstants(commandBuffer, oreVeinPipelineLayout,
+                    VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
+            vkCmdDispatch(commandBuffer, (count + 63) / 64, 1, 1);
+            VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
+                    .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
+                    .buffer(aquiferNearestOutput.buffer).size((long) count * Integer.BYTES);
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_PIPELINE_STAGE_HOST_BIT, 0, null, barrier, null);
+            check(vkEndCommandBuffer(commandBuffer), "end ore-vein command buffer");
+            synchronized (queueSubmitLock) {
+                check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default()
+                        .pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit ore-vein decisions");
+            }
+            check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait ore-vein decisions");
+            check(vkResetFences(device, fence), "reset ore-vein decision fence");
+            IntBuffer values = persistentMappings.get(aquiferNearestOutput)
+                    .duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
+            values.clear();
+            values.limit(count);
+            int[] output = new int[count];
+            values.get(output);
+            return output;
+        }
+    }
+
     private static int[] unpackAquiferSubstanceRows(int[] words, int rows) {
         if (words.length != GpuAquiferSubstance.shaderOutputWordCount(rows))
             throw new IllegalArgumentException("packed aquifer output word count does not match row count");
@@ -1758,5 +1805,5 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         inFlightAquiferRowStage = null;
         if (unfinishedAquiferRows != null) unfinishedAquiferRows.completeExceptionally(
                 new IllegalStateException("GPU engine closed before aquifer decision completion was observed"));
-        for(NativeBuffer buffer:persistentMappings.keySet())buffer.unmap(device);vkDestroyFence(device,fence,null);if(timestampQueryPool!=0L)vkDestroyQueryPool(device,timestampQueryPool,null);vkDestroyCommandPool(device,commandPool,null);vkDestroyDescriptorPool(device,descriptorPool,null);vkDestroyPipeline(device,pipeline,null);vkDestroyPipelineLayout(device,pipelineLayout,null);vkDestroyDescriptorSetLayout(device,descriptorLayout,null);vkDestroyShaderModule(device,shader,null);vkDestroyPipeline(device,graphPipeline,null);vkDestroyPipeline(device,gridPipeline,null);vkDestroyPipeline(device,blockGraphPipeline,null);vkDestroyShaderModule(device,blockGraphShader,null);vkDestroyPipelineLayout(device,graphPipelineLayout,null);vkDestroyDescriptorSetLayout(device,graphDescriptorLayout,null);vkDestroyDescriptorPool(device,graphDescriptorPool,null);vkDestroyShaderModule(device,graphShader,null);vkDestroyShaderModule(device,gridShader,null);vkDestroyPipeline(device,interpolationPipeline,null);vkDestroyPipelineLayout(device,interpolationPipelineLayout,null);vkDestroyDescriptorSetLayout(device,interpolationDescriptorLayout,null);vkDestroyDescriptorPool(device,interpolationDescriptorPool,null);vkDestroyShaderModule(device,interpolationShader,null);vkDestroyPipeline(device,aquiferPressurePipeline,null);vkDestroyPipelineLayout(device,aquiferPressurePipelineLayout,null);vkDestroyDescriptorSetLayout(device,aquiferPressureDescriptorLayout,null);vkDestroyDescriptorPool(device,aquiferPressureDescriptorPool,null);vkDestroyShaderModule(device,aquiferPressureShader,null);vkDestroyPipeline(device,aquiferNearestPipeline,null);vkDestroyPipelineLayout(device,aquiferNearestPipelineLayout,null);vkDestroyDescriptorSetLayout(device,aquiferNearestDescriptorLayout,null);vkDestroyDescriptorPool(device,aquiferNearestDescriptorPool,null);vkDestroyShaderModule(device,aquiferNearestShader,null);vkDestroyPipeline(device,aquiferSubstancePipeline,null);vkDestroyPipelineLayout(device,aquiferSubstancePipelineLayout,null);vkDestroyShaderModule(device,aquiferSubstanceShader,null);vkDestroyPipeline(device,aquiferFluidStatusPipeline,null);vkDestroyPipelineLayout(device,aquiferFluidStatusPipelineLayout,null);vkDestroyShaderModule(device,aquiferFluidStatusShader,null);coordinates.destroy(device);graphCoordinates.destroy(device);graphNodes.destroy(device);graphSplinePoints.destroy(device);graphBlendedMetadata.destroy(device);graphRoots.destroy(device);graphMthSinTable.destroy(device);interpolatedInputs.destroy(device);interpolatorMap.destroy(device);interpolationMetadata.destroy(device);interpolationOutput.destroy(device);aquiferPressureInputs.destroy(device);aquiferNearestInputs.destroy(device);aquiferNearestOutput.destroy(device);results.destroy(device);permutations.destroy(device);octaves.destroy(device);samplerMetadata.destroy(device);if(ownsDevice){vkDestroyDevice(device,null);vkDestroyInstance(instance,null);}}
+        for(NativeBuffer buffer:persistentMappings.keySet())buffer.unmap(device);vkDestroyFence(device,fence,null);if(timestampQueryPool!=0L)vkDestroyQueryPool(device,timestampQueryPool,null);vkDestroyCommandPool(device,commandPool,null);vkDestroyDescriptorPool(device,descriptorPool,null);vkDestroyPipeline(device,pipeline,null);vkDestroyPipelineLayout(device,pipelineLayout,null);vkDestroyDescriptorSetLayout(device,descriptorLayout,null);vkDestroyShaderModule(device,shader,null);vkDestroyPipeline(device,graphPipeline,null);vkDestroyPipeline(device,gridPipeline,null);vkDestroyPipeline(device,blockGraphPipeline,null);vkDestroyShaderModule(device,blockGraphShader,null);vkDestroyPipelineLayout(device,graphPipelineLayout,null);vkDestroyDescriptorSetLayout(device,graphDescriptorLayout,null);vkDestroyDescriptorPool(device,graphDescriptorPool,null);vkDestroyShaderModule(device,graphShader,null);vkDestroyShaderModule(device,gridShader,null);vkDestroyPipeline(device,interpolationPipeline,null);vkDestroyPipelineLayout(device,interpolationPipelineLayout,null);vkDestroyDescriptorSetLayout(device,interpolationDescriptorLayout,null);vkDestroyDescriptorPool(device,interpolationDescriptorPool,null);vkDestroyShaderModule(device,interpolationShader,null);vkDestroyPipeline(device,aquiferPressurePipeline,null);vkDestroyPipelineLayout(device,aquiferPressurePipelineLayout,null);vkDestroyDescriptorSetLayout(device,aquiferPressureDescriptorLayout,null);vkDestroyDescriptorPool(device,aquiferPressureDescriptorPool,null);vkDestroyShaderModule(device,aquiferPressureShader,null);vkDestroyPipeline(device,aquiferNearestPipeline,null);vkDestroyPipelineLayout(device,aquiferNearestPipelineLayout,null);vkDestroyDescriptorSetLayout(device,aquiferNearestDescriptorLayout,null);vkDestroyDescriptorPool(device,aquiferNearestDescriptorPool,null);vkDestroyShaderModule(device,aquiferNearestShader,null);vkDestroyPipeline(device,aquiferSubstancePipeline,null);vkDestroyPipelineLayout(device,aquiferSubstancePipelineLayout,null);vkDestroyShaderModule(device,aquiferSubstanceShader,null);vkDestroyPipeline(device,oreVeinPipeline,null);vkDestroyPipelineLayout(device,oreVeinPipelineLayout,null);vkDestroyShaderModule(device,oreVeinShader,null);vkDestroyPipeline(device,aquiferFluidStatusPipeline,null);vkDestroyPipelineLayout(device,aquiferFluidStatusPipelineLayout,null);vkDestroyShaderModule(device,aquiferFluidStatusShader,null);coordinates.destroy(device);graphCoordinates.destroy(device);graphNodes.destroy(device);graphSplinePoints.destroy(device);graphBlendedMetadata.destroy(device);graphRoots.destroy(device);graphMthSinTable.destroy(device);interpolatedInputs.destroy(device);interpolatorMap.destroy(device);interpolationMetadata.destroy(device);interpolationOutput.destroy(device);aquiferPressureInputs.destroy(device);aquiferNearestInputs.destroy(device);aquiferNearestOutput.destroy(device);results.destroy(device);permutations.destroy(device);octaves.destroy(device);samplerMetadata.destroy(device);if(ownsDevice){vkDestroyDevice(device,null);vkDestroyInstance(instance,null);}}
 }

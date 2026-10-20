@@ -18,6 +18,7 @@
     "HeightmapGpuWriteMixin",
     "AquiferFluidStatusAccessor",
     "AquiferGpuInputsMixin",
+    "OreVeinifierGpuMixin",
     "NoiseChunkGeneratorWriteMixin",
     "C2meCompiledDensityFunctionMixin",
     "ClientCompileStatusMixin"

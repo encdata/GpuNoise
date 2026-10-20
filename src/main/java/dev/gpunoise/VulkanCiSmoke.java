@@ -10,6 +10,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.levelgen.Aquifer;
+import net.minecraft.world.level.levelgen.DensityFunction;
+import net.minecraft.world.level.levelgen.DensityFunctions;
+import net.minecraft.world.level.levelgen.NoiseChunk;
+import net.minecraft.world.level.levelgen.OreVeinifier;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQuery;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQueries;
 
@@ -1212,10 +1216,73 @@ public final class VulkanCiSmoke {
                     || positiveDensityMaterial[1] != 0 || positiveDensityMaterial[2] != 0) {
                 throw new IllegalStateException("Positive-density terrain must select vanilla's default material result");
             }
+            verifyOreVeinShader(ring);
         }
 
         System.out.println("Vulkan CI smoke passed on " + device.name()
-                + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, shared terrain/material-root lattices, and non-associative Y-X-Z float rounding; aquifer pressure, four-center selection, and vanilla/C2ME substance decisions matched Java reference cases.");
+                + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, shared terrain/material-root lattices, and non-associative Y-X-Z float rounding; aquifer pressure, four-center selection, vanilla/C2ME substance decisions, and OreVeinifier outputs matched Java references.");
+    }
+
+    private static void verifyOreVeinShader(VulkanSubmissionRing ring) throws Exception {
+        net.minecraft.world.level.levelgen.PositionalRandomFactory randomFactory =
+                RandomSource.create(0x4f52455645494eL).forkPositional();
+        ByteBuffer[] records = new ByteBuffer[1024];
+        int[] expected = new int[records.length];
+        NoiseChunk.BlockStateFiller[] javaFillers = new NoiseChunk.BlockStateFiller[records.length];
+        for (int i = 0; i < records.length; i++) {
+            int x = i * 19 - 8000;
+            int y = switch (i & 7) {
+                case 0 -> -60;
+                case 1 -> -8;
+                case 2 -> 0;
+                case 3 -> 50;
+                default -> (i % 111) - 60;
+            };
+            int z = 12000 - i * 23;
+            float toggle = (i & 1) == 0 ? 0.55f : -0.55f;
+            float ridged = (i & 4) == 0 ? -0.75f : 0.25f;
+            float gap = (i & 8) == 0 ? 0.2f : -0.45f;
+            records[i] = GpuOreVeinDecisions.pack(toggle, ridged, gap, x, y, z, randomFactory);
+            expected[i] = GpuOreVeinDecisions.evaluate(records[i]);
+            javaFillers[i] = OreVeinifier.create(DensityFunctions.constant(toggle),
+                    DensityFunctions.constant(ridged), DensityFunctions.constant(gap), randomFactory);
+        }
+        ByteBuffer packed = GpuOreVeinDecisions.packBatch(records);
+        int[] actual = ring.submitOreVeinDecisions(packed, records.length).get(60, TimeUnit.SECONDS);
+        if (actual.length != expected.length)
+            throw new IllegalStateException("Ore-vein Vulkan output length differs from its input batch");
+        int comparedWithVanilla = 0;
+        for (int i = 0; i < expected.length; i++) {
+            if (actual[i] != expected[i]) {
+                throw new IllegalStateException("Ore-vein Vulkan mismatch at row " + i
+                        + ": expected state " + expected[i] + ", got " + actual[i]);
+            }
+            if (actual[i] != GpuOreVeinDecisions.CPU_FALLBACK) {
+                comparedWithVanilla++;
+                int x = i * 19 - 8000;
+                int y = switch (i & 7) {
+                    case 0 -> -60;
+                    case 1 -> -8;
+                    case 2 -> 0;
+                    case 3 -> 50;
+                    default -> (i % 111) - 60;
+                };
+                int z = 12000 - i * 23;
+                net.minecraft.world.level.block.state.BlockState javaState = javaFillers[i].calculate(
+                        new DensityFunction.SinglePointContext(x, y, z));
+                int javaStateId = javaState == null ? GpuOreVeinDecisions.NO_VEIN
+                        : net.minecraft.world.level.block.Block.getId(javaState);
+                if (actual[i] != javaStateId) {
+                    throw new IllegalStateException("Vulkan OreVeinifier differed from Minecraft at row " + i
+                            + ": GPU=" + actual[i] + ", Java=" + javaStateId);
+                }
+            }
+        }
+        if (comparedWithVanilla == 0)
+            throw new IllegalStateException("Ore-vein parity fixture did not exercise a Vulkan decision");
+        System.out.println("Vulkan CI smoke: ore-vein decisions matched the Java reference for "
+                + expected.length + " positional-random block inputs, including " + comparedWithVanilla
+                + " direct Minecraft OreVeinifier comparisons");
     }
 
     private static void verifyChunkPipelineCancellation() throws Exception {

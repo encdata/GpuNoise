@@ -1115,6 +1115,11 @@ final class VulkanSubmissionRing implements AutoCloseable {
         return future;
     }
 
+    CompletableFuture<int[]> submitOreVeinDecisions(ByteBuffer records, int count) {
+        ByteBuffer input = records.duplicate();
+        return submitBlocking("ore vein decisions", slot -> slot.submitOreVeinDecisions(input, count));
+    }
+
     CompletableFuture<int[]> submitAquiferFluidStatus(ByteBuffer records, int count) {
         CompletableFuture<int[]> future = new CompletableFuture<>();
         enqueue(pendingAquiferFluidStatus,
