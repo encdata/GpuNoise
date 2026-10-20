@@ -1,11 +1,13 @@
 package dev.gpunoise;
 
+import java.nio.ByteBuffer;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
@@ -26,6 +28,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
     private static final long IDLE_POLL_MILLIS = 1L;
     private final PersistentVulkanNormalNoiseEngine[] slots;
     private final AtomicInteger next = new AtomicInteger();
+    private final AtomicBoolean drainScheduled = new AtomicBoolean();
     /** Requests wait here, not on a worldgen thread, while the shared slot is busy. */
     private final ConcurrentLinkedQueue<GraphRootsRequest> pendingGraphRoots = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<GraphRootsGridRequest> pendingGraphGrids = new ConcurrentLinkedQueue<>();
@@ -33,8 +36,11 @@ final class VulkanSubmissionRing implements AutoCloseable {
     private final ConcurrentLinkedQueue<AquiferSubstanceRequest> pendingAquiferSubstance = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<AquiferFluidStatusRequest> pendingAquiferFluidStatus = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<AquiferPrefillRequest> pendingAquiferPrefill = new ConcurrentLinkedQueue<>();
+    /** Blocking dispatches share the graph engine's command buffer and fence. */
+    private final ConcurrentLinkedQueue<BlockingRequest<?>> pendingBlocking = new ConcurrentLinkedQueue<>();
     /** The auxiliary kernel shares the slot command buffer with async graph work. */
     private boolean aquiferKernelInFlight;
+    private boolean blockingKernelInFlight;
     private final ScheduledExecutorService completion = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "GPU Vulkan completion");
         thread.setDaemon(true);
@@ -85,6 +91,58 @@ final class VulkanSubmissionRing implements AutoCloseable {
         }
     }
 
+    /** Keep command recording and queue submission off terrain producer threads. */
+    private void scheduleDrain() {
+        if (!drainScheduled.compareAndSet(false, true)) return;
+        try {
+            completion.execute(() -> {
+                try {
+                    drainGraphRoots();
+                } finally {
+                    drainScheduled.set(false);
+                    // Close the enqueue/clear race without busy-spinning while
+                    // a fence or synchronous dispatch still owns the slot.
+                    if (hasPendingRequests() && canStartQueuedWork()) scheduleDrain();
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException stopped) {
+            drainScheduled.set(false);
+            failPending(stopped);
+        }
+    }
+
+    private boolean hasPendingRequests() {
+        return !pendingGraphRoots.isEmpty() || !pendingGraphGrids.isEmpty()
+                || !pendingAquiferNearest.isEmpty() || !pendingAquiferSubstance.isEmpty()
+                || !pendingAquiferFluidStatus.isEmpty() || !pendingAquiferPrefill.isEmpty()
+                || !pendingBlocking.isEmpty();
+    }
+
+    private synchronized boolean canStartQueuedWork() {
+        if (aquiferKernelInFlight || blockingKernelInFlight) return false;
+        for (PersistentVulkanNormalNoiseEngine slot : slots) {
+            if (slot != null && !slot.graphRootsInFlight()) return true;
+        }
+        return false;
+    }
+
+    private void failPending(Throwable failure) {
+        GraphRootsRequest graph;
+        while ((graph = pendingGraphRoots.poll()) != null) graph.future.completeExceptionally(failure);
+        GraphRootsGridRequest grid;
+        while ((grid = pendingGraphGrids.poll()) != null) grid.future.completeExceptionally(failure);
+        AquiferNearestRequest nearest;
+        while ((nearest = pendingAquiferNearest.poll()) != null) nearest.future.completeExceptionally(failure);
+        AquiferSubstanceRequest substance;
+        while ((substance = pendingAquiferSubstance.poll()) != null) substance.future.completeExceptionally(failure);
+        AquiferFluidStatusRequest fluid;
+        while ((fluid = pendingAquiferFluidStatus.poll()) != null) fluid.future.completeExceptionally(failure);
+        AquiferPrefillRequest prefill;
+        while ((prefill = pendingAquiferPrefill.poll()) != null) prefill.future.completeExceptionally(failure);
+        BlockingRequest<?> blocking;
+        while ((blocking = pendingBlocking.poll()) != null) blocking.future.completeExceptionally(failure);
+    }
+
     PersistentVulkanNormalNoiseEngine primary() { return slots[0]; }
 
     CompletableFuture<float[]> submitGraphRoots(GpuDensityGraph graph, float[] x, float[] y, float[] z) {
@@ -93,8 +151,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
 
     CompletableFuture<float[]> submitGraphRoots(GpuDensityGraph graph, float[] x, float[] y, float[] z, int sampleCount) {
         CompletableFuture<float[]> future = new CompletableFuture<>();
-        pendingGraphRoots.add(new GraphRootsRequest(graph, x, y, z, sampleCount, future));
-        drainGraphRoots();
+        pendingGraphRoots.add(new GraphRootsRequest(graph, x.clone(), y.clone(), z.clone(), sampleCount, future));
+        scheduleDrain();
         return future;
     }
 
@@ -108,14 +166,15 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 new IllegalStateException("GPU terrain graph is not installed"));
         CompletableFuture<float[]> future = new CompletableFuture<>();
         pendingGraphGrids.add(new GraphRootsGridRequest(graph, metadata, chunkCount, samplesPerChunk, future));
-        drainGraphRoots();
+        scheduleDrain();
         return future;
     }
 
     /** Starts at most one request per lightweight slot; never rejects work just because GPU is busy. */
     private synchronized void drainGraphRoots() {
+        if (aquiferKernelInFlight || blockingKernelInFlight) return;
         for (PersistentVulkanNormalNoiseEngine slot : slots) {
-            if (slot == null || slot.graphRootsInFlight() || aquiferKernelInFlight) continue;
+            if (slot == null || slot.graphRootsInFlight()) continue;
             GraphRootsRequest request = pendingGraphRoots.poll();
             if (request == null) {
                 GraphRootsGridRequest grid = pendingGraphGrids.poll();
@@ -126,7 +185,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                             ? pendingAquiferSubstance.poll() : null;
                     AquiferFluidStatusRequest fluidStatus = prefill == null && nearest == null && substance == null
                             ? pendingAquiferFluidStatus.poll() : null;
-                    if (prefill == null && nearest == null && substance == null && fluidStatus == null) return;
+                    if (prefill == null && nearest == null && substance == null && fluidStatus == null) break;
                     aquiferKernelInFlight = true;
                     try {
                         completion.execute(() -> {
@@ -193,17 +252,48 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 request.future.completeExceptionally(new IllegalStateException("GPU ring graph dispatch failed", failure));
             }
         }
+        // The synchronous kernels below wait on the same fence and reuse the
+        // same command buffer as asynchronous graph roots. Dispatch one only
+        // after graph-root work has been polled to completion.
+        PersistentVulkanNormalNoiseEngine slot = slots[0];
+        if (slot != null && !slot.graphRootsInFlight()) {
+            BlockingRequest<?> request = pendingBlocking.poll();
+            if (request != null) runBlocking(request);
+        }
+    }
+
+    private <T> CompletableFuture<T> submitBlocking(String description, Callable<T> operation) {
+        CompletableFuture<T> future = new CompletableFuture<>();
+        pendingBlocking.add(new BlockingRequest<>(description, operation, future));
+        scheduleDrain();
+        return future;
+    }
+
+    private <T> void runBlocking(BlockingRequest<T> request) {
+        blockingKernelInFlight = true;
+        try {
+            completion.execute(() -> {
+                try {
+                    request.future.complete(request.operation.call());
+                } catch (Throwable failure) {
+                    request.future.completeExceptionally(new IllegalStateException(
+                            "GPU ring " + request.description + " dispatch failed", failure));
+                } finally {
+                    synchronized (VulkanSubmissionRing.this) {
+                        blockingKernelInFlight = false;
+                        drainGraphRoots();
+                    }
+                }
+            });
+        } catch (RuntimeException stopped) {
+            blockingKernelInFlight = false;
+            request.future.completeExceptionally(stopped);
+        }
     }
 
     CompletableFuture<float[]> submitNoise(GpuGlobalNoiseBatch.Packed batch) {
         PersistentVulkanNormalNoiseEngine slot = slots[Math.floorMod(next.getAndIncrement(), slots.length)];
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                return slot.submit(batch);
-            } catch (Exception failure) {
-                throw new IllegalStateException("GPU ring noise dispatch failed", failure);
-            }
-        }, completion);
+        return submitBlocking("noise", () -> slot.submit(batch));
     }
 
     CompletableFuture<float[]> submitInterpolation(float[] corners, ByteBuffer metadata,
@@ -215,46 +305,35 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                                     int chunkCount, int blocksPerChunk,
                                                     int rootStride, int outputStride) {
         PersistentVulkanNormalNoiseEngine slot = slots[Math.floorMod(next.getAndIncrement(), slots.length)];
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                return slot.submitInterpolation(corners, metadata, chunkCount, blocksPerChunk,
-                        rootStride, outputStride);
-            } catch (Exception failure) {
-                throw new IllegalStateException("GPU ring interpolation dispatch failed", failure);
-            }
-        }, completion);
+        ByteBuffer inputMetadata = metadata.duplicate();
+        return submitBlocking("interpolation", () -> slot.submitInterpolation(corners, inputMetadata,
+                chunkCount, blocksPerChunk, rootStride, outputStride));
     }
 
     CompletableFuture<float[]> submitAquiferPressure(ByteBuffer records, int count) {
         PersistentVulkanNormalNoiseEngine slot = slots[Math.floorMod(next.getAndIncrement(), slots.length)];
         ByteBuffer input = records.duplicate();
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                return slot.submitAquiferPressure(input, count);
-            } catch (Exception failure) {
-                throw new IllegalStateException("GPU aquifer pressure dispatch failed", failure);
-            }
-        }, completion);
+        return submitBlocking("aquifer pressure", () -> slot.submitAquiferPressure(input, count));
     }
 
     CompletableFuture<int[]> submitAquiferNearestThree(ByteBuffer records, int count) {
         CompletableFuture<int[]> future = new CompletableFuture<>();
         pendingAquiferNearest.add(new AquiferNearestRequest(records.duplicate(), count, future));
-        drainGraphRoots();
+        scheduleDrain();
         return future;
     }
 
     CompletableFuture<int[]> submitAquiferSubstance(ByteBuffer records, int count) {
         CompletableFuture<int[]> future = new CompletableFuture<>();
         pendingAquiferSubstance.add(new AquiferSubstanceRequest(records.duplicate(), count, future));
-        drainGraphRoots();
+        scheduleDrain();
         return future;
     }
 
     CompletableFuture<int[]> submitAquiferFluidStatus(ByteBuffer records, int count) {
         CompletableFuture<int[]> future = new CompletableFuture<>();
         pendingAquiferFluidStatus.add(new AquiferFluidStatusRequest(records.duplicate(), count, future));
-        drainGraphRoots();
+        scheduleDrain();
         return future;
     }
 
@@ -263,7 +342,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
         CompletableFuture<GpuAquiferPrefillResult> future = new CompletableFuture<>();
         pendingAquiferPrefill.add(new AquiferPrefillRequest(nearestRecords.duplicate(), nearestCount,
                 statusRecords.duplicate(), statusCount, future));
-        drainGraphRoots();
+        scheduleDrain();
         return future;
     }
 
@@ -307,26 +386,19 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                                                            int blocksPerChunk,
                                                                            int[] outputRootIndexes) {
         PersistentVulkanNormalNoiseEngine slot = slots[Math.floorMod(next.getAndIncrement(), slots.length)];
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                return slot.submitGraphGridInterpolated(graph, gridMetadata, chunkCount,
-                        samplesPerChunk, outputMetadata, blocksPerChunk, outputRootIndexes);
-            } catch (Exception failure) {
-                throw new IllegalStateException("GPU grid terrain output dispatch failed", failure);
-            }
-        }, completion);
+        ByteBuffer inputGridMetadata = gridMetadata.duplicate();
+        ByteBuffer inputOutputMetadata = outputMetadata.duplicate();
+        int[] roots = outputRootIndexes.clone();
+        return submitBlocking("grid terrain output", () -> slot.submitGraphGridInterpolated(graph,
+                inputGridMetadata, chunkCount, samplesPerChunk, inputOutputMetadata, blocksPerChunk, roots));
     }
 
     CompletableFuture<GpuFusedResult> submitGraphInterpolated(GpuDensityGraph graph, float[] x, float[] y, float[] z,
                                                         int sampleCount, ByteBuffer metadata, int chunkCount, int blocksPerChunk) {
         PersistentVulkanNormalNoiseEngine slot = slots[Math.floorMod(next.getAndIncrement(), slots.length)];
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                return slot.submitGraphInterpolated(graph, x, y, z, sampleCount, metadata, chunkCount, blocksPerChunk);
-            } catch (Exception failure) {
-                throw new IllegalStateException("GPU fused terrain dispatch failed", failure);
-            }
-        }, completion);
+        ByteBuffer inputMetadata = metadata.duplicate();
+        return submitBlocking("fused terrain", () ->
+                slot.submitGraphInterpolated(graph, x, y, z, sampleCount, inputMetadata, chunkCount, blocksPerChunk));
     }
 
     @Override public void close() {
@@ -355,6 +427,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
         AquiferPrefillRequest prefillRequest;
         while ((prefillRequest = pendingAquiferPrefill.poll()) != null)
             prefillRequest.future.completeExceptionally(stopped);
+        BlockingRequest<?> blockingRequest;
+        while ((blockingRequest = pendingBlocking.poll()) != null)
+            blockingRequest.future.completeExceptionally(stopped);
         for (int i = slots.length - 1; i >= 0; i--) {
             if (slots[i] != null) slots[i].close();
         }
@@ -370,4 +445,6 @@ final class VulkanSubmissionRing implements AutoCloseable {
     private record AquiferPrefillRequest(ByteBuffer nearestRecords, int nearestCount,
                                          ByteBuffer statusRecords, int statusCount,
                                          CompletableFuture<GpuAquiferPrefillResult> future) {}
+    private record BlockingRequest<T>(String description, Callable<T> operation,
+                                      CompletableFuture<T> future) {}
 }

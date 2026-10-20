@@ -105,14 +105,21 @@ final class GpuProbe {
                         VK10.vkGetPhysicalDeviceFeatures(physicalDevice, features);
                         GpuDevice device = new GpuDevice(index, properties.vendorID(), properties.deviceID(),
                                 vendorName(properties.vendorID()), properties.deviceNameString(),
-                                priority(properties.vendorID(), preference), features.shaderFloat64());
+                                priority(properties.vendorID(), preference), properties.deviceType(),
+                                features.shaderFloat64());
                         GpuNoise.LOGGER.info("Vulkan GPU found: {} ({})", device.name(), device.vendorName());
                         if (device.priority() >= 0 && hasComputeQueue(physicalDevice, stack)) candidates.add(device);
                     } finally {
                         properties.free();
                     }
                 }
-                candidates.sort(Comparator.comparingInt(GpuDevice::priority).reversed());
+                // Honor the configured vendor preference first. Within one
+                // vendor tier, favor dedicated GPUs over integrated/virtual
+                // adapters, then retain Vulkan enumeration order for stable
+                // tie-breaking. Runtime creation still tries every candidate.
+                candidates.sort(Comparator.comparingInt(GpuDevice::priority).reversed()
+                        .thenComparing(Comparator.comparingInt(GpuProbe::deviceTypeRank).reversed())
+                        .thenComparingInt(GpuDevice::enumerationIndex));
                 return List.copyOf(candidates);
                 } finally {
                     VK10.vkDestroyInstance(instance, null);
@@ -124,18 +131,18 @@ final class GpuProbe {
         }
     }
 
+    private static int deviceTypeRank(GpuDevice device) {
+        return switch (device.deviceType()) {
+            case VK10.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU -> 4;
+            case VK10.VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU -> 3;
+            case VK10.VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU -> 2;
+            case VK10.VK_PHYSICAL_DEVICE_TYPE_CPU -> 1;
+            default -> 0;
+        };
+    }
+
     private static boolean hasComputeQueue(VkPhysicalDevice device, MemoryStack stack) {
-        IntBuffer count = stack.ints(0);
-        VK10.vkGetPhysicalDeviceQueueFamilyProperties(device, count, null);
-        if (count.get(0) == 0) return false;
-        org.lwjgl.vulkan.VkQueueFamilyProperties.Buffer families =
-                org.lwjgl.vulkan.VkQueueFamilyProperties.malloc(count.get(0), stack);
-        VK10.vkGetPhysicalDeviceQueueFamilyProperties(device, count, families);
-        for (int index = 0; index < count.get(0); index++) {
-            if (families.get(index).queueCount() > 0
-                    && (families.get(index).queueFlags() & VK10.VK_QUEUE_COMPUTE_BIT) != 0) return true;
-        }
-        return false;
+        return VulkanQueueSelection.findComputeFamily(device, stack) >= 0;
     }
 
     private static int priority(int vendorId, GpuNoiseConfig.GpuVendorPreference preference) {

@@ -15,7 +15,6 @@ import org.lwjgl.vulkan.VkInstanceCreateInfo;
 import org.lwjgl.vulkan.VkPhysicalDevice;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
-import org.lwjgl.vulkan.VkQueueFamilyProperties;
 
 /** Creates and destroys a headless compute device to verify real GPU availability. */
 final class VulkanComputeProbe {
@@ -45,7 +44,7 @@ final class VulkanComputeProbe {
             try {
                 VkPhysicalDevice physicalDevice = findDevice(instance, expected, stack);
                 if (physicalDevice == null) return false;
-                int queueFamily = findComputeQueueFamily(physicalDevice, stack);
+                int queueFamily = VulkanQueueSelection.findComputeFamily(physicalDevice, stack);
                 if (queueFamily < 0) {
                     GpuNoise.LOGGER.warn("Selected Vulkan GPU has no compute queue.");
                     return false;
@@ -143,18 +142,4 @@ final class VulkanComputeProbe {
         return null;
     }
 
-    private static int findComputeQueueFamily(VkPhysicalDevice device, MemoryStack stack) {
-        IntBuffer count = stack.ints(0);
-        VK10.vkGetPhysicalDeviceQueueFamilyProperties(device, count, null);
-        VkQueueFamilyProperties.Buffer families = VkQueueFamilyProperties.malloc(count.get(0), stack);
-        VK10.vkGetPhysicalDeviceQueueFamilyProperties(device, count, families);
-        int fallback = -1;
-        for (int i = 0; i < count.get(0); i++) {
-            int flags = families.get(i).queueFlags();
-            if ((flags & VK10.VK_QUEUE_COMPUTE_BIT) == 0) continue;
-            if ((flags & VK10.VK_QUEUE_GRAPHICS_BIT) == 0) return i;
-            fallback = i;
-        }
-        return fallback;
-    }
 }

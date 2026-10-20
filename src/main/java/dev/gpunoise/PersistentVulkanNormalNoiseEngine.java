@@ -1209,7 +1209,11 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             properties.free();
         }
     }
-    private int findQueue(VkPhysicalDevice p,MemoryStack s){IntBuffer n=s.ints(0);vkGetPhysicalDeviceQueueFamilyProperties(p,n,null);VkQueueFamilyProperties.Buffer f=VkQueueFamilyProperties.malloc(n.get(0),s);vkGetPhysicalDeviceQueueFamilyProperties(p,n,f);for(int i=0;i<n.get(0);i++)if((f.get(i).queueFlags()&VK_QUEUE_COMPUTE_BIT)!=0)return i;throw new IllegalStateException("no compute queue");}
+    private int findQueue(VkPhysicalDevice physicalDevice, MemoryStack stack) {
+        int queueFamily = VulkanQueueSelection.findComputeFamily(physicalDevice, stack);
+        if (queueFamily < 0) throw new IllegalStateException("no compute queue");
+        return queueFamily;
+    }
     private NativeBuffer buffer(long size,MemoryStack s){return createBuffer(size,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,s);}
     private NativeBuffer hostVisibleBuffer(long size,MemoryStack s){return buffer(size,s);}
     private NativeBuffer deviceLocalBuffer(long size,MemoryStack s){

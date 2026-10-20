@@ -713,8 +713,23 @@ public final class VulkanCiSmoke {
             queuedGridMetadata.putInt(-16).putInt(-8).putInt(32)
                     .putInt(2).putInt(2).putInt(2).putInt(1).putInt(1).flip();
             var queuedGrid = ring.submitGraphRootsGrid(graph, queuedGridMetadata, 1, 8);
+            // Queue a fence-waiting production terrain dispatch behind the
+            // asynchronous graph-root dispatch. Both reuse the engine's one
+            // command buffer and fence, so the ring must not let the terrain
+            // dispatch overwrite graph work before its completion is polled.
+            var overlappingTerrain = ring.submitGraphGridInterpolated(markerGraph,
+                    markerGrid.duplicate().order(ByteOrder.nativeOrder()), 1, 8,
+                    markerOutput.duplicate().order(ByteOrder.nativeOrder()), 256);
             System.out.println("Vulkan CI smoke: dispatching four-center aquifer selection");
             var nearestFuture = ring.submitAquiferNearestThree(nearestInput, queryCount);
+            GpuTerrainBlockResult overlappingBlocks = overlappingTerrain.get(60, TimeUnit.SECONDS).blocks();
+            for (int blockX = 0; blockX < 16; blockX++) {
+                float actual = overlappingBlocks.valueAt(blockX, 0, 0, GpuTerrainRoots.FINAL_DENSITY);
+                if (Math.abs(actual - blockX * blockX) > 1.0e-5f) {
+                    throw new IllegalStateException("Queued terrain output was corrupted by in-flight graph work at X="
+                            + blockX + ": expected " + (blockX * blockX) + ", got " + actual);
+                }
+            }
             GpuAquiferSubstance.Input weightedThirdPressureCase =
                     new GpuAquiferSubstance.Input(-0.02, -0.3748834, 22,
                             23, 23, 63, 23, 90, 113, 137, 150,

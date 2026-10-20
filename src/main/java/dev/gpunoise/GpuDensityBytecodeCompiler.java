@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import net.minecraft.core.Holder;
 import net.minecraft.world.level.levelgen.DensityFunction;
 import net.minecraft.world.level.levelgen.synth.NormalNoise;
 import org.objectweb.asm.ClassReader;
@@ -713,6 +714,12 @@ final class GpuDensityBytecodeCompiler {
                 stack.add(Value.noise(holder.noise()));
             } else if (fieldValue instanceof DensityFunction density) {
                 stack.add(Value.density(density));
+            } else if (fieldValue instanceof Holder<?> holder) {
+                if (!holder.isBound()) {
+                    reject("holder field " + instruction.owner.replace('/', '.') + "."
+                            + instruction.name + " is unbound at density graph compilation");
+                }
+                stack.add(Value.object(holder));
             } else if (fieldValue != null && fieldValue.getClass().isArray()) {
                 stack.add(Value.array(fieldValue));
             } else if (isInlineableHelperValue(fieldValue)) {
@@ -792,6 +799,19 @@ final class GpuDensityBytecodeCompiler {
             Value receiver = call.getOpcode() == Opcodes.INVOKESTATIC ? null : pop("method receiver");
             String owner = call.owner;
             String name = call.name;
+
+            // Registry-backed custom densities commonly store an immutable
+            // Holder.Reference and call value() from compute(). Resolve only
+            // an already-bound holder: an unbound registry reference would
+            // make graph compilation depend on a value that can change later.
+            if (receiver != null && receiver.kind() == Kind.OBJECT
+                    && receiver.referenceValue() instanceof Holder<?> holder
+                    && owner.equals("net/minecraft/core/Holder") && name.equals("value")
+                    && call.desc.equals("()Ljava/lang/Object;") && arguments.length == 0) {
+                if (!holder.isBound()) reject("holder.value() is unbound at density graph compilation");
+                pushCapturedObject(holder.value());
+                return;
+            }
 
             if (owner.equals("net/minecraft/world/level/levelgen/DensityFunction$FunctionContext")
                     && receiver != null && receiver.kind() == Kind.CONTEXT && arguments.length == 0) {
@@ -879,6 +899,27 @@ final class GpuDensityBytecodeCompiler {
                 }
             }
             reject("opaque method call " + owner.replace('/', '.') + "." + name + call.desc);
+        }
+
+        private void pushCapturedObject(Object value) {
+            if (value instanceof Number number) {
+                pushConstant(number.doubleValue());
+            } else if (value instanceof Boolean booleanValue) {
+                pushIntegerConstant(booleanValue ? 1 : 0);
+            } else if (value instanceof Character characterValue) {
+                pushIntegerConstant(characterValue);
+            } else if (value instanceof NormalNoise noise) {
+                stack.add(Value.noise(noise));
+            } else if (value instanceof DensityFunction density) {
+                stack.add(Value.density(density));
+            } else if (value != null && value.getClass().isArray()) {
+                stack.add(Value.array(value));
+            } else if (isInlineableHelperValue(value)) {
+                stack.add(Value.object(value));
+            } else {
+                reject("bound holder value has unsupported runtime type "
+                        + (value == null ? "null" : value.getClass().getName()));
+            }
         }
 
         private void mathCall(String owner, String name, String descriptor, Value[] arguments) {
