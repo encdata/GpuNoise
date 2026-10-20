@@ -25,6 +25,8 @@ public final class GpuBiomeSearchTree {
     public static final int NODE_BYTES = 48;
     public static final int BRANCH = 1;
     private static final int DIMENSIONS = 7;
+    /** Must stay within PersistentVulkanNormalNoiseEngine's persistent tree upload buffer. */
+    private static final long MAX_PACKED_BYTES = 8L * 1024L * 1024L;
 
     private final int[] words;
     private final ByteBuffer packed;
@@ -68,9 +70,18 @@ public final class GpuBiomeSearchTree {
             builder.append(root, 1);
             if (builder.nodes.size() < 2 || builder.nodes.size() > 1_000_000) return null;
             int nodeCount = builder.nodes.size();
-            int childWordCount = builder.nodes.stream().mapToInt(node -> node == null ? 0 : node.children.length).sum();
+            long childWordCount = 0L;
+            for (PackedNode node : builder.nodes) {
+                if (node != null) childWordCount += node.children.length;
+            }
             int nodeWords = NODE_BYTES / Integer.BYTES;
-            int[] packed = new int[nodeCount * nodeWords + childWordCount];
+            long packedWordCount = (long) nodeCount * nodeWords + childWordCount;
+            if (packedWordCount * Integer.BYTES > MAX_PACKED_BYTES) {
+                GpuNoise.LOGGER.info("GPU multi-noise tree for {} needs {} bytes; device upload limit is {} bytes, keeping Java biome search.",
+                        source.getClass().getName(), packedWordCount * Integer.BYTES, MAX_PACKED_BYTES);
+                return null;
+            }
+            int[] packed = new int[(int) packedWordCount];
             int nextChildWord = nodeCount * nodeWords;
             for (int i = 1; i < builder.nodes.size(); i++) {
                 PackedNode node = builder.nodes.get(i);
