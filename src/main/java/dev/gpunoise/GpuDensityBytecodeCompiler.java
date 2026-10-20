@@ -895,6 +895,16 @@ final class GpuDensityBytecodeCompiler {
                 pushIntegerConstant(stringValue.equals(candidate) ? 1 : 0);
                 return;
             }
+            if (receiver != null && receiver.kind() == Kind.OBJECT
+                    && receiver.referenceValue() instanceof String stringValue
+                    && owner.equals("java/lang/String") && arguments.length == 1
+                    && name.equals("equalsIgnoreCase")
+                    && call.desc.equals("(Ljava/lang/String;)Z")
+                    && arguments[0].kind() == Kind.OBJECT
+                    && arguments[0].referenceValue() instanceof String candidate) {
+                pushIntegerConstant(stringValue.equalsIgnoreCase(candidate) ? 1 : 0);
+                return;
+            }
 
             if (receiver != null && receiver.kind() == Kind.OBJECT
                     && call.getOpcode() != Opcodes.INVOKESTATIC

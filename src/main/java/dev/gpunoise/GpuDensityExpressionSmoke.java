@@ -181,6 +181,10 @@ final class GpuDensityExpressionSmoke {
         return graphFixture(new StringSwitchConfigurationDensity());
     }
 
+    static VulkanBranchFixture stringComparisonConfigurationFixture() {
+        return graphFixture(new StringComparisonConfigurationDensity());
+    }
+
     static VulkanBranchFixture enumEqualityConfigurationFixture() {
         return graphFixture(new EnumEqualityConfigurationDensity());
     }
@@ -1040,6 +1044,7 @@ final class GpuDensityExpressionSmoke {
         verifyStandaloneMath(new RecordConfigurationDensity(), "immutable terrain record configuration");
         verifyStandaloneMath(new EnumSwitchConfigurationDensity(), "enum-switch terrain configuration");
         verifyStandaloneMath(new StringSwitchConfigurationDensity(), "string-switch terrain configuration");
+        verifyStandaloneMath(new StringComparisonConfigurationDensity(), "case-insensitive string terrain configuration");
         verifyStandaloneMath(new EnumEqualityConfigurationDensity(), "enum-equality terrain configuration");
         verifyStandaloneMath(new HolderBackedEnumConfigurationDensity(), "holder-backed enum terrain configuration");
         verifyStandaloneMath(new HolderTypeGuardConfigurationDensity(), "holder-backed typed terrain configuration");
@@ -1900,6 +1905,17 @@ final class GpuDensityExpressionSmoke {
                 case "ridge" -> Math.abs(context.blockX() - context.blockZ()) * 0.5;
                 default -> context.blockY() * 0.125;
             };
+        }
+    }
+
+    private static final class StringComparisonConfigurationDensity extends NumericSmokeDensity {
+        private final String mode = "RIDGE";
+
+        @Override public double compute(FunctionContext context) {
+            if ("ridge".equalsIgnoreCase(mode)) {
+                return Math.abs(context.blockX() - context.blockZ()) * 0.5;
+            }
+            return context.blockY() * 0.125;
         }
     }
 

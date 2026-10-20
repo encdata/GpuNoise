@@ -216,6 +216,8 @@ public final class VulkanCiSmoke {
                     "enum-switch terrain configuration", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.stringSwitchConfigurationFixture(),
                     "string-switch terrain configuration", mathX, mathY, mathZ);
+            assertNumericFixture(ring, GpuDensityExpressionSmoke.stringComparisonConfigurationFixture(),
+                    "case-insensitive string terrain configuration", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.enumEqualityConfigurationFixture(),
                     "enum-equality terrain configuration", mathX, mathY, mathZ);
             assertNumericFixture(ring, GpuDensityExpressionSmoke.holderBackedEnumConfigurationFixture(),
