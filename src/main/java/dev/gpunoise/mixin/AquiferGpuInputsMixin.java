@@ -355,12 +355,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         NeighborhoodCache neighborhoods = new NeighborhoodCache(Math.max(16, (height + 11) / 12 * 4));
         FluidStatusCache fluidStatuses = new FluidStatusCache(Math.max(16, (height + 11) / 12 * 4));
         Map<Integer, Aquifer.FluidStatus> c2meGlobalFluidLevels = c2meAquifer ? new HashMap<>() : null;
-        // Non-C2ME nearest-center selection is independent of the later
-        // center-status and substance passes. Dispatch full records as soon
-        // as they are packed so Vulkan can process them while this thread
-        // continues scanning the remaining block inputs.
+        // Keep nearest queries queued until center status inputs are ready,
+        // allowing one command buffer to execute the complete aquifer chain.
         List<CompletableFuture<int[]>> nearestBatches = new ArrayList<>();
-        int submittedNearestQueries = 0;
         // C2ME OCL evaluates these density roots on its device. Use the same
         // strict GPU root cache here; exact Java evaluation remains an explicit
         // diagnostic mode and the fallback for missing cache coordinates.
@@ -466,39 +463,29 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                             : globalFluidPicker.computeFluid(x, y - 1, z);
                     boolean belowIsLava = belowGlobal.at(y - 1).is(Blocks.LAVA);
                     queries.add(index, x, y, z, density, barrier, belowIsLava, c2meAquifer, centers);
-                    if (!c2meAquifer
-                            && queries.size() - submittedNearestQueries
-                                    >= gpunoise$nearestQueriesPerDispatch) {
-                        int count = queries.size() - submittedNearestQueries;
-                        java.nio.ByteBuffer records = GpuAquiferNearestThree.packForAsync(
-                                queries, submittedNearestQueries, count);
-                        nearestBatches.add(gpunoise$submitNearestBatch(records, count));
-                        submittedNearestQueries += count;
-                    }
                 }
             }
         }
         if (finalDensityBlockView != null) finalDensityBlockView.recordReads(decisionCapacity);
         GpuTerrainProfiler.recordAquiferPhase(GpuTerrainProfiler.AQUIFER_SCAN, inputScanStart);
 
-        // C2ME OCL precomputes each random aquifer center's FluidStatus before
-        // resolving block decisions. Mirror that bulk prefill: evaluate the
-        // 13 surface probes, global fluid samples, and terrain roots together
-        // on Vulkan, then retain the original Java statuses for custom fluids.
+        // C2ME OCL precomputes random-center FluidStatus values before resolving
+        // decisions. C2ME statuses are evaluated in bulk on Vulkan; vanilla
+        // statuses are snapshotted once from the original method.
         long nearestStatusStart = GpuTerrainProfiler.beginAquiferPhase();
-        boolean combineAquiferPasses = c2meAquifer && queries.size() > 0
+        boolean combineAquiferPasses = queries.size() > 0
                 && queries.size() <= GpuAquiferNearestThree.MAX_QUERIES;
         GpuAquiferPrefillResult chainedAquifer = null;
         if (combineAquiferPasses) {
-            chainedAquifer = gpunoise$prefillC2meFluidStatuses(cache, queries, fluidStatuses,
-                    c2meGlobalFluidLevels, queries.size(), true);
+            chainedAquifer = gpunoise$stageAquiferStatuses(cache, queries, fluidStatuses,
+                    c2meGlobalFluidLevels, c2meAquifer, queries.size(), true);
             nearestBatches.add(CompletableFuture.completedFuture(chainedAquifer.nearestRows()));
         } else {
             if (c2meAquifer && queries.size() > 0) {
-                gpunoise$prefillC2meFluidStatuses(cache, queries, fluidStatuses,
-                        c2meGlobalFluidLevels, 0, false);
+                gpunoise$stageAquiferStatuses(cache, queries, fluidStatuses,
+                        c2meGlobalFluidLevels, c2meAquifer, 0, false);
             }
-            for (int offset = submittedNearestQueries; offset < queries.size();
+            for (int offset = 0; offset < queries.size();
                     offset += gpunoise$nearestQueriesPerDispatch) {
                 int count = Math.min(gpunoise$nearestQueriesPerDispatch, queries.size() - offset);
                 java.nio.ByteBuffer records = GpuAquiferNearestThree.packForAsync(queries, offset, count);
@@ -808,10 +795,11 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     }
 
     @org.spongepowered.asm.mixin.Unique
-    private GpuAquiferPrefillResult gpunoise$prefillC2meFluidStatuses(GpuChunkDensityCache cache,
+    private GpuAquiferPrefillResult gpunoise$stageAquiferStatuses(GpuChunkDensityCache cache,
                                                                        AquiferQueries queries,
                                                                        FluidStatusCache statusCache,
                                                                        Map<Integer, Aquifer.FluidStatus> fluidLevelSampler,
+                                                                       boolean c2meStatusOnGpu,
                                                                        int nearestCount,
                                                                        boolean decisionChain) {
         long prefillStart = GpuTerrainProfiler.beginPhase();
@@ -898,6 +886,11 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 int[] center = centers.get(index);
                 int centerX = center[0], centerY = center[1], centerZ = center[2];
                 Aquifer.FluidStatus precomputed = precomputedStatuses.get(index);
+                if (precomputed == null && !c2meStatusOnGpu) {
+                    long key = BlockPos.asLong(centerX, centerY, centerZ);
+                    precomputed = gpunoise$getAquiferStatus(key);
+                    precomputedStatuses.set(index, precomputed);
+                }
                 if (precomputed != null) {
                     BlockState fluidType =
                             ((AquiferFluidStatusAccessor) (Object) precomputed).gpunoise$fluidType();

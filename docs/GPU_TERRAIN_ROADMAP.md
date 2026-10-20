@@ -367,18 +367,20 @@ concurrency is feeding the device often enough to make this useful.
 
 The C2ME aquifer path now dispatches nearest-center ranking, fluid-status
 prefill, and substance decisions in one Vulkan command buffer, with one fence
-and readback after the compute chain. A shader-write to shader-read barrier
-orders the stages; Java no longer maps the nearest/status outputs and uploads
-new substance records between those stages. The CPU still reads nearest rows
-for per-query parity checks and fluid-status rows to reconstruct Minecraft's
-status cache. The standalone vanilla path still uses separate nearest and
-substance submissions, so the same fusion remains future work there.
+and readback after the compute chain. Vanilla queries use the same chain with
+their original Java fluid statuses staged as exact rows. A shader-write to
+shader-read barrier orders the stages; Java no longer maps intermediate
+nearest/status outputs and uploads new substance records between them. The CPU
+still reads nearest rows for parity checks and status rows to reconstruct
+Minecraft's status cache.
 
 The chained status contract carries exact block-state IDs as well as fluid
 kinds and levels, preserving custom fluid identity and equality semantics.
 Cached statuses and shared-center indices refer to stable rows in the combined
-upload. Unsupported status inputs and uncertain float boundaries produce
-per-query CPU fallback actions; Minecraft continues to own the chunk writer.
+upload. Vanilla status evaluation stays on Java, but each center is computed
+once and uploaded with its query batch. Unsupported status inputs and uncertain
+float boundaries produce per-query CPU fallback actions; Minecraft continues
+to own the chunk writer.
 
 The fluid-status ABI now includes exact default, neighbor, and lava state IDs
 in both its input records and five-word output rows. Java cache reconstruction
@@ -394,7 +396,7 @@ results and status outputs directly. A Mesa smoke fixture compares the chained
 action, update flag, and raw state ID against the Java reference. Runtime
 parity verification remains available for per-query nearest and decision
 comparisons. The change removes an intermediate host readback and upload from
-the C2ME path; it does not change Minecraft's CPU chunk writer.
+both aquifer paths; it does not change Minecraft's CPU chunk writer.
 
 The terrain roots batcher now reuses a bounded pool of direct metadata buffers
 until each asynchronous Vulkan submission completes. The scheduler uses the
