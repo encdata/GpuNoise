@@ -52,15 +52,15 @@ final class VulkanSubmissionRing implements AutoCloseable {
     private final BlockingQueue<AquiferSubstanceRequest> pendingAquiferSubstance = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
     private final BlockingQueue<AquiferFluidStatusRequest> pendingAquiferFluidStatus = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
     private final BlockingQueue<AquiferPrefillRequest> pendingAquiferPrefill = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
-    /** Synchronous dispatch requests run on bounded slot workers. */
+    /** Blocking compatibility requests run on bounded slot workers. */
     private final BlockingQueue<BlockingRequest<?>> pendingBlocking = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
     /** Startup parity borrows a specific device asynchronously until one of its slots is free. */
     private final BlockingQueue<ParityRequest<?>> pendingParity = new ArrayBlockingQueue<>(MAX_DEVICE_COUNT * 4);
     /** A permit belongs to a request until its result future completes. */
     private final Semaphore submissionPermits = new Semaphore(MAX_PENDING_SUBMISSIONS);
     private final AtomicLong submissionSaturationEvents = new AtomicLong();
-    /** Synchronous Vulkan APIs run off the completion thread and reserve one slot each. */
-    private final Set<PersistentVulkanNormalNoiseEngine> synchronousSlots =
+    /** Prevents concurrent dispatch workers from selecting the same idle slot. */
+    private final Set<PersistentVulkanNormalNoiseEngine> reservedSlots =
             Collections.newSetFromMap(new IdentityHashMap<>());
     /** Ring queue latency stays separate from terrain batch collection and GPU fence time. */
     private long queueDispatchSamples;
@@ -281,7 +281,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
         for (int i = 0; i < slots.length; i++) {
             PersistentVulkanNormalNoiseEngine slot = slots[i];
             if (slot != null && !readbackScheduled[i].get()
-                    && !slot.hasInFlightWork() && !synchronousSlots.contains(slot)
+                    && !slot.hasInFlightWork() && !reservedSlots.contains(slot)
                     && (hasGeneralWork || hasPendingParityFor(slotDevices[i]))) return true;
         }
         return false;
@@ -439,27 +439,158 @@ final class VulkanSubmissionRing implements AutoCloseable {
         return future;
     }
 
-    /** Starts at most one request per free slot, rotating classes to avoid producer starvation. */
-    private synchronized void drainGraphRoots() {
+    /** Reserve free slots centrally, then record independent submissions in parallel. */
+    private void drainGraphRoots() {
         drainParityRequests();
         for (int dispatched = 0; dispatched < slots.length; dispatched++) {
-            int index = selectLeastLoadedSlot();
-            if (index < 0) return;
-            PersistentVulkanNormalNoiseEngine slot = slots[index];
-            for (int attempt = 0; attempt < QUEUE_CLASSES.length; attempt++) {
-                QueueClass requestClass = QUEUE_CLASSES[nextQueueClass];
-                nextQueueClass = (nextQueueClass + 1) % QUEUE_CLASSES.length;
-                if (dispatchNext(slot, requestClass)) {
-                    nextSlotIndex = (index + 1) % slots.length;
-                    break;
-                }
-                if (attempt == QUEUE_CLASSES.length - 1) return;
+            ReservedDispatch dispatch;
+            synchronized (this) {
+                int index = selectLeastLoadedSlot();
+                if (index < 0) return;
+                PersistentVulkanNormalNoiseEngine slot = slots[index];
+                dispatch = takeNextDispatch(slot);
+                if (dispatch == null) return;
+                // This reservation closes the gap between central selection
+                // and the worker entering the synchronized engine method.
+                reservedSlots.add(slot);
+                nextSlotIndex = (index + 1) % slots.length;
+            }
+            try {
+                dispatchWorkers.execute(() -> executeReservedDispatch(dispatch));
+            } catch (RejectedExecutionException stopped) {
+                releaseReservedSlot(dispatch.slot);
+                failDispatch(dispatch, stopped);
             }
         }
     }
 
+    /** Select and remove a request while holding the ring monitor. */
+    private ReservedDispatch takeNextDispatch(PersistentVulkanNormalNoiseEngine slot) {
+        for (int attempt = 0; attempt < QUEUE_CLASSES.length; attempt++) {
+            QueueClass requestClass = QUEUE_CLASSES[nextQueueClass];
+            nextQueueClass = (nextQueueClass + 1) % QUEUE_CLASSES.length;
+            Object request = switch (requestClass) {
+                case GRAPH_ROOTS -> pollLive(pendingGraphRoots);
+                case GRAPH_GRIDS -> pollLive(pendingGraphGrids);
+                case FULL_TERRAIN -> pollLive(pendingTerrainGrids);
+                case BLOCKING -> pollLive(pendingBlocking);
+                case AQUIFER -> pollAquiferRequest();
+            };
+            if (request == null) continue;
+            recordQueueWait(enqueuedNanos(request), requestClass);
+            return new ReservedDispatch(slot, requestClass, request);
+        }
+        return null;
+    }
+
+    private static <T> T pollLive(BlockingQueue<T> queue) {
+        T request;
+        while ((request = queue.poll()) != null) {
+            CompletableFuture<?> future = requestFuture(request);
+            if (future == null || !future.isDone()) return request;
+        }
+        return null;
+    }
+
+    private Object pollAquiferRequest() {
+        Object request = pollLive(pendingAquiferPrefill);
+        if (request == null) request = pollLive(pendingAquiferNearest);
+        if (request == null) request = pollLive(pendingAquiferSubstance);
+        if (request == null) request = pollLive(pendingAquiferFluidStatus);
+        return request;
+    }
+
+    private static CompletableFuture<?> requestFuture(Object request) {
+        if (request instanceof GraphRootsRequest value) return value.future;
+        if (request instanceof GraphRootsGridRequest value) return value.future;
+        if (request instanceof TerrainGridRequest value) return value.future;
+        if (request instanceof BlockingRequest<?> value) return value.future;
+        if (request instanceof AquiferNearestRequest value) return value.future;
+        if (request instanceof AquiferSubstanceRequest value) return value.future;
+        if (request instanceof AquiferFluidStatusRequest value) return value.future;
+        if (request instanceof AquiferPrefillRequest value) return value.future;
+        throw new IllegalArgumentException("unknown Vulkan ring request type " + request.getClass().getName());
+    }
+
+    private static long enqueuedNanos(Object request) {
+        if (request instanceof GraphRootsRequest value) return value.enqueuedNanos;
+        if (request instanceof GraphRootsGridRequest value) return value.enqueuedNanos;
+        if (request instanceof TerrainGridRequest value) return value.enqueuedNanos;
+        if (request instanceof BlockingRequest<?> value) return value.enqueuedNanos;
+        if (request instanceof AquiferNearestRequest value) return value.enqueuedNanos;
+        if (request instanceof AquiferSubstanceRequest value) return value.enqueuedNanos;
+        if (request instanceof AquiferFluidStatusRequest value) return value.enqueuedNanos;
+        if (request instanceof AquiferPrefillRequest value) return value.enqueuedNanos;
+        throw new IllegalArgumentException("unknown Vulkan ring request type " + request.getClass().getName());
+    }
+
+    private void executeReservedDispatch(ReservedDispatch dispatch) {
+        try {
+            if (requestFuture(dispatch.request).isDone()) return;
+            PersistentVulkanNormalNoiseEngine slot = dispatch.slot;
+            Object request = dispatch.request;
+            switch (dispatch.requestClass) {
+                case GRAPH_ROOTS -> {
+                    GraphRootsRequest value = (GraphRootsRequest) request;
+                    slot.submitGraphRootsAsync(value.graph, value.x, value.y, value.z, value.sampleCount)
+                            .whenComplete((result, failure) -> completeOnDispatchWorker(value.future, result, failure));
+                }
+                case GRAPH_GRIDS -> {
+                    GraphRootsGridRequest value = (GraphRootsGridRequest) request;
+                    slot.submitGraphRootsGridAsync(value.graph, value.metadata, value.chunkCount, value.samplesPerChunk)
+                            .whenComplete((result, failure) -> completeOnDispatchWorker(value.future, result, failure));
+                }
+                case FULL_TERRAIN -> {
+                    TerrainGridRequest value = (TerrainGridRequest) request;
+                    slot.submitGraphGridInterpolated(value.graph, value.gridMetadata,
+                                    value.chunkCount, value.samplesPerChunk, value.outputMetadata,
+                                    value.blocksPerChunk, value.outputRootIndexes)
+                            .whenComplete((result, failure) -> completeOnDispatchWorker(value.future, result, failure));
+                }
+                case BLOCKING -> runBlockingReserved((BlockingRequest<?>) request, slot);
+                case AQUIFER -> executeAquiferReserved(slot, request);
+            }
+        } catch (Throwable failure) {
+            failDispatch(dispatch, failure);
+        } finally {
+            releaseReservedSlot(dispatch.slot);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> void runBlockingReserved(BlockingRequest<?> raw, PersistentVulkanNormalNoiseEngine slot)
+            throws Exception {
+        BlockingRequest<T> request = (BlockingRequest<T>) raw;
+        request.future.complete(request.operation.call(slot));
+    }
+
+    private void executeAquiferReserved(PersistentVulkanNormalNoiseEngine slot, Object request) {
+        if (request instanceof AquiferPrefillRequest value) {
+            dispatchAquiferAsync(slot, "combined aquifer prefill", value.future,
+                    engine -> engine.submitAquiferPrefillAsync(value.nearestRecords, value.nearestCount,
+                            value.statusRecords, value.statusCount));
+        } else if (request instanceof AquiferNearestRequest value) {
+            dispatchAquiferAsync(slot, "aquifer nearest-three", value.future,
+                    engine -> engine.submitAquiferNearestThreeAsync(value.records, value.count));
+        } else if (request instanceof AquiferSubstanceRequest value) {
+            dispatchAquiferAsync(slot, "aquifer substance", value.future,
+                    engine -> engine.submitAquiferSubstanceAsync(value.records, value.count));
+        } else if (request instanceof AquiferFluidStatusRequest value) {
+            dispatchAquiferAsync(slot, "aquifer fluid-status", value.future,
+                    engine -> engine.submitAquiferFluidStatusAsync(value.records, value.count));
+        } else {
+            throw new IllegalArgumentException("unknown aquifer request type " + request.getClass().getName());
+        }
+    }
+
+    private static void failDispatch(ReservedDispatch dispatch, Throwable failure) {
+        CompletableFuture<?> future = requestFuture(dispatch.request);
+        if (future != null) future.completeExceptionally(new IllegalStateException(
+                "GPU ring " + dispatch.requestClass + " dispatch failed", failure));
+    }
+
     /** Borrow pinned startup slots without blocking the bootstrap or submitter thread. */
-    private void drainParityRequests() {
+    private synchronized void drainParityRequests() {
         int requestsToInspect = pendingParity.size();
         for (int requestIndex = 0; requestIndex < requestsToInspect; requestIndex++) {
             ParityRequest<?> request = pendingParity.poll();
@@ -472,7 +603,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 continue;
             }
             PersistentVulkanNormalNoiseEngine slot = slots[slotIndex];
-            synchronousSlots.add(slot);
+            reservedSlots.add(slot);
             dispatchParityRequest(request, slot);
         }
     }
@@ -482,7 +613,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
             int index = (nextSlotIndex + offset) % slots.length;
             PersistentVulkanNormalNoiseEngine slot = slots[index];
             if (!slotDevices[index].equals(target) || readbackScheduled[index].get()
-                    || slot.hasInFlightWork() || synchronousSlots.contains(slot)) continue;
+                    || slot.hasInFlightWork() || reservedSlots.contains(slot)) continue;
             nextSlotIndex = (index + 1) % slots.length;
             return index;
         }
@@ -498,13 +629,13 @@ final class VulkanSubmissionRing implements AutoCloseable {
                     submitted = request.operation.call(slot);
                     if (submitted == null) throw new IllegalStateException("parity submission returned no future");
                 } catch (Throwable failure) {
-                    releaseSynchronousSlot(slot);
+                    releaseReservedSlot(slot);
                     request.future.completeExceptionally(new IllegalStateException(
                             "Vulkan " + request.description + " parity dispatch failed on "
                                     + request.target.name(), failure));
                     return;
                 }
-                releaseSynchronousSlot(slot);
+                releaseReservedSlot(slot);
                 submitted.whenComplete((value, failure) -> {
                     Throwable reportedFailure = failure == null ? null
                             : new IllegalStateException("Vulkan " + request.description
@@ -513,7 +644,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 });
             });
         } catch (RuntimeException stopped) {
-            releaseSynchronousSlot(slot);
+            releaseReservedSlot(slot);
             request.future.completeExceptionally(stopped);
         }
     }
@@ -529,7 +660,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
         for (int offset = 0; offset < slots.length; offset++) {
             int index = (nextSlotIndex + offset) % slots.length;
             PersistentVulkanNormalNoiseEngine slot = slots[index];
-            if (readbackScheduled[index].get() || slot.hasInFlightWork() || synchronousSlots.contains(slot)) continue;
+            if (readbackScheduled[index].get() || slot.hasInFlightWork() || reservedSlots.contains(slot)) continue;
             int deviceSlots = 0;
             int freeDeviceSlots = 0;
             GpuDevice candidateDevice = slotDevices[index];
@@ -538,7 +669,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 deviceSlots++;
                 PersistentVulkanNormalNoiseEngine otherSlot = slots[other];
                 if (!readbackScheduled[other].get() && !otherSlot.hasInFlightWork()
-                        && !synchronousSlots.contains(otherSlot)) freeDeviceSlots++;
+                        && !reservedSlots.contains(otherSlot)) freeDeviceSlots++;
             }
             double freeRatio = deviceSlots == 0 ? 0.0 : (double) freeDeviceSlots / deviceSlots;
             if (freeRatio > bestFreeRatio) {
@@ -549,104 +680,10 @@ final class VulkanSubmissionRing implements AutoCloseable {
         return best;
     }
 
-    /**
-     * Queue classes are scalar roots, root grids, full terrain, synchronous
-     * compatibility calls, and aquifer batches. Rotating even when a class is
-     * empty keeps the policy simple and bounds how long a continuously busy
-     * producer can delay any other class to a handful of slot completions.
-     */
-    private boolean dispatchNext(PersistentVulkanNormalNoiseEngine slot, QueueClass requestClass) {
-        switch (requestClass) {
-            case GRAPH_ROOTS -> {
-                GraphRootsRequest request = pendingGraphRoots.poll();
-                if (request == null || request.future.isDone()) return request != null;
-                recordQueueWait(request.enqueuedNanos, requestClass);
-                try {
-                    slot.submitGraphRootsAsync(request.graph, request.x, request.y, request.z, request.sampleCount)
-                            .whenComplete((values, failure) -> completeOnDispatchWorker(request.future, values, failure));
-                } catch (Throwable failure) {
-                    request.future.completeExceptionally(new IllegalStateException("GPU ring graph dispatch failed", failure));
-                }
-            }
-            case GRAPH_GRIDS -> {
-                GraphRootsGridRequest grid = pendingGraphGrids.poll();
-                if (grid == null || grid.future.isDone()) return grid != null;
-                recordQueueWait(grid.enqueuedNanos, requestClass);
-                try {
-                    slot.submitGraphRootsGridAsync(grid.graph, grid.metadata, grid.chunkCount, grid.samplesPerChunk)
-                            .whenComplete((values, failure) -> completeOnDispatchWorker(grid.future, values, failure));
-                } catch (Throwable failure) {
-                    grid.future.completeExceptionally(new IllegalStateException("GPU ring grid dispatch failed", failure));
-                }
-            }
-            case FULL_TERRAIN -> {
-                TerrainGridRequest terrain = pendingTerrainGrids.poll();
-                if (terrain == null || terrain.future.isDone()) return terrain != null;
-                recordQueueWait(terrain.enqueuedNanos, requestClass);
-                try {
-                    slot.submitGraphGridInterpolated(terrain.graph, terrain.gridMetadata,
-                                    terrain.chunkCount, terrain.samplesPerChunk,
-                                    terrain.outputMetadata, terrain.blocksPerChunk, terrain.outputRootIndexes)
-                            .whenComplete((result, failure) -> completeOnDispatchWorker(terrain.future, result, failure));
-                } catch (Throwable failure) {
-                    terrain.future.completeExceptionally(new IllegalStateException(
-                            "GPU ring full terrain submission failed", failure));
-                }
-            }
-            case BLOCKING -> {
-                BlockingRequest<?> blocking = pendingBlocking.poll();
-                if (blocking == null || blocking.future.isDone()) return blocking != null;
-                recordQueueWait(blocking.enqueuedNanos, requestClass);
-                runBlocking(blocking, slot);
-            }
-            case AQUIFER -> {
-                AquiferPrefillRequest prefill = pendingAquiferPrefill.poll();
-                AquiferNearestRequest nearest = prefill == null ? pendingAquiferNearest.poll() : null;
-                AquiferSubstanceRequest substance = prefill == null && nearest == null
-                        ? pendingAquiferSubstance.poll() : null;
-                AquiferFluidStatusRequest fluidStatus = prefill == null && nearest == null && substance == null
-                        ? pendingAquiferFluidStatus.poll() : null;
-                if (prefill == null && nearest == null && substance == null && fluidStatus == null) return false;
-                if ((prefill != null && prefill.future.isDone())
-                        || (nearest != null && nearest.future.isDone())
-                        || (substance != null && substance.future.isDone())
-                        || (fluidStatus != null && fluidStatus.future.isDone())) return true;
-                long enqueued = prefill != null ? prefill.enqueuedNanos
-                        : nearest != null ? nearest.enqueuedNanos
-                        : substance != null ? substance.enqueuedNanos : fluidStatus.enqueuedNanos;
-                recordQueueWait(enqueued, requestClass);
-                dispatchAquifer(slot, prefill, nearest, substance, fluidStatus);
-            }
-        }
-        return true;
-    }
-
     private enum QueueClass { GRAPH_ROOTS, GRAPH_GRIDS, FULL_TERRAIN, BLOCKING, AQUIFER }
 
-    private void dispatchAquifer(PersistentVulkanNormalNoiseEngine slot, AquiferPrefillRequest prefill,
-                                 AquiferNearestRequest nearest, AquiferSubstanceRequest substance,
-                                 AquiferFluidStatusRequest fluidStatus) {
-        if (prefill != null) {
-            dispatchAquiferAsync(slot, "combined aquifer prefill", prefill.future,
-                    engine -> engine.submitAquiferPrefillAsync(prefill.nearestRecords,
-                            prefill.nearestCount, prefill.statusRecords, prefill.statusCount));
-            return;
-        }
-        if (nearest != null) {
-            dispatchAquiferAsync(slot, "aquifer nearest-three", nearest.future,
-                    engine -> engine.submitAquiferNearestThreeAsync(nearest.records, nearest.count));
-            return;
-        }
-        if (substance != null) {
-            dispatchAquiferAsync(slot, "aquifer substance", substance.future,
-                    engine -> engine.submitAquiferSubstanceAsync(substance.records, substance.count));
-            return;
-        }
-        if (fluidStatus != null) {
-            dispatchAquiferAsync(slot, "aquifer fluid-status", fluidStatus.future,
-                    engine -> engine.submitAquiferFluidStatusAsync(fluidStatus.records, fluidStatus.count));
-        }
-    }
+    private record ReservedDispatch(PersistentVulkanNormalNoiseEngine slot,
+                                    QueueClass requestClass, Object request) {}
 
     private <T> void dispatchAquiferAsync(PersistentVulkanNormalNoiseEngine slot, String description,
                                           CompletableFuture<T> result,
@@ -667,27 +704,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
         return future;
     }
 
-    private <T> void runBlocking(BlockingRequest<T> request, PersistentVulkanNormalNoiseEngine slot) {
-        synchronousSlots.add(slot);
-        try {
-            dispatchWorkers.execute(() -> {
-                try {
-                    request.future.complete(request.operation.call(slot));
-                } catch (Throwable failure) {
-                    request.future.completeExceptionally(new IllegalStateException(
-                            "GPU ring " + request.description + " dispatch failed", failure));
-                } finally {
-                    releaseSynchronousSlot(slot);
-                }
-            });
-        } catch (RuntimeException stopped) {
-            synchronousSlots.remove(slot);
-            request.future.completeExceptionally(stopped);
-        }
-    }
-
-    private void releaseSynchronousSlot(PersistentVulkanNormalNoiseEngine slot) {
-        synchronized (this) { synchronousSlots.remove(slot); }
+    private void releaseReservedSlot(PersistentVulkanNormalNoiseEngine slot) {
+        synchronized (this) { reservedSlots.remove(slot); }
         scheduleDrain();
     }
 
