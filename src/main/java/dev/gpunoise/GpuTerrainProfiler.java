@@ -31,6 +31,9 @@ public final class GpuTerrainProfiler {
     private static final LongAdder aquiferDecisionWaitNanos = new LongAdder();
     private static final LongAdder aquiferDecisionWaitSamples = new LongAdder();
     private static final LongAdder aquiferAsyncDecisionFallbacks = new LongAdder();
+    private static final LongAdder aquiferDecisionQueueSamples = new LongAdder();
+    private static final AtomicInteger peakAquiferDecisionWorkers = new AtomicInteger();
+    private static final AtomicInteger peakAquiferDecisionQueue = new AtomicInteger();
     private static final LongAdder aquiferStatusPrefillCalls = new LongAdder();
     private static final LongAdder aquiferStatusPrefillNanos = new LongAdder();
     private static final LongAdder aquiferStatusPrefillSamples = new LongAdder();
@@ -184,6 +187,13 @@ public final class GpuTerrainProfiler {
         if (ENABLED) aquiferAsyncDecisionFallbacks.increment();
     }
 
+    public static void recordAquiferDecisionQueue(int activeWorkers, int queuedBuilds) {
+        if (!ENABLED) return;
+        aquiferDecisionQueueSamples.increment();
+        peakAquiferDecisionWorkers.accumulateAndGet(activeWorkers, Math::max);
+        peakAquiferDecisionQueue.accumulateAndGet(queuedBuilds, Math::max);
+    }
+
     /** Starts an unsampled timer for a once-per-chunk aquifer preparation phase. */
     public static long beginAquiferPhase() {
         return ENABLED ? System.nanoTime() : 0L;
@@ -271,6 +281,9 @@ public final class GpuTerrainProfiler {
                 aquiferDecisionWaitCalls.sum(), aquiferDecisionWaitSamples.sum(),
                 averageNanos(aquiferDecisionWaitNanos, aquiferDecisionWaitSamples),
                 aquiferAsyncDecisionFallbacks.sum());
+        GpuNoise.LOGGER.info("GPU terrain aquifer build queue: samples={}, peakWorkers={}, peakQueued={}",
+                aquiferDecisionQueueSamples.sum(), peakAquiferDecisionWorkers.get(),
+                peakAquiferDecisionQueue.get());
         GpuNoise.LOGGER.info("GPU terrain cache preparation: calls={}, sampled={} avgNs={}, maxConcurrent={}",
                 terrainCachePreparationCalls.sum(), terrainCachePreparationSamples.sum(),
                 averageNanos(terrainCachePreparationNanos, terrainCachePreparationSamples),

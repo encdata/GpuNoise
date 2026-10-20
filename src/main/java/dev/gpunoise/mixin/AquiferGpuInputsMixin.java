@@ -41,7 +41,6 @@ import java.util.Map;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -124,7 +123,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             GpuAquiferSubstance.MAX_QUERIES, 16_384);
 
     @org.spongepowered.asm.mixin.Unique
-    private static final ExecutorService gpunoise$aquiferDecisionExecutor = new ThreadPoolExecutor(
+    private static final ThreadPoolExecutor gpunoise$aquiferDecisionExecutor = new ThreadPoolExecutor(
             gpunoise$aquiferDecisionConcurrency, gpunoise$aquiferDecisionConcurrency,
             0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(gpunoise$aquiferDecisionQueueCapacity), r -> {
                 Thread thread = new Thread(r, "GPU aquifer decision build");
@@ -188,6 +187,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     }
                 });
                 gpunoise$decisionBuild = build;
+                GpuTerrainProfiler.recordAquiferDecisionQueue(
+                        gpunoise$aquiferDecisionExecutor.getActiveCount(),
+                        gpunoise$aquiferDecisionExecutor.getQueue().size());
             } catch (RuntimeException rejected) {
                 GpuTerrainProfiler.recordAquiferAsyncDecisionFallback();
                 if (gpunoise$aquiferBatchWarning.compareAndSet(false, true)) {
