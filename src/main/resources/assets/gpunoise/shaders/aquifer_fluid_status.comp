@@ -18,6 +18,10 @@ struct InputRecord {
     int globalLevels[13];
     uint globalKinds[13];
     int globalStateIds[13];
+    int precomputed;
+    int precomputedLevel;
+    int precomputedStateId;
+    uint precomputedKind;
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer Inputs { InputRecord items[]; };
@@ -50,6 +54,10 @@ void main() {
     uint row = gl_GlobalInvocationID.x;
     if (row >= count) return;
     InputRecord r = items[baseRecord + row];
+    if (r.precomputed != 0) {
+        emit(row, r.precomputedLevel, 0, 0u, r.precomputedStateId, r.precomputedKind);
+        return;
+    }
     if (isnan(r.floodedness) || isinf(r.floodedness)
             || isnan(r.spread) || isinf(r.spread)
             || isnan(r.lava) || isinf(r.lava)

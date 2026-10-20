@@ -67,7 +67,7 @@ public final class GpuAquiferNearestThree {
         }
         for (int[][] neighborhood : uniqueCenters) {
             for (int[] center : neighborhood) {
-                packed.putInt(center[0]).putInt(center[1]).putInt(center[2]).putInt(0);
+                packed.putInt(center[0]).putInt(center[1]).putInt(center[2]).putInt(-1);
             }
         }
         return packed.flip();
@@ -108,11 +108,11 @@ public final class GpuAquiferNearestThree {
             packed.putInt(query.x).putInt(query.y).putInt(query.z)
                     .putInt(queryCenterIndices[index - offset])
                     .putFloat((float) query.density).putFloat((float) query.barrier)
-                    .putInt(query.belowIsLava ? 1 : 0);
+                    .putInt((query.belowIsLava ? 1 : 0) | (query.c2meAquifer ? 2 : 0));
         }
         for (int[][] neighborhood : uniqueCenters) {
             for (int[] center : neighborhood) {
-                packed.putInt(center[0]).putInt(center[1]).putInt(center[2]).putInt(0);
+                packed.putInt(center[0]).putInt(center[1]).putInt(center[2]).putInt(-1);
             }
         }
         return packed.flip();
@@ -170,7 +170,8 @@ public final class GpuAquiferNearestThree {
             int row = offset + i;
             packed.putInt(queries.x(row)).putInt(queries.y(row)).putInt(queries.z(row))
                     .putInt(queryCenterIndices[i]).putFloat((float) queries.density(row))
-                    .putFloat((float) queries.barrier(row)).putInt(queries.belowIsLava(row) ? 1 : 0);
+                    .putFloat((float) queries.barrier(row)).putInt(
+                            (queries.belowIsLava(row) ? 1 : 0) | (queries.c2meAquifer(row) ? 2 : 0));
         }
         for (int[][] neighborhood : uniqueCenters) {
             for (int[] center : neighborhood) {

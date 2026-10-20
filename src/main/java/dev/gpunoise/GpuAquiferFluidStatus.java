@@ -11,7 +11,7 @@ public final class GpuAquiferFluidStatus {
     /** One global fluid sample per C2ME OCL surface offset. */
     public static final int GLOBAL_LEVEL_SAMPLES = SURFACE_SAMPLES;
     /** Header + scalar roots + surface/level/kind/state arrays, std430 stride 4. */
-    public static final int RECORD_BYTES = 248;
+    public static final int RECORD_BYTES = 264;
     /** Upper bound for a single C2ME chunk's unique center neighborhood. */
     public static final int MAX_PREFILL_CENTERS = 8192;
     /** Level, selected source, flags, exact fluid block-state ID, and broad kind. */
@@ -62,6 +62,17 @@ public final class GpuAquiferFluidStatus {
         public void add(int y, int defaultLevel, int defaultKind, int defaultStateId, int lavaStateId,
                         float floodedness, float spread, float lava, float erosion, float depth,
                         float[] surfaceHeights, int[] globalLevels, int[] globalKinds, int[] globalStateIds) {
+            add(y, defaultLevel, defaultKind, defaultStateId, lavaStateId,
+                    floodedness, spread, lava, erosion, depth, surfaceHeights,
+                    globalLevels, globalKinds, globalStateIds, false, 0, 0, AIR);
+        }
+
+        /** Adds either a computed status row or an exact status copied from the Java cache. */
+        public void add(int y, int defaultLevel, int defaultKind, int defaultStateId, int lavaStateId,
+                        float floodedness, float spread, float lava, float erosion, float depth,
+                        float[] surfaceHeights, int[] globalLevels, int[] globalKinds, int[] globalStateIds,
+                        boolean precomputed, int precomputedLevel, int precomputedStateId,
+                        int precomputedKind) {
             if (finished) throw new IllegalStateException("aquifer fluid-status writer is finished");
             if (rows >= expectedRows) throw new IllegalStateException("aquifer fluid-status batch overflow");
             if (surfaceHeights == null || surfaceHeights.length != SURFACE_SAMPLES
@@ -76,6 +87,8 @@ public final class GpuAquiferFluidStatus {
             for (int value : globalLevels) packed.putInt(value);
             for (int value : globalKinds) packed.putInt(value);
             for (int value : globalStateIds) packed.putInt(value);
+            packed.putInt(precomputed ? 1 : 0).putInt(precomputedLevel)
+                    .putInt(precomputedStateId).putInt(precomputedKind);
             rows++;
         }
 
@@ -127,10 +140,14 @@ public final class GpuAquiferFluidStatus {
         for (int value : input.globalLevels) packed.putInt(value);
         for (int value : input.globalKinds) packed.putInt(value);
         for (int value : input.globalStateIds) packed.putInt(value);
+        packed.putInt(input.precomputed ? 1 : 0).putInt(input.precomputedLevel)
+                .putInt(input.precomputedStateId).putInt(input.precomputedKind);
     }
 
     /** Returns [fluid level, global-status source slot, flags, state ID, kind]. */
     public static int[] evaluate(Input input) {
+        if (input.precomputed) return result(input.precomputedLevel, 0, 0,
+                input.precomputedStateId, input.precomputedKind);
         if (!finite(input)) return result(0, 0, FLAG_CPU_FALLBACK, 0, OTHER_FLUID);
         if (Math.abs(input.erosion + 0.225f) <= DECISION_EPSILON
                 || Math.abs(input.depth - 0.9f) <= DECISION_EPSILON
@@ -219,13 +236,23 @@ public final class GpuAquiferFluidStatus {
 
     public record Input(int y, int defaultLevel, int defaultKind, int defaultStateId, int lavaStateId,
                         float floodedness, float spread, float lava, float erosion, float depth,
-                        float[] surfaceHeights, int[] globalLevels, int[] globalKinds, int[] globalStateIds) {
+                        float[] surfaceHeights, int[] globalLevels, int[] globalKinds, int[] globalStateIds,
+                        boolean precomputed, int precomputedLevel, int precomputedStateId,
+                        int precomputedKind) {
+        public Input(int y, int defaultLevel, int defaultKind, int defaultStateId, int lavaStateId,
+                     float floodedness, float spread, float lava, float erosion, float depth,
+                     float[] surfaceHeights, int[] globalLevels, int[] globalKinds, int[] globalStateIds) {
+            this(y, defaultLevel, defaultKind, defaultStateId, lavaStateId, floodedness,
+                    spread, lava, erosion, depth, surfaceHeights, globalLevels, globalKinds,
+                    globalStateIds, false, 0, 0, AIR);
+        }
         /** Compatibility constructor for shader fixtures that only test levels and broad kinds. */
         public Input(int y, int defaultLevel, int defaultKind,
                      float floodedness, float spread, float lava, float erosion, float depth,
                      float[] surfaceHeights, int[] globalLevels, int[] globalKinds) {
             this(y, defaultLevel, defaultKind, 0, 0, floodedness, spread, lava, erosion, depth,
-                    surfaceHeights, globalLevels, globalKinds, new int[GLOBAL_LEVEL_SAMPLES]);
+                    surfaceHeights, globalLevels, globalKinds, new int[GLOBAL_LEVEL_SAMPLES],
+                    false, 0, 0, AIR);
         }
     }
 }

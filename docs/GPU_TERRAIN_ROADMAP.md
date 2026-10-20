@@ -394,6 +394,14 @@ uses the returned state ID, and the Mesa smoke fixture includes a custom state
 ID so the new field is parity-checked before the decision-chain shader consumes
 it.
 
+Nearest-query records now also carry packed density and barrier floats plus
+below-lava and C2ME mode bits. Their center records reserve a stable status-row
+index, and coalescing preserves all of that metadata. Fluid-status records can
+carry an exact precomputed cache row; the shader copies its level, state ID, and
+kind through without recomputing terrain roots. The next integration step is
+to stage every neighborhood status row, populate those indices, and consume
+nearest/status outputs in a final decision dispatch before the sole readback.
+
 Do not enable this chain until the CPU reference and Lavapipe fixtures compare
 all four ranked centers, selected states, status-equality cases, fluid update
 flags, custom-fluid IDs, palette overflow, and fallback rows. The current

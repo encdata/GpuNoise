@@ -465,7 +465,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                             ? gpunoise$sampleGlobalFluidLevel(c2meGlobalFluidLevels, cache, y - 1)
                             : globalFluidPicker.computeFluid(x, y - 1, z);
                     boolean belowIsLava = belowGlobal.at(y - 1).is(Blocks.LAVA);
-                    queries.add(index, x, y, z, density, barrier, belowIsLava, centers);
+                    queries.add(index, x, y, z, density, barrier, belowIsLava, c2meAquifer, centers);
                     if (!c2meAquifer
                             && queries.size() - submittedNearestQueries
                                     >= gpunoise$nearestQueriesPerDispatch) {
@@ -489,14 +489,13 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         boolean combineAquiferPasses = c2meAquifer && queries.size() > 0
                 && queries.size() <= GpuAquiferNearestThree.MAX_QUERIES;
         if (combineAquiferPasses) {
-            java.nio.ByteBuffer nearestRecords = GpuAquiferNearestThree.pack(queries, 0, queries.size());
             int[] rows = gpunoise$prefillC2meFluidStatuses(cache, queries, fluidStatuses,
-                    c2meGlobalFluidLevels, nearestRecords, queries.size());
+                    c2meGlobalFluidLevels, substanceWriter, queries.size());
             nearestBatches.add(CompletableFuture.completedFuture(rows));
         } else {
             if (c2meAquifer && queries.size() > 0) {
                 gpunoise$prefillC2meFluidStatuses(cache, queries, fluidStatuses,
-                        c2meGlobalFluidLevels, null, 0);
+                        c2meGlobalFluidLevels, substanceWriter, 0);
             }
             for (int offset = submittedNearestQueries; offset < queries.size();
                     offset += gpunoise$nearestQueriesPerDispatch) {
@@ -737,7 +736,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                                     AquiferQueries queries,
                                                     FluidStatusCache statusCache,
                                                     Map<Integer, Aquifer.FluidStatus> fluidLevelSampler,
-                                                    java.nio.ByteBuffer nearestRecords,
+                                                    GpuAquiferSubstance.BatchWriter substanceWriter,
                                                     int nearestCount) {
         long prefillStart = GpuTerrainProfiler.beginPhase();
         int javaFallbacks = 0;
@@ -749,7 +748,10 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 Math.max(16, queries.size() / 32));
         Set<Long> seenCenters = new HashSet<>(expectedCenters);
         List<int[]> centers = new ArrayList<>(expectedCenters);
+        List<GpuAquiferStatusRegionCache.Reservation> reservations = new ArrayList<>(expectedCenters);
         List<GpuAquiferStatusRegionCache.Reservation> owners = new ArrayList<>(expectedCenters);
+        List<Aquifer.FluidStatus> precomputedStatuses = new ArrayList<>(expectedCenters);
+        Map<Long, Integer> statusRows = new HashMap<>(expectedCenters);
         List<Map.Entry<Long, GpuAquiferStatusRegionCache.Reservation>> waiters =
                 new ArrayList<>(expectedCenters);
         Object graphIdentity = cache.terrainGraphIdentity();
@@ -762,6 +764,10 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     if (cached != null) {
                         GpuTerrainProfiler.recordAquiferRegionStatusCache(true);
                         statusCache.put(key, cached);
+                        statusRows.put(key, centers.size());
+                        centers.add(center);
+                        reservations.add(null);
+                        precomputedStatuses.add(cached);
                         continue;
                     }
                     GpuAquiferStatusRegionCache.Reservation reservation =
@@ -769,9 +775,16 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     boolean owner = reservation.isOwner();
                     GpuTerrainProfiler.recordAquiferRegionStatusCache(!owner);
                     if (owner) {
+                        statusRows.put(key, centers.size());
                         centers.add(center);
+                        reservations.add(reservation);
+                        precomputedStatuses.add(null);
                         owners.add(reservation);
                     } else {
+                        statusRows.put(key, centers.size());
+                        centers.add(center);
+                        reservations.add(reservation);
+                        precomputedStatuses.add(null);
                         waiters.add(new java.util.AbstractMap.SimpleImmutableEntry<>(key, reservation));
                     }
                 }
@@ -780,6 +793,23 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             for (GpuAquiferStatusRegionCache.Reservation owner : owners) owner.fail(failure);
             throw failure;
         }
+        try {
+            for (int row = 0; row < reservations.size(); row++) {
+                GpuAquiferStatusRegionCache.Reservation reservation = reservations.get(row);
+                if (reservation != null && !reservation.isOwner()) {
+                    Aquifer.FluidStatus status = reservation.join();
+                    precomputedStatuses.set(row, status);
+                    statusCache.put(BlockPos.asLong(centers.get(row)[0], centers.get(row)[1], centers.get(row)[2]),
+                            status);
+                }
+            }
+        } catch (RuntimeException | Error failure) {
+            for (GpuAquiferStatusRegionCache.Reservation owner : owners) owner.fail(failure);
+            throw failure;
+        }
+        java.nio.ByteBuffer nearestRecords = nearestCount <= 0 ? null
+                : GpuAquiferNearestThree.pack(queries, 0, nearestCount, center ->
+                statusRows.getOrDefault(BlockPos.asLong(center[0], center[1], center[2]), -1));
         GpuAquiferFluidStatus.BatchWriter statusWriter = null;
         try {
             statusWriter = centers.isEmpty()
@@ -791,10 +821,28 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             for (int index = 0; index < centers.size(); index++) {
                 int[] center = centers.get(index);
                 int centerX = center[0], centerY = center[1], centerZ = center[2];
+                Aquifer.FluidStatus precomputed = precomputedStatuses.get(index);
+                if (precomputed != null) {
+                    BlockState fluidType =
+                            ((AquiferFluidStatusAccessor) (Object) precomputed).gpunoise$fluidType();
+                    int stateId = Block.getId(fluidType);
+                    int level = gpunoise$fluidLevel(precomputed);
+                    int kind = gpunoise$fluidKind(fluidType);
+                    substanceWriter.registerChainOutputState(stateId);
+                    substanceWriter.registerChainOutputState(Block.getId(Blocks.AIR.defaultBlockState()));
+                    statusWriter.add(centerY, level, kind, stateId, 0,
+                            0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                            surfaces, globalLevels, globalKinds, globalStateIds,
+                            true, level, stateId, kind);
+                    continue;
+                }
                 Aquifer.FluidStatus defaultStatus = gpunoise$sampleGlobalFluidLevel(
                         fluidLevelSampler, cache, centerY);
                 BlockState defaultFluidType =
                         ((AquiferFluidStatusAccessor) (Object) defaultStatus).gpunoise$fluidType();
+                substanceWriter.registerChainOutputState(Block.getId(defaultFluidType));
+                substanceWriter.registerChainOutputState(Block.getId(Blocks.AIR.defaultBlockState()));
+                substanceWriter.registerChainOutputState(Block.getId(Blocks.LAVA.defaultBlockState()));
                 for (int sample = 0; sample < offsets.length; sample++) {
                     int surfaceX = Math.floorDiv(centerX + (offsets[sample][0] << 4), 4) * 4;
                     int surfaceZ = Math.floorDiv(centerZ + (offsets[sample][1] << 4), 4) * 4;
@@ -807,6 +855,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     BlockState sampledType =
                             ((AquiferFluidStatusAccessor) (Object) sampled).gpunoise$fluidType();
                     globalStateIds[sample] = Block.getId(sampledType);
+                    substanceWriter.registerChainOutputState(globalStateIds[sample]);
                     BlockState sampledState = sampled.at(surfaceY);
                     globalKinds[sample] = sampledState.isAir() ? GpuAquiferFluidStatus.AIR
                             : sampledState.is(Blocks.WATER) ? GpuAquiferFluidStatus.WATER
@@ -888,7 +937,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     }
                 }
                 statusCache.put(key, status);
-                owners.get(index).complete(status);
+                GpuAquiferStatusRegionCache.Reservation reservation = reservations.get(index);
+                if (reservation != null && reservation.isOwner()) reservation.complete(status);
             }
             for (Map.Entry<Long, GpuAquiferStatusRegionCache.Reservation> waiter : waiters) {
                 Aquifer.FluidStatus status = gpunoise$verifySharedAquiferStatus(

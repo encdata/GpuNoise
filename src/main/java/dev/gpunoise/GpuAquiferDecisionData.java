@@ -158,13 +158,19 @@ public final class GpuAquiferDecisionData {
     public static final class AquiferQuery {
         public final int index, x, y, z;
         public final double density, barrier;
-        public final boolean belowIsLava;
+        public final boolean belowIsLava, c2meAquifer;
         public final int[][] centers;
         public AquiferQuery(int index, int x, int y, int z, double density,
                             double barrier, boolean belowIsLava, int[][] centers) {
+            this(index, x, y, z, density, barrier, belowIsLava, false, centers);
+        }
+        public AquiferQuery(int index, int x, int y, int z, double density,
+                            double barrier, boolean belowIsLava, boolean c2meAquifer,
+                            int[][] centers) {
             this.index = index; this.x = x; this.y = y; this.z = z;
             this.density = density; this.barrier = barrier;
-            this.belowIsLava = belowIsLava; this.centers = centers;
+            this.belowIsLava = belowIsLava; this.c2meAquifer = c2meAquifer;
+            this.centers = centers;
         }
     }
 
@@ -172,7 +178,7 @@ public final class GpuAquiferDecisionData {
     public static final class AquiferQueries {
         private final int[] indices, xs, ys, zs;
         private final double[] densities, barriers;
-        private final byte[] belowLava;
+        private final byte[] aquiferFlags;
         private final int[][][] centers;
         private int size;
 
@@ -181,16 +187,22 @@ public final class GpuAquiferDecisionData {
             indices = new int[capacity]; xs = new int[capacity];
             ys = new int[capacity]; zs = new int[capacity];
             densities = new double[capacity]; barriers = new double[capacity];
-            belowLava = new byte[capacity];
+            aquiferFlags = new byte[capacity];
             centers = new int[capacity][][];
         }
 
         public void add(int index, int x, int y, int z, double density,
                         double barrier, boolean isBelowLava, int[][] neighborhood) {
+            add(index, x, y, z, density, barrier, isBelowLava, false, neighborhood);
+        }
+
+        public void add(int index, int x, int y, int z, double density,
+                        double barrier, boolean isBelowLava, boolean c2meAquifer,
+                        int[][] neighborhood) {
             if (size == indices.length) throw new IllegalStateException("aquifer queries exceeded chunk capacity");
             indices[size] = index; xs[size] = x; ys[size] = y; zs[size] = z;
             densities[size] = density; barriers[size] = barrier;
-            belowLava[size] = (byte) (isBelowLava ? 1 : 0);
+            aquiferFlags[size] = (byte) ((isBelowLava ? 1 : 0) | (c2meAquifer ? 2 : 0));
             centers[size] = neighborhood;
             size++;
         }
@@ -202,7 +214,8 @@ public final class GpuAquiferDecisionData {
         public int z(int row) { return zs[row]; }
         public double density(int row) { return densities[row]; }
         public double barrier(int row) { return barriers[row]; }
-        public boolean belowIsLava(int row) { return belowLava[row] != 0; }
+        public boolean belowIsLava(int row) { return (aquiferFlags[row] & 1) != 0; }
+        public boolean c2meAquifer(int row) { return (aquiferFlags[row] & 2) != 0; }
         public int[][] centers(int row) { return centers[row]; }
     }
 

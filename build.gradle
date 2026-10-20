@@ -195,15 +195,18 @@ dependencies {
     lwjglNatives "org.lwjgl:lwjgl-shaderc:${lwjgl_version}:natives-windows"
     lwjglNatives "org.lwjgl:lwjgl-shaderc:${lwjgl_version}:natives-linux"
     lwjglNatives "org.lwjgl:lwjgl-shaderc:${lwjgl_version}:natives-macos"
-    // NeoGradle 7 uses this configuration for ordinary libraries in dev runs.
-    localRunRuntime "org.lwjgl:lwjgl-vulkan:${lwjgl_version}"
-    localRunRuntime "org.lwjgl:lwjgl-shaderc:${lwjgl_version}"
-    localRunRuntime "org.lwjgl:lwjgl:${lwjgl_version}"
-    if (System.getProperty('os.name', '').toLowerCase().contains('linux')) {
-        // Dev run configurations do not use the flattened native payload in
-        // the published jar, so provide LWJGL's Linux native to runServer CI.
-        localRunRuntime "org.lwjgl:lwjgl:${lwjgl_version}:natives-linux"
-        localRunRuntime "org.lwjgl:lwjgl-shaderc:${lwjgl_version}:natives-linux"
+    // Source-set runs use NeoGradle's ordinary runtime classpath. Artifact-mode
+    // runs must resolve only the libraries packed in the distributable: adding
+    // these development jars beside the embedded FML game-library modules made
+    // ModLauncher discover duplicate org.lwjgl modules on dedicated servers.
+    if (!providers.gradleProperty('gpunoiseRunFromArtifact').isPresent()) {
+        localRunRuntime "org.lwjgl:lwjgl-vulkan:${lwjgl_version}"
+        localRunRuntime "org.lwjgl:lwjgl-shaderc:${lwjgl_version}"
+        localRunRuntime "org.lwjgl:lwjgl:${lwjgl_version}"
+        if (System.getProperty('os.name', '').toLowerCase().contains('linux')) {
+            localRunRuntime "org.lwjgl:lwjgl:${lwjgl_version}:natives-linux"
+            localRunRuntime "org.lwjgl:lwjgl-shaderc:${lwjgl_version}:natives-linux"
+        }
     }
 
     // Example optional mod dependency with JEI

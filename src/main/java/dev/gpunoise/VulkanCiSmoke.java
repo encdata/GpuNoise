@@ -787,7 +787,7 @@ public final class VulkanCiSmoke {
             AquiferQueries columnarQueries = new AquiferQueries(queryCount);
             for (int query = 0; query < queryCount; query++) {
                 columnarQueries.add(query, queries[query][0], queries[query][1], queries[query][2],
-                        query * 0.125, -query * 0.25, (query & 1) != 0, centers[query]);
+                        query * 0.125, -query * 0.25, (query & 1) != 0, true, centers[query]);
             }
             ByteBuffer seededNearest = GpuAquiferNearestThree.pack(columnarQueries, 0, queryCount)
                     .order(ByteOrder.nativeOrder());
@@ -800,7 +800,7 @@ public final class VulkanCiSmoke {
                     || seededNearest.getFloat(firstSeed + GpuAquiferNearestThree.QUERY_RECORD_BYTES
                             + 5 * Integer.BYTES) != -0.25f
                     || seededNearest.getInt(firstSeed + GpuAquiferNearestThree.QUERY_RECORD_BYTES
-                            + 6 * Integer.BYTES) != 1) {
+                            + 6 * Integer.BYTES) != 3) {
                 throw new IllegalStateException("columnar nearest staging lost decision seed metadata");
             }
             ByteBuffer mappedNearest = GpuAquiferNearestThree.pack(columnarQueries, 0, queryCount,
@@ -1001,7 +1001,17 @@ public final class VulkanCiSmoke {
                     GpuAquiferSubstance.packBatch(substanceCases);
             var substanceFuture = ring.submitAquiferSubstance(
                     packedSubstanceCases.records(), substanceCases.length);
-            GpuAquiferFluidStatus.Input[] fluidStatusCases = aquiferFluidStatusCases();
+            GpuAquiferFluidStatus.Input[] baseFluidStatusCases = aquiferFluidStatusCases();
+            GpuAquiferFluidStatus.Input[] fluidStatusCases = java.util.Arrays.copyOf(
+                    baseFluidStatusCases, baseFluidStatusCases.length + 1);
+            GpuAquiferFluidStatus.Input cachedFluidStatus = baseFluidStatusCases[0];
+            fluidStatusCases[baseFluidStatusCases.length] = new GpuAquiferFluidStatus.Input(
+                    cachedFluidStatus.y(), cachedFluidStatus.defaultLevel(), cachedFluidStatus.defaultKind(),
+                    cachedFluidStatus.defaultStateId(), cachedFluidStatus.lavaStateId(),
+                    cachedFluidStatus.floodedness(), cachedFluidStatus.spread(), cachedFluidStatus.lava(),
+                    cachedFluidStatus.erosion(), cachedFluidStatus.depth(), cachedFluidStatus.surfaceHeights(),
+                    cachedFluidStatus.globalLevels(), cachedFluidStatus.globalKinds(),
+                    cachedFluidStatus.globalStateIds(), true, 44, 0x12345, GpuAquiferFluidStatus.OTHER_FLUID);
             GpuAquiferFluidStatus.Input fluidStatusCase = fluidStatusCases[0];
             GpuAquiferFluidStatus.BatchWriter fluidStatusWriter =
                     new GpuAquiferFluidStatus.BatchWriter(1);
