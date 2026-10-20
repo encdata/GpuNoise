@@ -82,6 +82,19 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
                 LOGGER.error("Could not extract embedded server library {} from {}", libraryName, sourceJar);
                 continue;
             }
+            if (libraryName.equals("lwjgl-core-gpunoise-server.jar")) {
+                try {
+                    if (ModuleFinder.of(libraryJar).find("org.lwjgl").isEmpty()) {
+                        LOGGER.error("Bundled LWJGL core {} is not discoverable as the required JPMS module "
+                                + "org.lwjgl; its versioned module descriptor may not be enabled by the jar manifest",
+                                libraryJar);
+                        continue;
+                    }
+                } catch (RuntimeException failure) {
+                    LOGGER.error("Could not inspect bundled LWJGL core module descriptor at {}", libraryJar, failure);
+                    continue;
+                }
+            }
             if (context.isLocated(libraryJar)) {
                 LOGGER.debug("Server library is already registered: {}", libraryJar);
                 continue;
