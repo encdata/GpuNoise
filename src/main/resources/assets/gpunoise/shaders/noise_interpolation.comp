@@ -66,7 +66,7 @@ void main(){
             corners[valueBase+strideY],corners[valueBase+strideY+strideX],
             corners[valueBase+strideZ],corners[valueBase+strideZ+strideX],
             corners[valueBase+strideY+strideZ],corners[valueBase+strideY+strideZ+strideX],t);
-        if(markerMode) interpolatedInputs[blockOffset+index*valueCount+valueIndex]=value;
+        if(markerMode) interpolatedInputs[(blockOffset+index)*valueCount+valueIndex]=value;
         else blocks[blockOffset+index*valueCount+valueIndex]=value;
     }
     if(markerMode) coordinates[blockOffset+index]=ivec4(
