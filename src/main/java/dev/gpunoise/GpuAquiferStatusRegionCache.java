@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
@@ -24,6 +25,8 @@ public final class GpuAquiferStatusRegionCache {
             new ShardedLruCache<>(MAX_SURFACE_ENTRIES, SEGMENT_COUNT);
     private static final ConcurrentHashMap<Key, CompletableFuture<Aquifer.FluidStatus>> IN_FLIGHT =
             new ConcurrentHashMap<>();
+    /** Hard cap for unique center calculations retained by the shared future map. */
+    private static final Semaphore IN_FLIGHT_CAPACITY = new Semaphore(MAX_ENTRIES);
     private static final Set<Scope> DISABLED_SCOPES = ConcurrentHashMap.newKeySet();
     private static final Set<Scope> DISABLED_SURFACE_SCOPES = ConcurrentHashMap.newKeySet();
 
@@ -55,8 +58,14 @@ public final class GpuAquiferStatusRegionCache {
         }
         CompletableFuture<Aquifer.FluidStatus> existing = IN_FLIGHT.get(key);
         if (existing != null) return new Reservation(key, scope, existing, false, true);
-        if (IN_FLIGHT.size() >= MAX_ENTRIES)
+        // The map size check alone races when many chunk workers discover new
+        // centers together. Recheck the key after failing the atomic capacity
+        // claim so a just-published owner can still be joined at saturation.
+        if (!IN_FLIGHT_CAPACITY.tryAcquire()) {
+            existing = IN_FLIGHT.get(key);
+            if (existing != null) return new Reservation(key, scope, existing, false, true);
             return new Reservation(key, scope, new CompletableFuture<>(), true, false);
+        }
         AtomicBoolean owner = new AtomicBoolean();
         AtomicReference<Aquifer.FluidStatus> cachedStatus = new AtomicReference<>();
         CompletableFuture<Aquifer.FluidStatus> future = IN_FLIGHT.computeIfAbsent(key, candidate -> {
@@ -68,8 +77,12 @@ public final class GpuAquiferStatusRegionCache {
             owner.set(true);
             return new CompletableFuture<>();
         });
-        if (future == null) return new Reservation(key, scope,
-                CompletableFuture.completedFuture(cachedStatus.get()), false, false);
+        if (future == null) {
+            IN_FLIGHT_CAPACITY.release();
+            return new Reservation(key, scope,
+                    CompletableFuture.completedFuture(cachedStatus.get()), false, false);
+        }
+        if (!owner.get()) IN_FLIGHT_CAPACITY.release();
         return new Reservation(key, scope, future, owner.get(), true);
     }
 
@@ -102,7 +115,7 @@ public final class GpuAquiferStatusRegionCache {
             if (tracked && !DISABLED_SCOPES.contains(scope)) ENTRIES.put(key, status);
             if (!completed.compareAndSet(false, true)) return;
             future.complete(status);
-            if (tracked) IN_FLIGHT.remove(key, future);
+            if (tracked) removeInFlight(key, future);
         }
 
         public void fail(Throwable failure) {
@@ -110,7 +123,7 @@ public final class GpuAquiferStatusRegionCache {
             if (failure == null) failure = new IllegalStateException("aquifer center prefill failed");
             if (!completed.compareAndSet(false, true)) return;
             future.completeExceptionally(failure);
-            if (tracked) IN_FLIGHT.remove(key, future);
+            if (tracked) removeInFlight(key, future);
         }
     }
 
@@ -137,9 +150,10 @@ public final class GpuAquiferStatusRegionCache {
     }
 
     public static void clear() {
-        IN_FLIGHT.forEach((key, future) -> future.completeExceptionally(
-                new IllegalStateException("aquifer status cache was cleared")));
-        IN_FLIGHT.clear();
+        IN_FLIGHT.forEach((key, future) -> {
+            if (removeInFlight(key, future)) future.completeExceptionally(
+                    new IllegalStateException("aquifer status cache was cleared"));
+        });
         ENTRIES.clear();
         SURFACES.clear();
         DISABLED_SCOPES.clear();
@@ -155,12 +169,19 @@ public final class GpuAquiferStatusRegionCache {
                 && key.fluidPickerIdentity == fluidPickerIdentity);
         IN_FLIGHT.forEach((key, future) -> {
             if (key.graphIdentity == graphIdentity && key.fluidPickerIdentity == fluidPickerIdentity
-                    && IN_FLIGHT.remove(key, future)) {
+                    && removeInFlight(key, future)) {
                 future.completeExceptionally(new IllegalStateException(
                         "aquifer status sharing disabled after a parity mismatch"));
             }
         });
         return changed;
+    }
+
+    /** Removes a published owner and returns its single capacity permit. */
+    private static boolean removeInFlight(Key key, CompletableFuture<Aquifer.FluidStatus> future) {
+        if (!IN_FLIGHT.remove(key, future)) return false;
+        IN_FLIGHT_CAPACITY.release();
+        return true;
     }
 
     /** Disables surface reuse for a graph/picker pair after a sampled parity mismatch. */
