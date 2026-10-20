@@ -139,22 +139,22 @@ final class VulkanSubmissionRing implements AutoCloseable {
                         deviceSlots.add(new PersistentVulkanNormalNoiseEngine(primary));
                     } catch (Exception slotFailure) {
                         GpuNoise.LOGGER.warn("Could not create additional Vulkan slot on {}; keeping {} slot(s)",
-                                candidate.name(), deviceSlots.size(), slotFailure);
+                                candidate.diagnosticIdentity(), deviceSlots.size(), slotFailure);
                         break;
                     }
                 }
                 createdSlots.addAll(deviceSlots);
                 for (int i = 0; i < deviceSlots.size(); i++) createdDevices.add(candidate);
                 selectedDevices++;
-                GpuNoise.LOGGER.info("GPU Vulkan device ring: {} slot(s) on {} ({})",
-                        deviceSlots.size(), candidate.name(), candidate.vendorName());
+                GpuNoise.LOGGER.info("GPU Vulkan device ring: {} slot(s) on {}",
+                        deviceSlots.size(), candidate.diagnosticIdentity());
             } catch (Exception failure) {
                 lastFailure = failure;
                 for (PersistentVulkanNormalNoiseEngine slot : deviceSlots) {
                     try { slot.close(); } catch (Throwable closeFailure) { failure.addSuppressed(closeFailure); }
                 }
                 GpuNoise.LOGGER.warn("Vulkan runtime initialization failed on {}; trying another device",
-                        candidate.name(), failure);
+                        candidate.diagnosticIdentity(), failure);
             }
         }
         if (createdSlots.isEmpty()) {

@@ -133,9 +133,10 @@ public final class GpuNoise {
         }
         java.util.ArrayList<GpuDevice> usableDevices = new java.util.ArrayList<>(candidates.size());
         for (GpuDevice candidate : candidates) {
-            GpuCompileStatus.update("Checking Vulkan device: " + candidate.name());
+            GpuCompileStatus.update("Checking Vulkan device: " + candidate.diagnosticIdentity());
             if (!VulkanComputeProbe.verify(candidate)) {
-                LOGGER.warn("Vulkan compute setup failed on {}; trying the next supported device.", candidate.name());
+                LOGGER.warn("Vulkan compute setup failed on {}; trying the next supported device.",
+                        candidate.diagnosticIdentity());
                 continue;
             }
             usableDevices.add(candidate);
@@ -154,8 +155,8 @@ public final class GpuNoise {
             return;
         }
         warmedDevice = device;
-        LOGGER.info("GPU Noise Vulkan runtime warmed during mod registration; primary device is {} ({}), {} Vulkan device(s) are available to the async terrain submission pool.",
-                device.name(), device.vendorName(), GpuTerrainRuntime.activeDeviceCount());
+        LOGGER.info("GPU Noise Vulkan runtime warmed during mod registration; primary device is {}; {} Vulkan device(s) are available to the async terrain submission pool.",
+                device.diagnosticIdentity(), GpuTerrainRuntime.activeDeviceCount());
     }
 
     private void installWorldGraph(MinecraftServer server) {
