@@ -155,7 +155,7 @@ def verify(path: Path) -> None:
                 core_path = Path(temporary_directory) / "lwjgl-core.jar"
                 core_path.write_bytes(artifact.read(SERVER_CORE_LIBRARY))
                 module = subprocess.run(
-                    ["jar", "--describe-module", "--file", str(core_path)],
+                    ["jar", "--describe-module", "--release", "9", "--file", str(core_path)],
                     check=True,
                     capture_output=True,
                     text=True,
