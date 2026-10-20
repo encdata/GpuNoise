@@ -6,7 +6,9 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import subprocess
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -143,8 +145,24 @@ def verify(path: Path) -> None:
             manifest = server_core.read("META-INF/MANIFEST.MF").decode("utf-8", errors="replace")
             if "org/lwjgl/Version.class" not in core_entries:
                 raise ValueError("Embedded dedicated-server library is missing LWJGL core classes")
+            if "META-INF/versions/9/module-info.class" not in core_entries:
+                raise ValueError("Embedded dedicated-server LWJGL core lost its JPMS module descriptor")
             if "FMLModType: LIBRARY" not in manifest:
                 raise ValueError("Embedded dedicated-server LWJGL jar is not marked as an FML library")
+            with tempfile.TemporaryDirectory(prefix="gpunoise-module-check-") as temporary_directory:
+                core_path = Path(temporary_directory) / "lwjgl-core.jar"
+                core_path.write_bytes(artifact.read(SERVER_CORE_LIBRARY))
+                module = subprocess.run(
+                    ["jar", "--describe-module", "--file", str(core_path), "--release", "9"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout
+                if "org.lwjgl@" not in module:
+                    raise ValueError(
+                        "Embedded dedicated-server LWJGL core does not resolve as module org.lwjgl: "
+                        f"{module.strip()}"
+                    )
 
         locator = artifact.read(LOCATOR_SERVICE).decode("utf-8", errors="replace").strip()
         if locator != "dev.gpunoise.loader.GpuNoiseDedicatedLwjglLocator":

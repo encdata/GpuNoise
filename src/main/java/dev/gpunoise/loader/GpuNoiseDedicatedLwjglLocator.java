@@ -2,6 +2,7 @@ package dev.gpunoise.loader;
 
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.module.ModuleFinder;
 import java.net.URL;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -219,39 +220,26 @@ public final class GpuNoiseDedicatedLwjglLocator implements IModFileCandidateLoc
     }
 
     private static boolean lwjglCoreAvailable() {
-        if (ModuleLayer.boot().modules().stream().anyMatch(module -> module.getPackages().contains("org.lwjgl"))) {
+        if (ModuleLayer.boot().findModule("org.lwjgl").isPresent()) {
             return true;
         }
-        try {
-            Class.forName("org.lwjgl.Version", false, Thread.currentThread().getContextClassLoader());
-            return true;
-        } catch (ClassNotFoundException | LinkageError ignored) {
-            // The game module layer may not be active yet; inspect launch paths below.
-        }
-
-        for (String property : new String[] {"jdk.module.path", "jdk.module.upgrade.path", "java.class.path"}) {
+        // Only named modules satisfy a `requires org.lwjgl` edge. A class
+        // visible to Class.forName or present on java.class.path belongs to an
+        // unnamed module, so treating that as available breaks the mod layer.
+        for (String property : new String[] {"jdk.module.path", "jdk.module.upgrade.path"}) {
             String value = System.getProperty(property, "");
-            for (String entry : value.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator))) {
-                if (entry.isBlank()) continue;
-                Path path;
-                try {
-                    path = Paths.get(entry);
-                } catch (RuntimeException ignored) {
-                    continue;
+            if (value.isBlank()) continue;
+            try {
+                Path[] paths = java.util.Arrays.stream(
+                                value.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator)))
+                        .filter(entry -> !entry.isBlank())
+                        .map(Paths::get)
+                        .toArray(Path[]::new);
+                if (paths.length > 0 && ModuleFinder.of(paths).find("org.lwjgl").isPresent()) {
+                    return true;
                 }
-                if (Files.isDirectory(path)) {
-                    if (Files.isRegularFile(path.resolve("org/lwjgl/Version.class"))) return true;
-                    continue;
-                }
-                if (!Files.isRegularFile(path)) continue;
-                try (JarFile jar = new JarFile(path.toFile())) {
-                    if (jar.getEntry("org/lwjgl/Version.class") != null
-                            || jar.getEntry("classes/org/lwjgl/Version.class") != null) {
-                        return true;
-                    }
-                } catch (Exception ignored) {
-                    // Ignore non-jar classpath entries.
-                }
+            } catch (RuntimeException failure) {
+                LOGGER.debug("Could not inspect named module path {}", property, failure);
             }
         }
         return false;
