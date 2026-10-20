@@ -101,6 +101,10 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             Math.min(8L, Long.getLong("gpunoise.aquiferDecisionConcurrency", 3L)));
 
     @org.spongepowered.asm.mixin.Unique
+    private static final int gpunoise$nearestQueriesPerDispatch = Math.min(
+            GpuAquiferNearestThree.MAX_QUERIES, 16_384);
+
+    @org.spongepowered.asm.mixin.Unique
     private static final Semaphore gpunoise$aquiferDecisionSlots =
             new Semaphore(gpunoise$aquiferDecisionConcurrency, true);
 
@@ -362,7 +366,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     queries.add(index, x, y, z, density, barrier, belowIsLava, centers);
                     if (!c2meAquifer
                             && queries.size() - submittedNearestQueries
-                                    >= GpuAquiferNearestThree.MAX_QUERIES) {
+                                    >= gpunoise$nearestQueriesPerDispatch) {
                         int count = queries.size() - submittedNearestQueries;
                         nearestBatches.add(GpuTerrainRuntime.submitAquiferNearestThree(
                                 GpuAquiferNearestThree.pack(queries, submittedNearestQueries, count), count)
@@ -392,8 +396,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         c2meGlobalFluidLevels, null, 0);
             }
             for (int offset = submittedNearestQueries; offset < queries.size();
-                    offset += GpuAquiferNearestThree.MAX_QUERIES) {
-                int count = Math.min(GpuAquiferNearestThree.MAX_QUERIES, queries.size() - offset);
+                    offset += gpunoise$nearestQueriesPerDispatch) {
+                int count = Math.min(gpunoise$nearestQueriesPerDispatch, queries.size() - offset);
                 nearestBatches.add(GpuTerrainRuntime.submitAquiferNearestThree(
                         GpuAquiferNearestThree.pack(queries, offset, count), count).toCompletableFuture());
             }
