@@ -358,7 +358,8 @@ public final class GpuChunkDensityCache {
         GpuTerrainBlockResult blocks = readyBlocks;
         if (blocks == null || blocks.isEmpty()) return null;
         GpuTerrainBlockResult.RootView root = blocks.rootView(GpuTerrainRoots.FINAL_DENSITY);
-        return root == null ? null : new FinalDensityBlockView(root);
+        return root == null || !root.covers(16, maxRelativeY, 16)
+                ? null : new FinalDensityBlockView(root);
     }
 
     /** Narrow, public read contract for callers outside the cache package. */
@@ -369,12 +370,14 @@ public final class GpuChunkDensityCache {
             this.root = root;
         }
 
-        public boolean containsLocal(int x, int y, int z) {
-            return root.contains(x, y, z);
-        }
-
         public double valueAtLocalUnchecked(int x, int y, int z) {
             return root.valueAtUnchecked(x, y, z);
+        }
+
+        public void recordReads(long count) {
+            if (!READ_STATS_ENABLED || count <= 0L) return;
+            long direct = blockReads.addAndGet(count);
+            if ((direct & 0x3ffffL) < count) logReadStatistics();
         }
     }
     public double aquiferFloodedness(int x, int y, int z) {

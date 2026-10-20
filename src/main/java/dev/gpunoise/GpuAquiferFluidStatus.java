@@ -35,6 +35,55 @@ public final class GpuAquiferFluidStatus {
         return packed.flip();
     }
 
+    /** Incremental direct-buffer writer for center prefill without per-center input objects. */
+    public static final class BatchWriter {
+        private final int expectedRows;
+        private final ByteBuffer packed;
+        private int rows;
+        private boolean finished;
+
+        public BatchWriter(int expectedRows) {
+            if (expectedRows <= 0 || expectedRows > MAX_QUERIES)
+                throw new IllegalArgumentException("invalid aquifer fluid-status row count");
+            this.expectedRows = expectedRows;
+            this.packed = GpuAquiferInputBufferPool.acquire(
+                    Math.multiplyExact(expectedRows, RECORD_BYTES));
+        }
+
+        public void add(int y, int defaultLevel, int defaultKind,
+                        float floodedness, float spread, float lava, float erosion, float depth,
+                        float[] surfaceHeights, int[] globalLevels, int[] globalKinds) {
+            if (finished) throw new IllegalStateException("aquifer fluid-status writer is finished");
+            if (rows >= expectedRows) throw new IllegalStateException("aquifer fluid-status batch overflow");
+            if (surfaceHeights == null || surfaceHeights.length != SURFACE_SAMPLES
+                    || globalLevels == null || globalLevels.length != GLOBAL_LEVEL_SAMPLES
+                    || globalKinds == null || globalKinds.length != GLOBAL_LEVEL_SAMPLES)
+                throw new IllegalArgumentException("invalid aquifer fluid-status sample arrays");
+            packed.putInt(y).putInt(defaultLevel).putInt(defaultKind).putInt(0)
+                    .putFloat(floodedness).putFloat(spread).putFloat(lava)
+                    .putFloat(erosion).putFloat(depth);
+            for (float value : surfaceHeights) packed.putFloat(value);
+            for (int value : globalLevels) packed.putInt(value);
+            for (int value : globalKinds) packed.putInt(value);
+            rows++;
+        }
+
+        public ByteBuffer finish() {
+            if (finished) throw new IllegalStateException("aquifer fluid-status writer is finished");
+            if (rows != expectedRows) throw new IllegalStateException(
+                    "aquifer fluid-status batch is incomplete: expected=" + expectedRows + ", actual=" + rows);
+            finished = true;
+            return packed.flip();
+        }
+
+        /** Returns an unfinished staging slab after a failed CPU prefill. */
+        public void close() {
+            if (finished) return;
+            finished = true;
+            GpuAquiferInputBufferPool.release(packed);
+        }
+    }
+
     static List<ByteBuffer> pack(List<Input> inputs) {
         if (inputs == null) throw new NullPointerException("inputs");
         List<ByteBuffer> batches = new ArrayList<>();

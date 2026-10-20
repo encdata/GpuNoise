@@ -118,6 +118,10 @@ final class GpuTerrainBlockResult {
                     && x < blocksX && y < blocksY && z < blocksZ;
         }
 
+        boolean covers(int width, int height, int depth) {
+            return blocksX == width && blocksY == height && blocksZ == depth;
+        }
+
         float valueAtUnchecked(int x, int y, int z) {
             int block = (y * blocksZ + z) * blocksX + x;
             return values[offset + block * roots + outputRoot];

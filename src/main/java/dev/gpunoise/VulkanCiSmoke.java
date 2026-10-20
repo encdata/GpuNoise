@@ -576,6 +576,13 @@ public final class VulkanCiSmoke {
             GpuTerrainBlockResult secondChunkBlocks = multiMarkerTerrain.blocks().slice(256, 256);
             assertMarkerChunkCoordinates(firstChunkBlocks, -32);
             assertMarkerChunkCoordinates(secondChunkBlocks, 96);
+            GpuTerrainBlockResult.RootView secondChunkDensity =
+                    secondChunkBlocks.rootView(GpuTerrainRoots.FINAL_DENSITY);
+            if (secondChunkDensity == null || !secondChunkDensity.covers(16, 1, 16)
+                    || secondChunkDensity.valueAtUnchecked(0, 0, 0) != 96.0f * 96.0f
+                    || secondChunkDensity.valueAtUnchecked(15, 0, 0) != 111.0f * 111.0f) {
+                throw new IllegalStateException("Prebound block-root view lost compact root indexing or chunk offset");
+            }
             System.out.println("Vulkan CI smoke: two-chunk world-origin interpolation completed");
 
             // Production batches omit graph roots that did not pass parity.
@@ -960,6 +967,20 @@ public final class VulkanCiSmoke {
             var substanceFuture = ring.submitAquiferSubstance(
                     GpuAquiferSubstance.pack(substanceCases), substanceCases.length);
             GpuAquiferFluidStatus.Input[] fluidStatusCases = aquiferFluidStatusCases();
+            GpuAquiferFluidStatus.Input fluidStatusCase = fluidStatusCases[0];
+            GpuAquiferFluidStatus.BatchWriter fluidStatusWriter =
+                    new GpuAquiferFluidStatus.BatchWriter(1);
+            fluidStatusWriter.add(fluidStatusCase.y(), fluidStatusCase.defaultLevel(),
+                    fluidStatusCase.defaultKind(), fluidStatusCase.floodedness(),
+                    fluidStatusCase.spread(), fluidStatusCase.lava(), fluidStatusCase.erosion(),
+                    fluidStatusCase.depth(), fluidStatusCase.surfaceHeights(),
+                    fluidStatusCase.globalLevels(), fluidStatusCase.globalKinds());
+            ByteBuffer streamedFluidStatus = fluidStatusWriter.finish();
+            if (!streamedFluidStatus.equals(GpuAquiferFluidStatus.pack(
+                    new GpuAquiferFluidStatus.Input[]{fluidStatusCase}))) {
+                throw new IllegalStateException("streamed C2ME fluid-status record changed layout or values");
+            }
+            GpuAquiferInputBufferPool.release(streamedFluidStatus);
             int[] fluidStatusResults = ring.submitAquiferFluidStatus(
                     GpuAquiferFluidStatus.pack(fluidStatusCases), fluidStatusCases.length)
                     .get(60, TimeUnit.SECONDS);
@@ -1247,6 +1268,13 @@ public final class VulkanCiSmoke {
         registry.register(CustomDensityImplementation.class, "exact", false);
         if (!"exact".equals(registry.find(CustomDensityImplementation.class))) {
             throw new IllegalStateException("Exact custom density translator did not take precedence");
+        }
+        if (registry.find(String.class) != null) {
+            throw new IllegalStateException("Unregistered density translator lookup returned a value");
+        }
+        registry.register(String.class, "late-exact", false);
+        if (!"late-exact".equals(registry.find(String.class))) {
+            throw new IllegalStateException("New translator registration did not invalidate a cached miss");
         }
 
         registry.register(LeftDensityApi.class, "left", true);

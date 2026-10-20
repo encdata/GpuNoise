@@ -11,6 +11,7 @@ import java.util.concurrent.ConcurrentMap;
 /** Deterministic exact and subtype matching shared by custom GPU adapters. */
 final class GpuDensityTranslatorRegistry<T> {
     private final ConcurrentMap<Class<?>, Registration<T>> registrations = new ConcurrentHashMap<>();
+    private final ConcurrentMap<Class<?>, Resolution<T>> resolutions = new ConcurrentHashMap<>();
 
     void register(Class<?> type, T translator, boolean includeSubtypes) {
         if (type == null || translator == null) throw new NullPointerException();
@@ -20,12 +21,17 @@ final class GpuDensityTranslatorRegistry<T> {
             throw new IllegalStateException("A GPU density translator is already registered for "
                     + type.getName());
         }
+        resolutions.clear();
     }
 
     T find(Class<?> concreteType) {
         if (concreteType == null) return null;
+        return resolutions.computeIfAbsent(concreteType, this::resolve).translator;
+    }
+
+    private Resolution<T> resolve(Class<?> concreteType) {
         Registration<T> exact = registrations.get(concreteType);
-        if (exact != null) return exact.translator;
+        if (exact != null) return new Resolution<>(exact.translator);
 
         Map<Class<?>, Integer> distances = typeDistances(concreteType);
         int bestDistance = Integer.MAX_VALUE;
@@ -42,14 +48,14 @@ final class GpuDensityTranslatorRegistry<T> {
                 bestTypes.add(entry.getKey());
             }
         }
-        if (bestTypes.isEmpty()) return null;
+        if (bestTypes.isEmpty()) return new Resolution<>(null);
         if (bestTypes.size() > 1) {
             bestTypes.sort((left, right) -> left.getName().compareTo(right.getName()));
             throw new IllegalStateException("Ambiguous GPU density translators for "
                     + concreteType.getName() + ": "
                     + bestTypes.stream().map(Class::getName).toList());
         }
-        return registrations.get(bestTypes.get(0)).translator;
+        return new Resolution<>(registrations.get(bestTypes.get(0)).translator);
     }
 
     private static Map<Class<?>, Integer> typeDistances(Class<?> concreteType) {
@@ -70,4 +76,5 @@ final class GpuDensityTranslatorRegistry<T> {
     }
 
     private record Registration<T>(T translator, boolean includeSubtypes) {}
+    private record Resolution<T>(T translator) {}
 }

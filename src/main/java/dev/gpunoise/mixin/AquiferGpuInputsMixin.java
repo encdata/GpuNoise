@@ -354,7 +354,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 for (int x = minX; x < minX + 16; x++) {
                     int localX = x - minX, localY = y - minY, localZ = z - minZ;
                     double cachedDensity = finalDensityBlockView != null
-                            && finalDensityBlockView.containsLocal(localX, localY, localZ)
                             ? finalDensityBlockView.valueAtLocalUnchecked(localX, localY, localZ)
                             : cache.finalDensity(x, y, z);
                     double density = noiseAccess.gpunoise$withBeardifier(cachedDensity, x, y, z);
@@ -460,6 +459,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 }
             }
         }
+        if (finalDensityBlockView != null) finalDensityBlockView.recordReads(decisionCapacity);
         GpuTerrainProfiler.recordAquiferPhase(GpuTerrainProfiler.AQUIFER_SCAN, inputScanStart);
 
         // C2ME OCL precomputes each random aquifer center's FluidStatus before
@@ -742,65 +742,76 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 centers.add(center);
             }
         }
-        GpuAquiferFluidStatus.Input[] inputs = new GpuAquiferFluidStatus.Input[centers.size()];
-        Aquifer.FluidStatus[][] sampledStatuses = new Aquifer.FluidStatus[centers.size()][];
-        for (int index = 0; index < centers.size(); index++) {
-            int[] center = centers.get(index);
-            int centerX = center[0], centerY = center[1], centerZ = center[2];
-            Aquifer.FluidStatus defaultStatus = gpunoise$sampleGlobalFluidLevel(
-                    fluidLevelSampler, cache, centerY);
-            float[] surfaces = new float[offsets.length];
-            int[] globalLevels = new int[offsets.length];
-            int[] globalKinds = new int[offsets.length];
-            Aquifer.FluidStatus[] samples = new Aquifer.FluidStatus[offsets.length];
-            for (int sample = 0; sample < offsets.length; sample++) {
-                int surfaceX = Math.floorDiv(centerX + (offsets[sample][0] << 4), 4) * 4;
-                int surfaceZ = Math.floorDiv(centerZ + (offsets[sample][1] << 4), 4) * 4;
-                surfaces[sample] = gpunoise$sharedSurfaceLevel(
-                        graphIdentity, surfaceX, surfaceZ);
-                int surfaceY = (int) Math.floor(surfaces[sample]) + 8;
-                Aquifer.FluidStatus sampled = gpunoise$sampleGlobalFluidLevel(
-                        fluidLevelSampler, cache, surfaceY);
-                samples[sample] = sampled;
-                globalLevels[sample] = gpunoise$fluidLevel(sampled);
-                BlockState sampledState = sampled.at(surfaceY);
-                globalKinds[sample] = sampledState.isAir() ? GpuAquiferFluidStatus.AIR
-                        : sampledState.is(Blocks.WATER) ? GpuAquiferFluidStatus.WATER
-                        : sampledState.is(Blocks.LAVA) ? GpuAquiferFluidStatus.LAVA
-                        : GpuAquiferFluidStatus.OTHER_FLUID;
+        GpuAquiferFluidStatus.BatchWriter statusWriter = centers.isEmpty()
+                ? null : new GpuAquiferFluidStatus.BatchWriter(centers.size());
+        BlockState[] sampledFluidTypes = new BlockState[Math.multiplyExact(
+                centers.size(), GpuAquiferFluidStatus.SURFACE_SAMPLES)];
+        float[] surfaces = new float[GpuAquiferFluidStatus.SURFACE_SAMPLES];
+        int[] globalLevels = new int[GpuAquiferFluidStatus.GLOBAL_LEVEL_SAMPLES];
+        int[] globalKinds = new int[GpuAquiferFluidStatus.GLOBAL_LEVEL_SAMPLES];
+        try {
+            for (int index = 0; index < centers.size(); index++) {
+                int[] center = centers.get(index);
+                int centerX = center[0], centerY = center[1], centerZ = center[2];
+                Aquifer.FluidStatus defaultStatus = gpunoise$sampleGlobalFluidLevel(
+                        fluidLevelSampler, cache, centerY);
+                for (int sample = 0; sample < offsets.length; sample++) {
+                    int surfaceX = Math.floorDiv(centerX + (offsets[sample][0] << 4), 4) * 4;
+                    int surfaceZ = Math.floorDiv(centerZ + (offsets[sample][1] << 4), 4) * 4;
+                    surfaces[sample] = gpunoise$sharedSurfaceLevel(
+                            graphIdentity, surfaceX, surfaceZ);
+                    int surfaceY = (int) Math.floor(surfaces[sample]) + 8;
+                    Aquifer.FluidStatus sampled = gpunoise$sampleGlobalFluidLevel(
+                            fluidLevelSampler, cache, surfaceY);
+                    sampledFluidTypes[index * GpuAquiferFluidStatus.SURFACE_SAMPLES + sample] =
+                            ((AquiferFluidStatusAccessor) (Object) sampled).gpunoise$fluidType();
+                    globalLevels[sample] = gpunoise$fluidLevel(sampled);
+                    BlockState sampledState = sampled.at(surfaceY);
+                    globalKinds[sample] = sampledState.isAir() ? GpuAquiferFluidStatus.AIR
+                            : sampledState.is(Blocks.WATER) ? GpuAquiferFluidStatus.WATER
+                            : sampledState.is(Blocks.LAVA) ? GpuAquiferFluidStatus.LAVA
+                            : GpuAquiferFluidStatus.OTHER_FLUID;
+                }
+                GpuWorldgenDependency.Coordinate spread = GpuWorldgenDependency.spreadCoordinate(
+                        centerX, centerY, centerZ);
+                GpuWorldgenDependency.Coordinate lava = GpuWorldgenDependency.lavaCoordinate(
+                        centerX, centerY, centerZ);
+                statusWriter.add(centerY,
+                        gpunoise$fluidLevel(defaultStatus), gpunoise$fluidKind(
+                        ((AquiferFluidStatusAccessor) (Object) defaultStatus).gpunoise$fluidType()),
+                        (float) cache.aquiferFloodedness(centerX, centerY, centerZ),
+                        (float) cache.aquiferSpread(spread.x(), spread.y(), spread.z()),
+                        (float) cache.aquiferLava(lava.x(), lava.y(), lava.z()),
+                        (float) cache.aquiferErosion(centerX, centerY, centerZ),
+                        (float) cache.aquiferDepth(centerX, centerY, centerZ),
+                        surfaces, globalLevels, globalKinds);
             }
-            GpuWorldgenDependency.Coordinate spread = GpuWorldgenDependency.spreadCoordinate(
-                    centerX, centerY, centerZ);
-            GpuWorldgenDependency.Coordinate lava = GpuWorldgenDependency.lavaCoordinate(
-                    centerX, centerY, centerZ);
-            inputs[index] = new GpuAquiferFluidStatus.Input(centerY,
-                    gpunoise$fluidLevel(defaultStatus), gpunoise$fluidKind(
-                    ((AquiferFluidStatusAccessor) (Object) defaultStatus).gpunoise$fluidType()),
-                    (float) cache.aquiferFloodedness(centerX, centerY, centerZ),
-                    (float) cache.aquiferSpread(spread.x(), spread.y(), spread.z()),
-                    (float) cache.aquiferLava(lava.x(), lava.y(), lava.z()),
-                    (float) cache.aquiferErosion(centerX, centerY, centerZ),
-                    (float) cache.aquiferDepth(centerX, centerY, centerZ),
-                    surfaces, globalLevels, globalKinds);
-            sampledStatuses[index] = samples;
+        } catch (RuntimeException | Error failure) {
+            if (statusWriter != null) statusWriter.close();
+            throw failure;
         }
-        java.nio.ByteBuffer statusRecords = inputs.length == 0
-                ? java.nio.ByteBuffer.allocateDirect(0)
-                : GpuAquiferFluidStatus.pack(inputs);
-        GpuAquiferPrefillResult combined = nearestRecords != null && inputs.length > 0
-                && inputs.length <= GpuAquiferFluidStatus.MAX_PREFILL_CENTERS
-                ? GpuTerrainRuntime.submitAquiferPrefill(nearestRecords, nearestCount,
-                        statusRecords, inputs.length).toCompletableFuture().join()
-                : null;
-        if (combined != null) GpuTerrainProfiler.recordAquiferNearestBatch(nearestCount);
-        int[] nearestRows = combined == null && nearestRecords != null
-                ? gpunoise$submitNearestBatch(nearestRecords, nearestCount).join()
-                : combined == null ? null : combined.nearestRows();
-        int[] outputs = inputs.length == 0 ? new int[0]
-                : combined == null
-                ? GpuTerrainRuntime.submitAquiferFluidStatus(statusRecords, inputs.length)
-                        .toCompletableFuture().join()
-                : combined.fluidStatusRows();
+        java.nio.ByteBuffer statusRecords = statusWriter == null ? null : statusWriter.finish();
+        GpuAquiferPrefillResult combined;
+        int[] nearestRows;
+        int[] outputs;
+        try {
+            combined = nearestRecords != null && statusRecords != null
+                    && centers.size() <= GpuAquiferFluidStatus.MAX_PREFILL_CENTERS
+                    ? GpuTerrainRuntime.submitAquiferPrefill(nearestRecords, nearestCount,
+                            statusRecords, centers.size()).toCompletableFuture().join()
+                    : null;
+            if (combined != null) GpuTerrainProfiler.recordAquiferNearestBatch(nearestCount);
+            nearestRows = combined == null && nearestRecords != null
+                    ? gpunoise$submitNearestBatch(nearestRecords, nearestCount).join()
+                    : combined == null ? null : combined.nearestRows();
+            outputs = statusRecords == null ? new int[0]
+                    : combined == null
+                    ? GpuTerrainRuntime.submitAquiferFluidStatus(statusRecords, centers.size())
+                            .toCompletableFuture().join()
+                    : combined.fluidStatusRows();
+        } finally {
+            if (statusRecords != null) GpuAquiferInputBufferPool.release(statusRecords);
+        }
         for (int index = 0; index < centers.size(); index++) {
             int[] center = centers.get(index);
             long key = BlockPos.asLong(center[0], center[1], center[2]);
@@ -821,9 +832,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 status = new Aquifer.FluidStatus(level,
                         ((AquiferFluidStatusAccessor) (Object) defaultStatus).gpunoise$fluidType());
             } else {
-                Aquifer.FluidStatus sampled = sampledStatuses[index][source - 1];
                 status = new Aquifer.FluidStatus(level,
-                        ((AquiferFluidStatusAccessor) (Object) sampled).gpunoise$fluidType());
+                        sampledFluidTypes[index * GpuAquiferFluidStatus.SURFACE_SAMPLES + source - 1]);
             }
             statusCache.put(key, status);
             GpuAquiferStatusRegionCache.put(graphIdentity, globalFluidPicker, key, status);
