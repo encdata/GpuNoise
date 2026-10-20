@@ -62,6 +62,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private int blockGraphRegisterVariant;
     private boolean blockGraphFastMathVariant;
     private GpuDensityGraph compiledBlockGraphVariant;
+    private GpuDensityGraphBuffer.Packed compiledBlockGraphPacked;
     private GpuBiomeSearchTree uploadedBiomeTree;
     private final long interpolationShader, interpolationDescriptorLayout, interpolationPipelineLayout,
             interpolationPipeline, interpolationDescriptorPool, interpolationDescriptorSet;
@@ -1847,7 +1848,13 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                                          MemoryStack stack) throws Exception {
         int required = packed.blockRegisterCount();
         int variant = required <= 32 ? 32 : required <= 64 ? 64 : required <= 128 ? 128 : 256;
-        if (graph == compiledBlockGraphVariant && variant == blockGraphRegisterVariant
+        // A graph may have several block programs for different compact root
+        // masks. They share the same router identity and register tier, but
+        // their statically emitted instructions and register assignments can
+        // differ. Reusing a pipeline across those packed programs pairs the
+        // new root table with stale shader code and silently corrupts outputs.
+        if (graph == compiledBlockGraphVariant && packed == compiledBlockGraphPacked
+                && variant == blockGraphRegisterVariant
                 && FAST_GRAPH_MATH == blockGraphFastMathVariant) return;
         long nextShader = compileRuntimeShader("/assets/gpunoise/shaders/density_graph.comp",
                 "block density graph", FAST_GRAPH_MATH
@@ -1867,6 +1874,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         blockGraphRegisterVariant = variant;
         blockGraphFastMathVariant = FAST_GRAPH_MATH;
         compiledBlockGraphVariant = graph;
+        compiledBlockGraphPacked = packed;
     }
     private long graphDescriptorPool(MemoryStack s){VkDescriptorPoolSize.Buffer z=VkDescriptorPoolSize.calloc(1,s).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(GRAPH_DESCRIPTOR_BINDINGS.length);VkDescriptorPoolCreateInfo i=VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(z);LongBuffer h=s.longs(0);check(vkCreateDescriptorPool(device,i,null,h),"graph pool");return h.get(0);}
     private long graphDescriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(graphDescriptorPool).pSetLayouts(s.longs(graphDescriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"graph set");return h.get(0);}

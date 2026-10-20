@@ -609,7 +609,11 @@ public final class VulkanCiSmoke {
                 float worldX = blockX - 32.0f;
                 float expectedDensity = worldX * worldX;
                 if (Math.abs(density - expectedDensity) > 1.0e-5f || Math.abs(barrier - 8.0f) > 1.0e-5f) {
-                    throw new IllegalStateException("Compact terrain block output mismatch at X=" + blockX);
+                    throw new IllegalStateException("Compact terrain block output mismatch at X=" + blockX
+                            + ": density=" + density + " (expected " + expectedDensity + ")"
+                            + ", barrier=" + barrier + " (expected 8.0)"
+                            + ", rootOrder=[" + compactBlocks.rootIndexAt(0) + ","
+                            + compactBlocks.rootIndexAt(1) + "]");
                 }
             }
             System.out.println("Vulkan CI smoke: parity-selected compact block output completed");
