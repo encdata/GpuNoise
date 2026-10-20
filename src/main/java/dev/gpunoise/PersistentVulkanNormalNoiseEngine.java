@@ -689,6 +689,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 || gridMetadata.remaining() < chunkCount * 32L
                 || outputMetadata.remaining() < chunkCount * GpuInterpolationBatch.METADATA_BYTES)
             throw new IllegalArgumentException("invalid grid interpolation batch");
+        GpuInterpolationBatch.validateForDispatch(outputMetadata, chunkCount,
+                samplesPerChunk, blocksPerChunk);
         if (graph == null) throw new IllegalArgumentException("terrain graph is not installed");
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph);
         int rootCount = graph.routerRootCount();

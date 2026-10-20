@@ -74,6 +74,36 @@ final class GpuInterpolationBatch {
         putWord(target, baseWord + ORIGIN_Z_WORD, z);
     }
 
+    static void validateForDispatch(ByteBuffer metadata, int chunkCount,
+                                    int samplesPerChunk, int blocksPerChunk) {
+        if (metadata == null || chunkCount <= 0 || samplesPerChunk <= 0 || blocksPerChunk <= 0
+                || metadata.remaining() < (long) chunkCount * METADATA_BYTES) {
+            throw new IllegalArgumentException("invalid interpolation metadata batch");
+        }
+        ByteBuffer records = metadata.duplicate().order(metadata.order());
+        int firstRecord = records.position();
+        for (int chunk = 0; chunk < chunkCount; chunk++) {
+            int base = Math.addExact(firstRecord, Math.multiplyExact(chunk, METADATA_BYTES));
+            int cornerOffset = records.getInt(base + CORNER_OFFSET_WORD * Integer.BYTES);
+            int blockOffset = records.getInt(base + BLOCK_OFFSET_WORD * Integer.BYTES);
+            int cellsX = records.getInt(base + CELLS_X_WORD * Integer.BYTES);
+            int cellsY = records.getInt(base + CELLS_Y_WORD * Integer.BYTES);
+            int cellsZ = records.getInt(base + CELLS_Z_WORD * Integer.BYTES);
+            int blocksPerCellX = records.getInt(base + BLOCKS_PER_CELL_X_WORD * Integer.BYTES);
+            int blocksPerCellY = records.getInt(base + BLOCKS_PER_CELL_Y_WORD * Integer.BYTES);
+            long cornerVolume = (cellsX + 1L) * (cellsY + 1L) * (cellsZ + 1L);
+            long blockVolume = (long) cellsX * cellsY * cellsZ
+                    * blocksPerCellX * blocksPerCellX * blocksPerCellY;
+            if (cornerOffset != Math.multiplyExact(chunk, samplesPerChunk)
+                    || blockOffset != Math.multiplyExact(chunk, blocksPerChunk)
+                    || cellsX <= 0 || cellsY <= 0 || cellsZ <= 0
+                    || blocksPerCellX <= 0 || blocksPerCellY <= 0
+                    || cornerVolume != samplesPerChunk || blockVolume != blocksPerChunk) {
+                throw new IllegalArgumentException("invalid interpolation metadata for chunk " + chunk);
+            }
+        }
+    }
+
     private static void putWord(ByteBuffer target, int word, int value) {
         target.putInt(Math.multiplyExact(word, Integer.BYTES), value);
     }
