@@ -129,6 +129,10 @@ public final class GpuTerrainDecisionWriter {
             }
             writeRegionBlocks(byTile, regionX, regionZ,
                     first.cellCountY() * first.cellHeight(), first.minCellY() * first.cellHeight());
+            // Recalculate once per touched section after this region-major pass
+            // so direct palette writes preserve exact counts even when a chunk
+            // arrived with pre-existing section contents.
+            for (LevelChunkSection section : acquired) section.recalcBlockCounts();
             for (int fillIndex = 0; fillIndex < fills.size(); fillIndex++) {
                 if (prepared[fillIndex] != null) {
                     ChunkAccess chunk = fills.get(fillIndex).chunk();
@@ -320,33 +324,58 @@ public final class GpuTerrainDecisionWriter {
     private static void writeRegionBlocks(PreparedChunk[] byTile, int regionX, int regionZ,
                                           int verticalSize, int minY) {
         BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
+        ChunkAccess sectionOwner = null;
+        for (PreparedChunk output : byTile) {
+            if (output != null) {
+                sectionOwner = output.chunk();
+                break;
+            }
+        }
+        if (sectionOwner == null) return;
+
+        ChunkPos regionOrigin = new ChunkPos(regionX << 2, regionZ << 2);
+        LevelChunkSection[] sections = new LevelChunkSection[16];
+        int activeSectionIndex = Integer.MIN_VALUE;
         long writeStart = GpuTerrainProfiler.beginPhase();
         for (int yOffset = 0; yOffset < verticalSize; yOffset++) {
             int y = minY + yOffset;
-            for (int tileZ = 0; tileZ < 4; tileZ++) {
-                for (int tileX = 0; tileX < 4; tileX++) {
-                    PreparedChunk output = byTile[(tileZ << 2) | tileX];
+            int sectionIndex = sectionOwner.getSectionIndex(y);
+            if (sectionIndex != activeSectionIndex) {
+                for (int tile = 0; tile < byTile.length; tile++) {
+                    PreparedChunk output = byTile[tile];
+                    if (output != null) sections[tile] = output.chunk().getSection(sectionIndex);
+                }
+                activeSectionIndex = sectionIndex;
+            }
+
+            // Match C2ME-OCL's region-major Y/Z/X traversal. Keep the current
+            // section for each tile rather than resolving ChunkAccess sections
+            // once per row and chunk.
+            for (int z = 0; z < 64; z++) {
+                int tileZ = z >>> 4;
+                int localZ = z & 15;
+                int worldZ = regionOrigin.getMinBlockZ() + z;
+                for (int x = 0; x < 64; x++) {
+                    int tileX = x >>> 4;
+                    int tile = (tileZ << 2) | tileX;
+                    PreparedChunk output = byTile[tile];
                     if (output == null) continue;
-                    LevelChunkSection section = output.chunk().getSection(
-                            output.chunk().getSectionIndex(y));
-                    for (int localZ = 0; localZ < 16; localZ++) {
-                        int worldZ = (regionZ << 6) + (tileZ << 4) + localZ;
-                        for (int localX = 0; localX < 16; localX++) {
-                            int blockIndex = (yOffset << 8) | (localZ << 4) | localX;
-                            int paletteId = output.blockPaletteIds().stateId(blockIndex);
-                            if (paletteId == 0) continue;
-                            BlockState state = output.palette().get(paletteId);
-                            if (output.fillState().directWritesSafe) {
-                                ((GpuLevelChunkSectionAccess) (Object) section)
-                                        .gpunoise$writeGpuBlock(((y & 15) << 8) | (localZ << 4) | localX, state);
-                            } else {
-                                section.setBlockState(localX, y & 15, localZ, state, false);
-                            }
-                            if (output.blockPaletteIds().needsFluidPostProcessing(blockIndex)) {
-                                mutable.set((regionX << 6) + (tileX << 4) + localX, y, worldZ);
-                                output.chunk().markPosForPostprocessing(mutable);
-                            }
-                        }
+                    int localX = x & 15;
+                    int blockIndex = (yOffset << 8) | (localZ << 4) | localX;
+                    int paletteId = output.blockPaletteIds().stateId(blockIndex);
+                    if (paletteId == 0) continue;
+
+                    BlockState state = output.palette().get(paletteId);
+                    LevelChunkSection section = sections[tile];
+                    if (output.fillState().directWritesSafe) {
+                        ((GpuLevelChunkSectionAccess) (Object) section)
+                                .gpunoise$writeGpuBlock(((y & 15) << 8) | (localZ << 4) | localX, state);
+                    } else {
+                        section.setBlockState(localX, y & 15, localZ, state, false);
+                    }
+                    if (output.blockPaletteIds().needsFluidPostProcessing(blockIndex)) {
+                        mutable.set(regionOrigin.getMinBlockX() + x, y, worldZ);
+                        output.chunk().markPosForPostprocessing(mutable);
                     }
                 }
             }
