@@ -65,6 +65,7 @@ public final class GpuTerrainDecisionWriter {
         ArrayList<ChunkAccess> heightmapsToPrime = new ArrayList<>(fills.size());
         boolean[] writeProtected = new boolean[fills.size()];
         PreparedChunk[] prepared = new PreparedChunk[fills.size()];
+        RegionPalette palette = new RegionPalette();
         for (int fillIndex = 0; fillIndex < fills.size(); fillIndex++) {
             ChunkFill fill = fills.get(fillIndex);
             if (Math.floorDiv(fill.chunk().getPos().x, 4) != regionX
@@ -104,7 +105,7 @@ public final class GpuTerrainDecisionWriter {
             }
             GpuTerrainRuntime.bindFillCache(fill.cache());
             try {
-                prepared[fillIndex] = prepareChunk(fill);
+                prepared[fillIndex] = prepareChunk(fill, palette);
             } finally {
                 GpuTerrainRuntime.clearFillCache();
             }
@@ -153,23 +154,25 @@ public final class GpuTerrainDecisionWriter {
                                     int cellWidth, int cellHeight,
                                     BlockState defaultBlock, GpuFillState fillState) {
         PreparedChunk prepared = prepareChunk(chunk, noiseChunk, decisions, minCellY,
-                cellCountY, cellWidth, cellHeight, defaultBlock, fillState);
+                cellCountY, cellWidth, cellHeight, defaultBlock, fillState, new RegionPalette());
         writePreparedChunk(prepared);
         Heightmap.primeHeightmaps(chunk,
                 EnumSet.of(Heightmap.Types.OCEAN_FLOOR_WG, Heightmap.Types.WORLD_SURFACE_WG));
         return chunk;
     }
 
-    private static PreparedChunk prepareChunk(ChunkFill fill) {
+    private static PreparedChunk prepareChunk(ChunkFill fill, RegionPalette palette) {
         return prepareChunk(fill.chunk(), fill.noiseChunk(), fill.decisions(), fill.minCellY(),
-                fill.cellCountY(), fill.cellWidth(), fill.cellHeight(), fill.defaultBlock(), fill.fillState());
+                fill.cellCountY(), fill.cellWidth(), fill.cellHeight(), fill.defaultBlock(),
+                fill.fillState(), palette);
     }
 
     private static PreparedChunk prepareChunk(ChunkAccess chunk, NoiseChunk noiseChunk,
                                     GpuAquiferDecisionTable decisions,
                                     int minCellY, int cellCountY,
                                     int cellWidth, int cellHeight,
-                                    BlockState defaultBlock, GpuFillState fillState) {
+                                    BlockState defaultBlock, GpuFillState fillState,
+                                    RegionPalette palette) {
         if (decisions.validCount() == 0) {
             throw new IllegalArgumentException("GPU terrain writer requires at least one admitted decision");
         }
@@ -182,11 +185,7 @@ public final class GpuTerrainDecisionWriter {
         int minDecisionY = decisions.minY();
         boolean debugVoid = fillState.debugVoidTerrain;
         BlockPaletteBuffer blockPaletteIds = new BlockPaletteBuffer(cellCountY * cellHeight * 256);
-        ArrayList<BlockState> palette = new ArrayList<>();
-        Map<BlockState, Integer> paletteIds = new HashMap<>();
         BlockState air = Blocks.AIR.defaultBlockState();
-        palette.add(air);
-        paletteIds.put(air, 0);
         GpuNoiseChunkAccess noiseAccess = (GpuNoiseChunkAccess) (Object) noiseChunk;
         GpuChunkDensityCache densityCache = noiseAccess.gpunoise$gpuCache();
         net.minecraft.world.level.levelgen.Aquifer aquifer = noiseChunk.aquifer();
@@ -272,10 +271,7 @@ public final class GpuTerrainDecisionWriter {
                                 if (state == null) state = defaultBlock;
                                 if (debugVoid) state = air;
                                 int blockIndex = ((y - minY) << 8) | (localZ << 4) | localX;
-                                int paletteId = paletteIds.computeIfAbsent(state, blockState -> {
-                                    palette.add(blockState);
-                                    return palette.size() - 1;
-                                });
+                                int paletteId = palette.idFor(state);
                                 blockPaletteIds.setStateId(blockIndex, paletteId);
                                 if (paletteId != 0) {
                                     boolean scheduleFluidUpdate = gpuStateResolved
@@ -350,7 +346,7 @@ public final class GpuTerrainDecisionWriter {
                             int paletteId = output.blockPaletteIds().stateId(blockIndex);
                             if (paletteId == 0) continue;
 
-                            BlockState state = output.palette().get(paletteId);
+                            BlockState state = output.palette().state(paletteId);
                             LevelChunkSection section = sections[tile];
                             if (output.fillState().directWritesSafe) {
                                 ((GpuLevelChunkSectionAccess) (Object) section)
@@ -394,7 +390,30 @@ public final class GpuTerrainDecisionWriter {
 
     private record PreparedChunk(ChunkAccess chunk, int minY, int verticalSize,
                                  GpuFillState fillState, BlockPaletteBuffer blockPaletteIds,
-                                 ArrayList<BlockState> palette) {}
+                                 RegionPalette palette) {}
+
+    /** One OCL-style state mapping shared by all chunks in this CPU write batch. */
+    private static final class RegionPalette {
+        private final ArrayList<BlockState> states = new ArrayList<>();
+        private final Map<BlockState, Integer> ids = new HashMap<>();
+
+        private RegionPalette() {
+            BlockState air = Blocks.AIR.defaultBlockState();
+            states.add(air);
+            ids.put(air, 0);
+        }
+
+        private int idFor(BlockState state) {
+            Integer existing = ids.get(state);
+            if (existing != null) return existing;
+            int id = states.size();
+            states.add(state);
+            ids.put(state, id);
+            return id;
+        }
+
+        private BlockState state(int id) { return states.get(id); }
+    }
 
     /** OCL-compatible compact IDs with automatic widening for large mod palettes. */
     private static final class BlockPaletteBuffer {
