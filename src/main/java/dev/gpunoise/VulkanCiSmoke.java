@@ -582,7 +582,11 @@ public final class VulkanCiSmoke {
                         + ", fullRoot0=" + markerTerrain.corners().valueAt(0, 0)
                         + ", compactRoot1=" + compactCorners.corners().valueAt(0, 1)
                         + ", fullRoot1=" + markerTerrain.corners().valueAt(0, 1)
-                        + ", logicalRootRegisters=" + java.util.Arrays.toString(markerGraph.routerRoots()));
+                        + ", logicalRootRegisters=" + java.util.Arrays.toString(markerGraph.routerRoots())
+                        + ", graphInstructions=" + markerGraph.nodes().stream()
+                                .map(node -> node.opcode() + "@" + node.register() + "<-"
+                                        + java.util.Arrays.toString(node.children()))
+                                .toList());
             }
             if (markerBlocks.rootCount() != GpuTerrainRoots.COUNT
                     || !markerBlocks.contains(15, 0, 15)) {
