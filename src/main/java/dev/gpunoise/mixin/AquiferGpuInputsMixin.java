@@ -52,7 +52,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.Objects;
-import java.lang.reflect.Field;
 
 /** Feeds the GPU floodedness root into vanilla's aquifer surface calculation. */
 // C2ME also rewrites computeSurfaceLevel. Apply this small value substitution
@@ -109,12 +108,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
 
     @org.spongepowered.asm.mixin.Unique
     private static final AtomicBoolean gpunoise$aquiferPreflightLogged = new AtomicBoolean();
-
-    @org.spongepowered.asm.mixin.Unique
-    private static final AtomicBoolean gpunoise$c2meCutoffWarning = new AtomicBoolean();
-
-    @org.spongepowered.asm.mixin.Unique
-    private static volatile Field gpunoise$c2meCutoffField;
 
     @org.spongepowered.asm.mixin.Unique
     private static final AtomicBoolean gpunoise$exactAquiferInputsLogged = new AtomicBoolean();
@@ -247,35 +240,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         }
     }
 
-    @org.spongepowered.asm.mixin.Unique
-    private Integer gpunoise$c2meSamplingCutoff() {
-        if (!GpuAquiferRuntimeMode.c2meAquiferRewriteEnabled()) return null;
-        try {
-            Field cutoffField = gpunoise$c2meCutoffField;
-            if (cutoffField == null) {
-                synchronized (AquiferGpuInputsMixin.class) {
-                    cutoffField = gpunoise$c2meCutoffField;
-                    if (cutoffField == null) {
-                        cutoffField = getClass().getDeclaredField("maxY");
-                        if (!cutoffField.trySetAccessible()) {
-                            throw new IllegalAccessException("NoiseBasedAquifer.maxY is inaccessible");
-                        }
-                        gpunoise$c2meCutoffField = cutoffField;
-                    }
-                }
-            }
-            Object value = cutoffField.get(this);
-            return value instanceof Integer cutoff ? cutoff : null;
-        } catch (ReflectiveOperationException | LinkageError unavailable) {
-            if (gpunoise$c2meCutoffWarning.compareAndSet(false, true)) {
-                dev.gpunoise.GpuNoise.LOGGER.warn(
-                        "C2ME NoiseBasedAquifer.maxY cutoff is unavailable; keeping C2ME fluid decisions on Java",
-                        unavailable);
-            }
-            return null;
-        }
-    }
-
     @Inject(method = "computeSubstance", at = @At("HEAD"), cancellable = true)
     private void gpunoise$usePreparedGpuAquiferDecision(
             DensityFunction.FunctionContext context, double density,
@@ -331,16 +295,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                                  dev.gpunoise.GpuNoiseChunkAccess noiseAccess,
                                                  PositionalRandomFactory randomFactory) {
         boolean c2meAquifer = GpuAquiferRuntimeMode.c2meAquiferRewriteEnabled();
-        int c2meSamplingCutoff = Integer.MAX_VALUE;
-        if (c2meAquifer) {
-            Integer cutoff = gpunoise$c2meSamplingCutoff();
-            if (cutoff == null) {
-                gpunoise$logAquiferPreflightSkip(
-                        "C2ME aquifer cutoff accessor is unavailable; keeping its fluid decisions on Java");
-                return;
-            }
-            c2meSamplingCutoff = cutoff;
-        }
         final int minX = cache.minX(), minY = cache.minY(), minZ = cache.minZ();
         final int height = cache.height();
         int decisionCapacity = Math.multiplyExact(height, 256);
@@ -402,24 +356,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                             ? gpunoise$sampleGlobalFluidLevel(c2meGlobalFluidLevels, cache, y)
                             : globalFluidPicker.computeFluid(x, y, z);
                     BlockState globalState = global.at(y);
-                    if (c2meAquifer && y > c2meSamplingCutoff) {
-                        // C2ME OCL bypasses local aquifer pressure above its
-                        // low-pass cutoff and returns the global picker state.
-                        int globalStateId = Block.getId(globalState);
-                        GpuAquiferSubstance.Input diagnosticInput = gpunoise$verifyAquifer
-                                ? new GpuAquiferSubstance.Input(density, 0.0, y,
-                                0, 0, 0, 0, 0, 0,
-                                GpuAquiferSubstance.OTHER, GpuAquiferSubstance.OTHER,
-                                GpuAquiferSubstance.OTHER, globalStateId,
-                                true, false, globalStateId) : null;
-                        substanceWriter.addDirectGlobalFluid(density, y, true,
-                                globalStateId);
-                        pending.add(index, globalState, context, density, diagnosticInput);
-                        directGlobalFluidDecisions++;
-                        submittedSubstanceRows = gpunoise$dispatchReadySubstanceRows(
-                                pending, substanceWriter, substanceBatches, submittedSubstanceRows);
-                        continue;
-                    }
                     if (globalState.is(Blocks.LAVA)) {
                         GpuAquiferSubstance.Input diagnosticInput = gpunoise$verifyAquifer
                                 ? new GpuAquiferSubstance.Input(density, 0.0, y,
