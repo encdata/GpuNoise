@@ -249,12 +249,21 @@ public final class GpuTerrainRuntime {
         }
         int minX = chunk.getPos().getMinBlockX();
         int minZ = chunk.getPos().getMinBlockZ();
+        net.minecraft.world.level.levelgen.PositionalRandomFactory oreRandom = randomState.oreRandom();
         GpuChunkDensityCache.prefetch5x5ForChunk(minX, minZ, settings);
         GpuChunkDensityCache cache = GpuTerrainAreaRegistry.claim(minX, minZ,
                 () -> GpuChunkDensityCache.create(minX, minZ, settings));
         if (cache.markSubmitted()) gpuChunksSubmitted.incrementAndGet();
         GpuChunkDensityCache preparedCache = cache;
         return preparedCache.ready().thenApply(ignored -> {
+            // Start the per-block vein pass as soon as the GPU root slab is
+            // published. NoiseChunk construction and its aquifer setup can
+            // then overlap the queued ore classification.
+            try {
+                preparedCache.prepareOreVeinDecisions(oreRandom);
+            } catch (RuntimeException failure) {
+                LOGGER.warn("GPU ore-vein preparation could not be queued; OreVeinifier stays on Java", failure);
+            }
             if (preparedCache.markCompleted()) gpuChunksCompleted.incrementAndGet();
             logChunkStatistics(false);
             return preparedCache;

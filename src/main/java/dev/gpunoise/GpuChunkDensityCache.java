@@ -288,11 +288,15 @@ public final class GpuChunkDensityCache {
             PositionalRandomFactory randomFactory) {
         if (oreVeinDecisionBuild != null) return oreVeinDecisionBuild;
         oreVeinRandomFactory = randomFactory;
-        oreVeinDecisionBuild = GpuOreVeinDecisionTable.build(this, randomFactory)
-                .thenApply(table -> {
-                    oreVeinDecisions = table;
-                    return table;
-                }).toCompletableFuture();
+        try {
+            oreVeinDecisionBuild = GpuOreVeinDecisionTable.build(this, randomFactory)
+                    .thenApply(table -> {
+                        oreVeinDecisions = table;
+                        return table;
+                    }).toCompletableFuture();
+        } catch (RuntimeException failure) {
+            oreVeinDecisionBuild = CompletableFuture.failedFuture(failure);
+        }
         return oreVeinDecisionBuild;
     }
 
