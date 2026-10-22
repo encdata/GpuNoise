@@ -1188,7 +1188,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     }
 
     /** Runs OCL's per-block OreVeinifier classification on Vulkan. */
-    synchronized int[] submitOreVeinDecisions(ByteBuffer records, int count) throws Exception {
+    synchronized byte[] submitOreVeinDecisions(ByteBuffer records, int count) throws Exception {
         if (hasInFlightWork()) throw new IllegalStateException("Vulkan slot is still in flight");
         if (count <= 0 || count > CAPACITY
                 || records.remaining() != count * GpuOreVeinDecisions.RECORD_BYTES)
@@ -1223,12 +1223,12 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     .duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
             values.clear();
             values.limit(outputWords);
-            int[] packed = new int[outputWords];
-            values.get(packed);
-            int[] output = new int[count];
-            for (int row = 0; row < count; row++) {
-                int code = (packed[row / 10] >>> ((row % 10) * 3)) & 0x7;
-                output[row] = GpuOreVeinDecisions.decodeCompactCode(code);
+            byte[] output = new byte[count];
+            for (int word = 0, row = 0; word < outputWords; word++) {
+                int packed = values.get();
+                for (int offset = 0; offset < 10 && row < count; offset++, row++) {
+                    output[row] = (byte) ((packed >>> (offset * 3)) & 0x7);
+                }
             }
             return output;
         }

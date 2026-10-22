@@ -735,7 +735,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 for (OreVeinRequest request : requests) combined.put(request.records.duplicate());
                 combined.flip();
             }
-            int[] rows = slot.submitOreVeinDecisions(combined, totalRows);
+            byte[] rows = slot.submitOreVeinDecisions(combined, totalRows);
             if (rows == null || rows.length != totalRows) {
                 throw new IllegalStateException("Vulkan ore-vein batch returned "
                         + (rows == null ? "null" : rows.length) + " rows for " + totalRows + " inputs");
@@ -1325,8 +1325,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
         return future;
     }
 
-    CompletableFuture<int[]> submitOreVeinDecisions(ByteBuffer records, int count) {
-        CompletableFuture<int[]> future = new CompletableFuture<>();
+    CompletableFuture<byte[]> submitOreVeinDecisions(ByteBuffer records, int count) {
+        CompletableFuture<byte[]> future = new CompletableFuture<>();
         if (records == null || count <= 0 || count > PersistentVulkanNormalNoiseEngine.CAPACITY
                 || records.remaining() != (long) count * GpuOreVeinDecisions.RECORD_BYTES) {
             future.completeExceptionally(new IllegalArgumentException("invalid ore-vein decision request"));
@@ -1564,7 +1564,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                          boolean decisionChain,
                                          CompletableFuture<GpuAquiferPrefillResult> future, long enqueuedNanos)
             implements DispatchRequest {}
-    private record OreVeinRequest(ByteBuffer records, int count, CompletableFuture<int[]> future,
+    private record OreVeinRequest(ByteBuffer records, int count, CompletableFuture<byte[]> future,
                                   long enqueuedNanos) implements DispatchRequest {}
     private record NearestPayload(ByteBuffer records, int count, int statusRowOffset) {}
     @FunctionalInterface

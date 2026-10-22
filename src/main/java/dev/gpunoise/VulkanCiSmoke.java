@@ -1403,16 +1403,17 @@ public final class VulkanCiSmoke {
             expected[i] = GpuOreVeinDecisions.evaluate(records[i]);
         }
         ByteBuffer packed = GpuOreVeinDecisions.packBatch(records);
-        int[] actual = ring.submitOreVeinDecisions(packed, records.length).get(60, TimeUnit.SECONDS);
+        byte[] actual = ring.submitOreVeinDecisions(packed, records.length).get(60, TimeUnit.SECONDS);
         if (actual.length != expected.length)
             throw new IllegalStateException("Ore-vein Vulkan output length differs from its input batch");
         int gpuResolvedRows = 0;
         for (int i = 0; i < expected.length; i++) {
-            if (actual[i] != expected[i]) {
+            int actualState = GpuOreVeinDecisions.decodeCompactCode(Byte.toUnsignedInt(actual[i]));
+            if (actualState != expected[i]) {
                 throw new IllegalStateException("Ore-vein Vulkan mismatch at row " + i
-                        + ": expected state " + expected[i] + ", got " + actual[i]);
+                        + ": expected state " + expected[i] + ", got " + actualState);
             }
-            if (actual[i] != GpuOreVeinDecisions.CPU_FALLBACK) gpuResolvedRows++;
+            if (actualState != GpuOreVeinDecisions.CPU_FALLBACK) gpuResolvedRows++;
         }
         if (gpuResolvedRows == 0)
             throw new IllegalStateException("Ore-vein parity fixture did not exercise a Vulkan decision");

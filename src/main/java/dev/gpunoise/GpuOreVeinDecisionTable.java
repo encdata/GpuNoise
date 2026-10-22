@@ -59,9 +59,7 @@ public final class GpuOreVeinDecisionTable {
                     .thenApply(batchStates -> {
                         if (batchStates == null || batchStates.length != count)
                             throw new IllegalStateException("Vulkan returned an invalid ore-vein result batch");
-                        for (int row = 0; row < count; row++) {
-                            output[batchOffset + row] = GpuOreVeinDecisions.compactCodeForStateId(batchStates[row]);
-                        }
+                        System.arraycopy(batchStates, 0, output, batchOffset, count);
                         return output;
                     }));
         }

@@ -566,7 +566,7 @@ public final class GpuTerrainRuntime {
         return ring.submitAquiferSubstance(records, queryCount);
     }
 
-    static java.util.concurrent.CompletionStage<int[]> submitOreVeinDecisions(
+    static java.util.concurrent.CompletionStage<byte[]> submitOreVeinDecisions(
             java.nio.ByteBuffer records, int blockCount) {
         VulkanSubmissionRing ring = submissionRing;
         if (ring == null) return java.util.concurrent.CompletableFuture.failedStage(
