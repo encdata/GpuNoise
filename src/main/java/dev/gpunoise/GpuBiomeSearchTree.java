@@ -1,11 +1,6 @@
 package dev.gpunoise;
 
 import com.mojang.datafixers.util.Pair;
-import dev.gpunoise.mixin.ClimateParameterListAccess;
-import dev.gpunoise.mixin.ClimateRTreeAccess;
-import dev.gpunoise.mixin.ClimateRTreeLeafAccess;
-import dev.gpunoise.mixin.ClimateRTreeNodeAccess;
-import dev.gpunoise.mixin.ClimateRTreeSubTreeAccess;
 import dev.gpunoise.mixin.MultiNoiseBiomeSourceAccess;
 import net.minecraft.core.Holder;
 import net.minecraft.world.level.biome.Biome;
@@ -16,11 +11,11 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.IdentityHashMap;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
-/** Compact, immutable serialization of Minecraft's live multi-noise search tree. */
+/** Compact, immutable serialization of a GPU-searchable multi-noise parameter tree. */
 public final class GpuBiomeSearchTree {
     public static final int NODE_BYTES = 48;
     public static final int BRANCH = 1;
@@ -64,10 +59,11 @@ public final class GpuBiomeSearchTree {
                     biomeList.add(entry.getSecond());
                 }
             }
-            Object root = ((ClimateRTreeAccess) (Object)
-                    ((ClimateParameterListAccess) (Object) entries).gpunoise$index()).gpunoise$root();
-            TreeBuilder builder = new TreeBuilder(biomeIds);
-            builder.append(root, 1);
+            TreeBuilder builder = new TreeBuilder();
+            for (Pair<Climate.ParameterPoint, Holder<Biome>> entry : values) {
+                builder.add(entry.getFirst(), biomeIds.get(entry.getSecond()));
+            }
+            builder.build();
             if (builder.nodes.size() < 2 || builder.nodes.size() > 1_000_000) return null;
             int nodeCount = builder.nodes.size();
             long childWordCount = 0L;
@@ -202,53 +198,80 @@ public final class GpuBiomeSearchTree {
     }
 
     private static final class TreeBuilder {
-        private final Map<Holder<?>, Integer> biomeIds;
+        private final List<TreeEntry> entries = new ArrayList<>();
         private final List<PackedNode> nodes = new ArrayList<>();
-        private final IdentityHashMap<Object, Integer> indices = new IdentityHashMap<>();
         private int maxDepth;
 
-        private TreeBuilder(Map<Holder<?>, Integer> biomeIds) {
-            this.biomeIds = biomeIds;
+        private TreeBuilder() {
             nodes.add(null); // OCL's tree uses one-based node offsets.
         }
 
-        private void append(Object source, int depth) {
-            if (source == null) throw new IllegalArgumentException("null climate tree node");
-            if (indices.containsKey(source)) throw new IllegalArgumentException("climate tree is not a tree");
-            maxDepth = Math.max(maxDepth, depth);
-            PackedNode node = new PackedNode(bounds(source));
-            int index = nodes.size();
-            indices.put(source, index);
-            nodes.add(node);
-            if (source instanceof ClimateRTreeSubTreeAccess subtree) {
-                Object rawChildren = subtree.gpunoise$children();
-                if (!(rawChildren instanceof Object[] children) || children.length == 0 || children.length > 7)
-                    throw new IllegalArgumentException("invalid climate branch fanout");
-                node.branch = true;
-                node.children = new int[children.length];
-                for (Object child : children) append(child, depth + 1);
-                for (int i = 0; i < children.length; i++) node.children[i] = indices.get(children[i]);
-            } else if (source instanceof ClimateRTreeLeafAccess leaf) {
-                Object rawValue = leaf.gpunoise$value();
-                if (!(rawValue instanceof Holder<?> holder))
-                    throw new IllegalArgumentException("climate leaf is not a biome holder");
-                Integer id = biomeIds.get(holder);
-                if (id == null) throw new IllegalArgumentException("climate leaf biome is absent from mapping");
-                node.biomeId = id;
-            } else {
-                throw new IllegalArgumentException("unknown climate tree node " + source.getClass().getName());
+        private void add(Climate.ParameterPoint point, int biomeId) {
+            List<Climate.Parameter> parameters = List.of(point.temperature(), point.humidity(),
+                    point.continentalness(), point.erosion(), point.depth(), point.weirdness(),
+                    Climate.Parameter.point(Climate.unquantizeCoord(point.offset())));
+            short[] bounds = new short[DIMENSIONS * 2];
+            for (int dim = 0; dim < DIMENSIONS; dim++) {
+                bounds[dim] = quantize(parameters.get(dim).min());
+                bounds[DIMENSIONS + dim] = quantize(parameters.get(dim).max());
             }
+            entries.add(new TreeEntry(bounds, biomeId));
         }
 
-        private short[] bounds(Object source) {
-            Climate.Parameter[] space = ((ClimateRTreeNodeAccess) source).gpunoise$parameterSpace();
-            if (space == null || space.length != DIMENSIONS) throw new IllegalArgumentException("invalid climate bounds");
+        private void build() {
+            if (entries.isEmpty()) throw new IllegalArgumentException("empty climate parameter list");
+            append(new ArrayList<>(entries), 1);
+        }
+
+        private int append(List<TreeEntry> subset, int depth) {
+            maxDepth = Math.max(maxDepth, depth);
+            PackedNode node = new PackedNode(unionBounds(subset));
+            int index = nodes.size();
+            nodes.add(node);
+            if (subset.size() == 1) {
+                node.biomeId = subset.get(0).biomeId;
+            } else {
+                int splitDim = widestDimension(subset);
+                subset.sort(Comparator.comparingInt(entry -> center(entry.bounds, splitDim)));
+                int middle = subset.size() / 2;
+                List<TreeEntry> left = new ArrayList<>(subset.subList(0, middle));
+                List<TreeEntry> right = new ArrayList<>(subset.subList(middle, subset.size()));
+                node.branch = true;
+                node.children = new int[]{append(left, depth + 1), append(right, depth + 1)};
+            }
+            return index;
+        }
+
+        private static short[] unionBounds(List<TreeEntry> entries) {
             short[] result = new short[DIMENSIONS * 2];
-            for (int i = 0; i < DIMENSIONS; i++) {
-                result[i] = quantize(space[i].min());
-                result[DIMENSIONS + i] = quantize(space[i].max());
+            java.util.Arrays.fill(result, 0, DIMENSIONS, Short.MAX_VALUE);
+            java.util.Arrays.fill(result, DIMENSIONS, DIMENSIONS * 2, Short.MIN_VALUE);
+            for (TreeEntry entry : entries) {
+                for (int dim = 0; dim < DIMENSIONS; dim++) {
+                    result[dim] = (short) Math.min(result[dim], entry.bounds[dim]);
+                    result[DIMENSIONS + dim] = (short) Math.max(result[DIMENSIONS + dim], entry.bounds[DIMENSIONS + dim]);
+                }
             }
             return result;
+        }
+
+        private static int widestDimension(List<TreeEntry> entries) {
+            int best = 0;
+            int spread = -1;
+            for (int dim = 0; dim < DIMENSIONS; dim++) {
+                int min = Short.MAX_VALUE;
+                int max = Short.MIN_VALUE;
+                for (TreeEntry entry : entries) {
+                    min = Math.min(min, center(entry.bounds, dim));
+                    max = Math.max(max, center(entry.bounds, dim));
+                }
+                if (max - min > spread) { best = dim; spread = max - min; }
+            }
+            return best;
+        }
+
+        private static int center(short[] bounds, int dim) {
+            return ((int) bounds[dim] + bounds[DIMENSIONS + dim]) / 2;
         }
 
         private static short quantize(long coordinate) {
@@ -256,6 +279,12 @@ public final class GpuBiomeSearchTree {
             int scaled = (int) (climate * 10000.0f);
             return (short) Math.max(Short.MIN_VALUE, Math.min(Short.MAX_VALUE, scaled));
         }
+    }
+
+    private static final class TreeEntry {
+        private final short[] bounds;
+        private final int biomeId;
+        private TreeEntry(short[] bounds, int biomeId) { this.bounds = bounds; this.biomeId = biomeId; }
     }
 
     private static final class PackedNode {
