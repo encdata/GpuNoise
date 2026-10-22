@@ -260,6 +260,30 @@ public final class GpuChunkDensityCache {
         return view == null ? Double.NaN : view.valueAtUnchecked(localX, localY, localZ);
     }
 
+    void packOreVeinRows(java.nio.ByteBuffer destination, PositionalRandomFactory randomFactory,
+                         int firstRow, int count) {
+        if (destination == null || randomFactory == null || firstRow < 0 || count <= 0
+                || (long) firstRow + count > (long) maxRelativeY * 256
+                || destination.remaining() < (long) count * GpuOreVeinDecisions.RECORD_BYTES
+                || !hasOreVeinBlockRoots())
+            throw new IllegalArgumentException("invalid ore-vein block-root packing range");
+        GpuTerrainBlockResult.RootView toggle = fullBlockRoot(GpuTerrainRoots.VEIN_TOGGLE);
+        GpuTerrainBlockResult.RootView ridged = fullBlockRoot(GpuTerrainRoots.VEIN_RIDGED);
+        GpuTerrainBlockResult.RootView gap = fullBlockRoot(GpuTerrainRoots.VEIN_GAP);
+        for (int row = firstRow; row < firstRow + count; row++) {
+            int localY = row >>> 8;
+            int localZ = (row >>> 4) & 15;
+            int localX = row & 15;
+            int x = minX + localX;
+            int y = minY + localY;
+            int z = minZ + localZ;
+            GpuOreVeinDecisions.put(destination,
+                    toggle.valueAtUnchecked(localX, localY, localZ),
+                    ridged.valueAtUnchecked(localX, localY, localZ),
+                    gap.valueAtUnchecked(localX, localY, localZ), x, y, z, randomFactory);
+        }
+    }
+
     public synchronized CompletionStage<GpuOreVeinDecisionTable> prepareOreVeinDecisions(
             PositionalRandomFactory randomFactory) {
         if (oreVeinDecisionBuild != null) return oreVeinDecisionBuild;

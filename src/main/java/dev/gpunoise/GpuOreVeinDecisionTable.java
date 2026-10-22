@@ -54,7 +54,7 @@ public final class GpuOreVeinDecisionTable {
             int batchOffset = firstRow + offset;
             int count = Math.min(maxRows, activeRows - offset);
             batches = batches.thenCompose(table -> CompletableFuture.supplyAsync(
-                            () -> packRows(cache, randomFactory, minX, minY, minZ, batchOffset, count),
+                            () -> packRows(cache, randomFactory, batchOffset, count),
                             net.minecraft.Util.backgroundExecutor())
                     .thenCompose(records -> GpuTerrainRuntime.submitOreVeinDecisions(records, count))
                     .thenApply(batchResult -> {
@@ -77,20 +77,9 @@ public final class GpuOreVeinDecisionTable {
 
     private static java.nio.ByteBuffer packRows(GpuChunkDensityCache cache,
                                                  PositionalRandomFactory randomFactory,
-                                                 int minX, int minY, int minZ,
                                                  int firstRow, int count) {
         java.nio.ByteBuffer records = GpuOreVeinDecisions.allocateBatch(count);
-        for (int row = firstRow; row < firstRow + count; row++) {
-            int localY = row >>> 8;
-            int localZ = (row >>> 4) & 15;
-            int localX = row & 15;
-            int x = minX + localX, y = minY + localY, z = minZ + localZ;
-            GpuOreVeinDecisions.put(records,
-                    (float) cache.blockRootValue(GpuTerrainRoots.VEIN_TOGGLE, x, y, z),
-                    (float) cache.blockRootValue(GpuTerrainRoots.VEIN_RIDGED, x, y, z),
-                    (float) cache.blockRootValue(GpuTerrainRoots.VEIN_GAP, x, y, z),
-                    x, y, z, randomFactory);
-        }
+        cache.packOreVeinRows(records, randomFactory, firstRow, count);
         return records.flip();
     }
 
