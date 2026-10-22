@@ -634,9 +634,9 @@ void main(){
     bool fusedTerrainGrid=(rootCount&0x80000000u)!=0u;
     uint routerRootCount=rootCount&0xffffu;
     uint fusedOutputRootCount=(rootCount>>16u)&0x7fffu;
-    uint outputRootCount=fusedTerrainGrid?fusedOutputRootCount:routerRootCount;
+    uint gridOutputRootCount=fusedTerrainGrid?fusedOutputRootCount:routerRootCount;
     uint outputStride=fusedTerrainGrid?fusedOutputRootCount:routerRootCount+interpolationCount;
-    for (uint root = 0u; root < outputRootCount; root++) {
+    for (uint root = 0u; root < gridOutputRootCount; root++) {
         uint rootNode=fusedTerrainGrid?rootNodes[32u+root]:rootNodes[root];
         results[sampleIndex * outputStride + root] = float(values[rootNode]);
     }
