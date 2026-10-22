@@ -52,8 +52,8 @@ public final class GpuChunkDensityCache {
     private static final AtomicLong blockReads = new AtomicLong();
     private static final AtomicLong lastReadLogBucket = new AtomicLong(-1L);
     // The compact cell grid still carries every compiled router root. Full
-    // volume outputs are restricted to density roots with per-block material
-    // consumers; sparse aquifer-center roots use grid corners or Java fallback.
+    // volume outputs are restricted to parity-verified material, aquifer, and
+    // ore roots; unsupported or unverified roots stay on the Java path.
     private static final int ROOTS = GpuTerrainRoots.COUNT;
 
     private GpuChunkDensityCache(int minX, int minZ, NoiseSettings settings, GpuWorldgenDependency exact) {
