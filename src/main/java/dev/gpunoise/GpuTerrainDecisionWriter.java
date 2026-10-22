@@ -65,7 +65,7 @@ public final class GpuTerrainDecisionWriter {
         ArrayList<ChunkAccess> heightmapsToPrime = new ArrayList<>(fills.size());
         boolean[] writeProtected = new boolean[fills.size()];
         PreparedChunk[] prepared = new PreparedChunk[fills.size()];
-        RegionPalette palette = new RegionPalette();
+        RegionPalette palette = new RegionPalette(first.defaultBlock());
         for (int fillIndex = 0; fillIndex < fills.size(); fillIndex++) {
             ChunkFill fill = fills.get(fillIndex);
             if (Math.floorDiv(fill.chunk().getPos().x, 4) != regionX
@@ -154,7 +154,8 @@ public final class GpuTerrainDecisionWriter {
                                     int cellWidth, int cellHeight,
                                     BlockState defaultBlock, GpuFillState fillState) {
         PreparedChunk prepared = prepareChunk(chunk, noiseChunk, decisions, minCellY,
-                cellCountY, cellWidth, cellHeight, defaultBlock, fillState, new RegionPalette());
+                cellCountY, cellWidth, cellHeight, defaultBlock, fillState,
+                new RegionPalette(defaultBlock));
         writePreparedChunk(prepared);
         Heightmap.primeHeightmaps(chunk,
                 EnumSet.of(Heightmap.Types.OCEAN_FLOOR_WG, Heightmap.Types.WORLD_SURFACE_WG));
@@ -396,14 +397,47 @@ public final class GpuTerrainDecisionWriter {
     private static final class RegionPalette {
         private final ArrayList<BlockState> states = new ArrayList<>();
         private final Map<BlockState, Integer> ids = new HashMap<>();
+        private final BlockState air = Blocks.AIR.defaultBlockState();
+        private final BlockState defaultBlock;
+        private final BlockState water = Blocks.WATER.defaultBlockState();
+        private final BlockState lava = Blocks.LAVA.defaultBlockState();
+        private final int airId;
+        private final int defaultBlockId;
+        private final int waterId;
+        private final int lavaId;
+        private BlockState lastState;
+        private int lastStateId;
 
-        private RegionPalette() {
-            BlockState air = Blocks.AIR.defaultBlockState();
-            states.add(air);
-            ids.put(air, 0);
+        private RegionPalette(BlockState defaultBlock) {
+            this.defaultBlock = defaultBlock;
+            airId = register(air);
+            defaultBlockId = register(defaultBlock);
+            waterId = register(water);
+            lavaId = register(lava);
+            lastState = air;
+            lastStateId = airId;
         }
 
         private int idFor(BlockState state) {
+            if (state == lastState) return lastStateId;
+            int knownId = state == air ? airId
+                    : state == defaultBlock ? defaultBlockId
+                    : state == water ? waterId
+                    : state == lava ? lavaId
+                    : -1;
+            if (knownId >= 0) {
+                lastState = state;
+                lastStateId = knownId;
+                return knownId;
+            }
+            Integer existing = ids.get(state);
+            int id = existing == null ? register(state) : existing;
+            lastState = state;
+            lastStateId = id;
+            return id;
+        }
+
+        private int register(BlockState state) {
             Integer existing = ids.get(state);
             if (existing != null) return existing;
             int id = states.size();
