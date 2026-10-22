@@ -317,6 +317,7 @@ final class GpuDensityExpressionSmoke {
         verifyTransparentMarkerElimination();
         verifyConstantBranchPruning();
         verifyConstantArithmeticFolding();
+        verifyFloatAbiCommonSubexpressions();
         requireOpcode("EXPR_ADD", 1);
         requireOpcode("EXPR_SUBTRACT", 2);
         requireOpcode("EXPR_MULTIPLY", 3);
@@ -701,6 +702,32 @@ final class GpuDensityExpressionSmoke {
         if (zeroAddLowered.nodes().size() != 1
                 || !zeroAddLowered.nodes().get(0).opcode().equals("GpuCoordinate")) {
             throw new AssertionError("adding negative zero should preserve the other Ap2 input");
+        }
+    }
+
+    private static void verifyFloatAbiCommonSubexpressions() {
+        DensityFunction source = DensityFunctions.constant(0.0);
+        double firstMinimum = 0.1;
+        double secondMinimum = firstMinimum + 1.0e-10;
+        if (Double.doubleToRawLongBits(firstMinimum) == Double.doubleToRawLongBits(secondMinimum)
+                || Float.floatToRawIntBits((float) firstMinimum)
+                != Float.floatToRawIntBits((float) secondMinimum)) {
+            throw new AssertionError("CSE fixture must differ in double precision but match the GPU float ABI");
+        }
+        GpuDensityGraph graph = new GpuDensityGraph(
+                java.util.List.of(
+                        new GpuDensityGraph.Node("GpuCoordinate", new int[0], new double[0], "X"),
+                        new GpuDensityGraph.Node("Clamp", new int[]{0},
+                                new double[]{firstMinimum, 1.0}, null),
+                        new GpuDensityGraph.Node("Clamp", new int[]{0},
+                                new double[]{secondMinimum, 1.0}, null),
+                        new GpuDensityGraph.Node("Ap2", new int[]{1, 2}, new double[0], "ADD")),
+                new int[]{3}, java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(source, source, source, source));
+        GpuDensityGraph lowered = GpuDensityGraphLowerer.lower(graph);
+        int[] children = lowered.nodes().get(lowered.nodes().size() - 1).children();
+        if (lowered.nodes().size() != 3 || children.length != 2 || children[0] != children[1]) {
+            throw new AssertionError("GPU-equivalent mod density subexpressions should share a shader instruction");
         }
     }
 

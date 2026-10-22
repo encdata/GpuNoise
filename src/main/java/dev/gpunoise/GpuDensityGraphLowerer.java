@@ -369,7 +369,13 @@ final class GpuDensityGraphLowerer {
         List<Integer> childKey = new ArrayList<>(children.length);
         for (int child : children) childKey.add(child);
         List<Long> constantKey = new ArrayList<>(constants.length);
-        for (double constant : constants) constantKey.add(Double.doubleToRawLongBits(constant));
+        // Every graph constant is serialized as a 32-bit float before GLSL
+        // widens it for density arithmetic. Key by that same representation
+        // so mod graphs that differ only below the shader ABI precision share
+        // one instruction instead of repeating identical work per sample.
+        // Raw float bits retain signed zero and distinct finite encodings.
+        for (double constant : constants)
+            constantKey.add((long) Float.floatToRawIntBits((float) constant));
         return new NodeKey(opcode, List.copyOf(childKey), List.copyOf(constantKey), payload);
     }
 
