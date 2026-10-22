@@ -632,10 +632,14 @@ void main(){
 #ifdef GRID_INPUT
     uint interpolationCount=interpolatorMap[0];
     bool fusedTerrainGrid=(rootCount&0x80000000u)!=0u;
-    uint routerRootCount=rootCount&0x7fffffffu;
-    uint outputStride=fusedTerrainGrid?routerRootCount:routerRootCount+interpolationCount;
-    for (uint root = 0u; root < routerRootCount; root++)
-        results[sampleIndex * outputStride + root] = float(values[rootNodes[root]]);
+    uint routerRootCount=rootCount&0xffffu;
+    uint fusedOutputRootCount=(rootCount>>16u)&0x7fffu;
+    uint outputRootCount=fusedTerrainGrid?fusedOutputRootCount:routerRootCount;
+    uint outputStride=fusedTerrainGrid?fusedOutputRootCount:routerRootCount+interpolationCount;
+    for (uint root = 0u; root < outputRootCount; root++) {
+        uint rootNode=fusedTerrainGrid?rootNodes[32u+root]:rootNodes[root];
+        results[sampleIndex * outputStride + root] = float(values[rootNode]);
+    }
     for(uint marker=0u;marker<interpolationCount;marker++) {
         float markerValue=float(values[interpolatorMap[1u+marker]]);
         if(fusedTerrainGrid)
