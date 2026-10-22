@@ -56,6 +56,19 @@ public final class GpuAquiferPrefillResult {
     public int[] fluidStatusRows() { return copyRange(fluidStatusStorage, fluidStatusOffset, fluidStatusLength); }
     public int[] decisionRows() { return copyRange(decisionStorage, decisionOffset, decisionLength); }
 
+    public GpuAquiferRowsView nearestView() {
+        int stride = GpuAquiferNearestThree.OUTPUT_INTS;
+        if (nearestLength % stride != 0) throw new IllegalStateException("nearest-center range is not row-aligned");
+        return new GpuAquiferRowsView(nearestStorage, nearestOffset, nearestLength / stride, stride);
+    }
+
+    public int decisionValue(int row, int component) {
+        int stride = 3;
+        if (row < 0 || row >= decisionLength / stride || component < 0 || component >= stride)
+            throw new IndexOutOfBoundsException();
+        return decisionStorage[decisionOffset + row * stride + component];
+    }
+
     public int nearestValueCount() { return nearestLength; }
     public int fluidStatusValueCount() { return fluidStatusLength; }
     public int decisionValueCount() { return decisionLength; }

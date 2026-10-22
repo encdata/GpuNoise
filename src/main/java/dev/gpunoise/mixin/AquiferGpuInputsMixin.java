@@ -12,6 +12,7 @@ import dev.gpunoise.GpuAquiferSubstance;
 import dev.gpunoise.GpuTerrainInputBufferPool;
 import dev.gpunoise.GpuAquiferFluidStatus;
 import dev.gpunoise.GpuAquiferPrefillResult;
+import dev.gpunoise.GpuAquiferRowsView;
 import dev.gpunoise.GpuAquiferStatusRegionCache;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQueries;
 import dev.gpunoise.GpuAquiferDecisionData.FluidStatusCache;
@@ -357,7 +358,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         Map<Integer, Aquifer.FluidStatus> c2meGlobalFluidLevels = c2meAquifer ? new HashMap<>() : null;
         // Keep nearest queries queued until center status inputs are ready,
         // allowing one command buffer to execute the complete aquifer chain.
-        List<CompletableFuture<int[]>> nearestBatches = new ArrayList<>();
+        List<CompletableFuture<GpuAquiferRowsView>> nearestBatches = new ArrayList<>();
         // C2ME OCL evaluates these density roots on its device. Use the same
         // strict GPU root cache here; exact Java evaluation remains an explicit
         // diagnostic mode and the fallback for missing cache coordinates.
@@ -487,7 +488,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         if (combineAquiferPasses) {
             chainedAquifer = gpunoise$stageAquiferStatuses(cache, queries, fluidStatuses,
                     c2meGlobalFluidLevels, c2meAquifer, queries.size(), true);
-            nearestBatches.add(CompletableFuture.completedFuture(chainedAquifer.nearestRows()));
+            nearestBatches.add(CompletableFuture.completedFuture(chainedAquifer.nearestView()));
         } else {
             if (c2meAquifer && queries.size() > 0) {
                 gpunoise$stageAquiferStatuses(cache, queries, fluidStatuses,
@@ -497,40 +498,40 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     offset += gpunoise$nearestQueriesPerDispatch) {
                 int count = Math.min(gpunoise$nearestQueriesPerDispatch, queries.size() - offset);
                 java.nio.ByteBuffer records = GpuAquiferNearestThree.packForAsync(queries, offset, count);
-                nearestBatches.add(gpunoise$submitNearestBatch(records, count));
+                nearestBatches.add(gpunoise$submitNearestBatch(records, count).thenApply(rows ->
+                        GpuAquiferRowsView.whole(rows, GpuAquiferNearestThree.OUTPUT_INTS)));
             }
         }
         CompletableFuture.allOf(nearestBatches.toArray(CompletableFuture[]::new)).join();
         int directPendingRows = pending.size();
-        int[] decisionChainRows = chainedAquifer == null ? new int[0] : chainedAquifer.decisionRows();
-        boolean decisionChainActive = decisionChainRows.length == queries.size() * 3;
+        boolean decisionChainActive = chainedAquifer != null
+                && chainedAquifer.decisionValueCount() == queries.size() * 3;
         boolean[] decisionChainEligible = decisionChainActive ? new boolean[queries.size()] : null;
 
         int nearestParitySamples = 0;
         int nearestParityMismatches = 0;
         String nearestFirstMismatch = null;
         int queryOffset = 0;
-        for (CompletableFuture<int[]> batch : nearestBatches) {
-            int[] selectedRows = batch.join();
-            for (int row = 0; row < selectedRows.length / GpuAquiferNearestThree.OUTPUT_INTS; row++) {
+        for (CompletableFuture<GpuAquiferRowsView> batch : nearestBatches) {
+            GpuAquiferRowsView selectedRows = batch.join();
+            for (int row = 0; row < selectedRows.rows(); row++) {
                 int query = queryOffset++;
                 int queryX = queries.x(query), queryY = queries.y(query), queryZ = queries.z(query);
                 int[][] queryCenters = queries.centers(query);
                 double queryDensity = queries.density(query), queryBarrier = queries.barrier(query);
                 boolean queryBelowIsLava = queries.belowIsLava(query);
-                int base = row * GpuAquiferNearestThree.OUTPUT_INTS;
-                int first = selectedRows[base], second = selectedRows[base + 1];
-                int third = selectedRows[base + 2], fourth = selectedRows[base + 3];
-                int distance0 = selectedRows[base + 4], distance1 = selectedRows[base + 5];
-                int distance2 = selectedRows[base + 6], distance3 = selectedRows[base + 7];
+                int first = selectedRows.get(row, 0), second = selectedRows.get(row, 1);
+                int third = selectedRows.get(row, 2), fourth = selectedRows.get(row, 3);
+                int distance0 = selectedRows.get(row, 4), distance1 = selectedRows.get(row, 5);
+                int distance2 = selectedRows.get(row, 6), distance3 = selectedRows.get(row, 7);
                 if (gpunoise$verifyAquifer) {
                     int[] expectedNearest = GpuAquiferNearestThree.select(
                             new int[]{queryX, queryY, queryZ}, queryCenters);
                     nearestParitySamples++;
-                    if (selectedRows[base] != expectedNearest[0]
-                            || selectedRows[base + 1] != expectedNearest[1]
-                            || selectedRows[base + 2] != expectedNearest[2]
-                            || selectedRows[base + 3] != expectedNearest[3]
+                    if (first != expectedNearest[0]
+                            || second != expectedNearest[1]
+                            || third != expectedNearest[2]
+                            || fourth != expectedNearest[3]
                             || distance0 != expectedNearest[4] || distance1 != expectedNearest[5]
                             || distance2 != expectedNearest[6] || distance3 != expectedNearest[7]) {
                         nearestParityMismatches++;
@@ -684,15 +685,14 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             }
             for (int query = 0; query < queries.size(); query++) {
                 if (!decisionChainEligible[query]) continue;
-                int base = query * 3;
-                int action = decisionChainRows[base];
+                int action = chainedAquifer.decisionValue(query, 0);
                 if (action == GpuAquiferSubstance.CPU_FALLBACK) continue;
                 if (action != GpuAquiferSubstance.RETURN_DEFAULT
                         && action != GpuAquiferSubstance.RETURN_STATE) continue;
-                boolean scheduleFluidUpdate = decisionChainRows[base + 1] != 0;
+                boolean scheduleFluidUpdate = chainedAquifer.decisionValue(query, 1) != 0;
                 int pendingRow = directPendingRows + query;
                 BlockState state = action == GpuAquiferSubstance.RETURN_STATE
-                        ? Block.stateById(decisionChainRows[base + 2]) : null;
+                        ? Block.stateById(chainedAquifer.decisionValue(query, 2)) : null;
                 if (action == GpuAquiferSubstance.RETURN_STATE && state == null) continue;
                 if (gpunoise$verifyAquifer) {
                     DensityFunction.FunctionContext context = pending.context(pendingRow);
@@ -964,7 +964,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     : null;
             nearestRows = combined == null && nearestRecords != null
                     ? gpunoise$submitNearestBatch(nearestRecords, nearestCount).join()
-                    : combined == null ? null : combined.nearestRows();
+                    : null;
             outputs = statusRecords == null ? new int[0]
                     : combined == null
                     ? GpuTerrainRuntime.submitAquiferFluidStatus(statusRecords, centers.size())
@@ -1021,8 +1021,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             throw failure;
         }
         GpuTerrainProfiler.recordAquiferStatusPrefill(prefillStart, centers.size(), javaFallbacks);
-        return new GpuAquiferPrefillResult(nearestRows == null ? new int[0] : nearestRows,
-                new int[0], combined == null ? new int[0] : combined.decisionRows());
+        return combined != null ? combined : new GpuAquiferPrefillResult(
+                nearestRows == null ? new int[0] : nearestRows, new int[0]);
     }
 
     @org.spongepowered.asm.mixin.Unique
