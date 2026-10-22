@@ -633,7 +633,7 @@ void main(){
     uint interpolationCount=interpolatorMap[0];
     bool fusedTerrainGrid=(rootCount&0x80000000u)!=0u;
     uint routerRootCount=rootCount&0xffffu;
-    uint fusedOutputRootCount=(rootCount>>16u)&0x7fffu;
+    uint fusedOutputRootCount=routerRootCount;
     uint gridOutputRootCount=fusedTerrainGrid?fusedOutputRootCount:routerRootCount;
     uint outputStride=fusedTerrainGrid?fusedOutputRootCount:routerRootCount+interpolationCount;
     for (uint root = 0u; root < gridOutputRootCount; root++) {

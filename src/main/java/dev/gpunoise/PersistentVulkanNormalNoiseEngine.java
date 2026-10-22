@@ -878,7 +878,10 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipelineLayout, 0, stack.longs(graphDescriptorSet), null);
             ByteBuffer graphPush = stack.malloc(16).order(ByteOrder.nativeOrder())
                     .putInt(sampleCount).putInt(packed.nodeCount())
-                    .putInt(rootCount | (cornerRootIndexes.length << 16) | 0x8000_0000)
+                    // In the fused grid shader the low root-count bits hold
+                    // the compact output count; the full router count is not
+                    // needed after static graph evaluation.
+                    .putInt(cornerRootIndexes.length | 0x8000_0000)
                     .putInt(samplesPerChunk).flip();
             vkCmdPushConstants(commandBuffer, graphPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, graphPush);
             beginTerrainGpuTimestamps();
