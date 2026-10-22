@@ -62,6 +62,8 @@ public final class GpuTerrainRuntime {
     /** Marker-dependent roots included only by the explicit runtime-parity probe. */
     private static volatile int interpolatedTerrainBlockRootMask;
     private static volatile boolean terrainBlockOutputVerificationComplete;
+    /** Immutable root ordering shared by every chunk after startup verification. */
+    private static volatile TerrainBlockOutputLayout terrainBlockOutputLayout;
     private static final ThreadLocal<Boolean> GPU_DENSITY_REQUIRED =
             ThreadLocal.withInitial(() -> Boolean.FALSE);
     private static final ThreadLocal<GpuChunkDensityCache> ACTIVE_FILL_CACHE =
@@ -75,6 +77,8 @@ public final class GpuTerrainRuntime {
     private static final AtomicLong cpuFallbackChunks = new AtomicLong();
     private static final AtomicLong lastChunkStatisticsBucket = new AtomicLong(-1L);
     private GpuTerrainRuntime() {}
+
+    private record TerrainBlockOutputLayout(int mask, int[] rootIndexes) {}
 
     public static synchronized boolean start(GpuDevice selected) {
         if (selected == null) return false;
@@ -498,6 +502,7 @@ public final class GpuTerrainRuntime {
         terrainRing = submissionRing;
         terrainGraph = graph;
         terrainRouter = router;
+        terrainBlockOutputLayout = null;
         verifiedTerrainBlockRootMask = 0;
         interpolatedTerrainBlockRootMask = 0;
         terrainBlockOutputVerificationComplete = false;
@@ -720,6 +725,8 @@ public final class GpuTerrainRuntime {
 
     /** Number of parity-verified roots in compact per-block GPU output. */
     static int terrainBlockOutputRootCount() {
+        if (terrainBlockOutputVerificationComplete)
+            return verifiedTerrainBlockOutputLayout().rootIndexes().length;
         return Integer.bitCount(terrainBlockOutputRootMask());
     }
 
@@ -756,6 +763,8 @@ public final class GpuTerrainRuntime {
             for (int i = 0; i < roots.length; i++) roots[i] = i;
             return roots;
         }
+        if (terrainBlockOutputVerificationComplete)
+            return verifiedTerrainBlockOutputLayout().rootIndexes();
         int mask = terrainBlockOutputRootMask();
         int[] roots = new int[Integer.bitCount(mask)];
         int output = 0;
@@ -789,12 +798,36 @@ public final class GpuTerrainRuntime {
     private static int terrainBlockOutputRootMask() {
         GpuDensityGraph graph = terrainGraph;
         if (graph == null) return (1 << GpuTerrainRoots.COUNT) - 1;
+        if (terrainBlockOutputVerificationComplete) return verifiedTerrainBlockOutputLayout().mask();
         int rootLimit = Math.min(GpuTerrainRoots.COUNT, graph.routerRootCount());
-        int verified = terrainBlockOutputVerificationComplete
-                ? verifiedTerrainBlockRootMask
-                    | (EXPERIMENTAL_INTERPOLATED_BLOCK_OUTPUT ? interpolatedTerrainBlockRootMask : 0)
-                : supportedTerrainRootMask();
+        int verified = supportedTerrainRootMask();
         return verified & terrainBlockOutputEligibleRootMask() & ((1 << rootLimit) - 1);
+    }
+
+    private static TerrainBlockOutputLayout verifiedTerrainBlockOutputLayout() {
+        TerrainBlockOutputLayout layout = terrainBlockOutputLayout;
+        if (layout != null) return layout;
+        synchronized (GpuTerrainRuntime.class) {
+            layout = terrainBlockOutputLayout;
+            if (layout == null) {
+                GpuDensityGraph graph = terrainGraph;
+                int rootLimit = graph == null ? GpuTerrainRoots.COUNT
+                        : Math.min(GpuTerrainRoots.COUNT, graph.routerRootCount());
+                int verified = verifiedTerrainBlockRootMask
+                        | (EXPERIMENTAL_INTERPOLATED_BLOCK_OUTPUT
+                        ? interpolatedTerrainBlockRootMask : 0);
+                int mask = verified & terrainBlockOutputEligibleRootMask()
+                        & ((1 << rootLimit) - 1);
+                int[] indexes = new int[Integer.bitCount(mask)];
+                int output = 0;
+                for (int root = 0; root < rootLimit; root++) {
+                    if ((mask & (1 << root)) != 0) indexes[output++] = root;
+                }
+                layout = new TerrainBlockOutputLayout(mask, indexes);
+                terrainBlockOutputLayout = layout;
+            }
+        }
+        return layout;
     }
 
     static java.util.concurrent.CompletionStage<GpuFusedResult> submitFusedDirect(int[] x, int[] y, int[] z,
@@ -1057,6 +1090,7 @@ public final class GpuTerrainRuntime {
             }
             verifiedTerrainBlockRootMask = verifiedBlockRoots & verifiedTerrainRootMask;
             interpolatedTerrainBlockRootMask = verifiedInterpolatedRoots & verifiedTerrainRootMask;
+            terrainBlockOutputLayout = null;
             terrainBlockOutputVerificationComplete = true;
             GpuNoise.LOGGER.info("GPU terrain grid parity: {} samples, {}/{} roots verified, verifiedMask=0x{}",
                     grid.sampleCount(), Integer.bitCount(verifiedTerrainRootMask), supportedRoots,
@@ -1071,6 +1105,7 @@ public final class GpuTerrainRuntime {
             verifiedTerrainRootMask = 0;
             verifiedTerrainBlockRootMask = 0;
             interpolatedTerrainBlockRootMask = 0;
+            terrainBlockOutputLayout = null;
             terrainBlockOutputVerificationComplete = true;
             GpuNoise.LOGGER.warn("GPU terrain grid parity dispatch failed; terrain remains CPU-owned.", failure);
         }
@@ -1354,6 +1389,7 @@ public final class GpuTerrainRuntime {
         terrainRing = null;
         terrainGraph = null;
         terrainRouter = null;
+        terrainBlockOutputLayout = null;
         biomeSearchTree = null;
         GpuBiomeRegionResults.clear();
         submissionRing = null;
