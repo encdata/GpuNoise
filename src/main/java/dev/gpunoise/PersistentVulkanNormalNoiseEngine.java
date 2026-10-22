@@ -147,6 +147,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long totalTerrainInterpolationGpuNanos;
     private long totalTerrainBlockGpuNanos;
     private long terrainGpuTimestampSamples;
+    private long totalTerrainMetadataUploadBytes;
+    private long totalTerrainCornerReadbackBytes;
+    private long totalTerrainBlockReadbackBytes;
     private long timestampQueryPool;
     private int timestampValidBits;
     private double timestampPeriodNanos;
@@ -724,10 +727,14 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     : totalTerrainInterpolationGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
             double averageBlockGpuMs = terrainGpuTimestampSamples == 0 ? -1.0
                     : totalTerrainBlockGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
-            GpuNoise.LOGGER.info("GPU full terrain profile: batches={}, avgCpuPrepareMs={}, avgSubmitToFenceMs={}, avgReadbackMs={}, avgGridGpuMs={}, avgInterpolationGpuMs={}, avgBlockGpuMs={}, gpuTimingSamples={}",
-                    completed, totalTerrainPreparationNanos / (double) completed / 1_000_000.0,
+            GpuNoise.LOGGER.info("GPU full terrain profile: batches={}, queueSubmissions={}, computeDispatches={}, avgCpuPrepareMs={}, avgSubmitToFenceMs={}, avgReadbackMs={}, metadataUploadMiBPerBatch={}, cornerReadbackMiBPerBatch={}, blockReadbackMiBPerBatch={}, avgGridGpuMs={}, avgInterpolationGpuMs={}, avgBlockGpuMs={}, gpuTimingSamples={}",
+                    completed, completed, completed * 3L,
+                    totalTerrainPreparationNanos / (double) completed / 1_000_000.0,
                     totalTerrainFenceNanos / (double) completed / 1_000_000.0,
                     totalTerrainReadbackNanos / (double) completed / 1_000_000.0,
+                    totalTerrainMetadataUploadBytes / (double) completed / (1024.0 * 1024.0),
+                    totalTerrainCornerReadbackBytes / (double) completed / (1024.0 * 1024.0),
+                    totalTerrainBlockReadbackBytes / (double) completed / (1024.0 * 1024.0),
                     averageGridGpuMs, averageInterpolationGpuMs, averageBlockGpuMs,
                     terrainGpuTimestampSamples);
         }
@@ -823,6 +830,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 || (long) blockCount * outputRoots * Float.BYTES > interpolationOutput.size)
             throw new IllegalArgumentException("grid interpolation batch exceeds GPU capacity");
         long preparationStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
+        long metadataUploadBytes = (long) chunkCount * (32L + GpuInterpolationBatch.METADATA_BYTES);
+        long cornerReadbackBytes = (long) sampleCount * rootCount * Float.BYTES;
+        long blockReadbackBytes = (long) blockCount * outputRoots * Float.BYTES;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
             ensureBlockGraphVariant(graph, packed, stack);
@@ -884,21 +894,17 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             writeGpuTimestamp(4, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
             vkCmdDispatch(commandBuffer, (blockCount + 63) / 64, 1, 1);
             writeGpuTimestamp(5, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-            VkBufferMemoryBarrier.Buffer resultBarrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
-                    .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
-                    .buffer(results.buffer).size((long) sampleCount * cornerStride * Float.BYTES);
-            VkBufferMemoryBarrier.Buffer outputBarrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
-                    .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
-                    .buffer(interpolationOutput.buffer).size((long) blockCount * outputRoots * Float.BYTES);
-            VkBufferMemoryBarrier.Buffer coordinateBarrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
+            VkBufferMemoryBarrier.Buffer finalBarriers = VkBufferMemoryBarrier.calloc(3, stack);
+            finalBarriers.get(0).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
+                    .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(results.buffer)
+                    .size((long) sampleCount * cornerStride * Float.BYTES);
+            finalBarriers.get(1).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
+                    .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(interpolationOutput.buffer)
+                    .size((long) blockCount * outputRoots * Float.BYTES);
+            finalBarriers.get(2).sType$Default()
                     .srcAccessMask(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
                     .dstAccessMask(VK_ACCESS_HOST_WRITE_BIT).buffer(graphCoordinates.buffer)
                     .size((long) blockCount * 16L);
-            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
-                    0, null, resultBarrier, null);
-            VkBufferMemoryBarrier.Buffer finalBarriers = VkBufferMemoryBarrier.calloc(2, stack).sType$Default();
-            finalBarriers.get(0).set(outputBarrier.get(0));
-            finalBarriers.get(1).set(coordinateBarrier.get(0));
             vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
                     0, null, finalBarriers, null);
             check(vkEndCommandBuffer(commandBuffer), "end grid interpolation command buffer");
@@ -917,6 +923,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             inFlightTerrainCornerRoots = rootCount;
             inFlightTerrainCornerStride = cornerStride;
             inFlightTerrainRootIndexes = outputRootIndexes.clone();
+            totalTerrainMetadataUploadBytes += metadataUploadBytes;
+            totalTerrainCornerReadbackBytes += cornerReadbackBytes;
+            totalTerrainBlockReadbackBytes += blockReadbackBytes;
             inFlightTerrain = new CompletableFuture<>();
             return inFlightTerrain;
         }
