@@ -48,7 +48,7 @@ public final class GpuTerrainDecisionWriter {
 
     /**
      * Writes a compatible aligned chunk region with all participating
-     * sections acquired together, following OCL's region ownership strategy.
+     * sections acquired one vertical layer at a time, following OCL's region ownership strategy.
      * The request may contain a partial region when neighboring chunks are not
      * ready yet; each supplied chunk is still written exactly once.
      */
@@ -61,87 +61,69 @@ public final class GpuTerrainDecisionWriter {
         int regionZ = Math.floorDiv(first.chunk().getPos().z, 4);
         Object worldIdentity = first.chunk().getHeightAccessorForGeneration();
         Set<ChunkAccess> uniqueChunks = new HashSet<>(fills.size());
-        ArrayList<LevelChunkSection> acquired = new ArrayList<>(fills.size() * 8);
         ArrayList<ChunkAccess> written = new ArrayList<>(java.util.Collections.nCopies(fills.size(), null));
         ArrayList<ChunkAccess> heightmapsToPrime = new ArrayList<>(fills.size());
         boolean[] writeProtected = new boolean[fills.size()];
         PreparedChunk[] prepared = new PreparedChunk[fills.size()];
-        try {
-            for (int fillIndex = 0; fillIndex < fills.size(); fillIndex++) {
-                ChunkFill fill = fills.get(fillIndex);
-                if (Math.floorDiv(fill.chunk().getPos().x, 4) != regionX
-                        || Math.floorDiv(fill.chunk().getPos().z, 4) != regionZ
-                        || fill.chunk().getHeightAccessorForGeneration() != worldIdentity
-                        || fill.minCellY() != first.minCellY()
-                        || fill.cellCountY() != first.cellCountY()
-                        || fill.cellWidth() != first.cellWidth()
-                        || fill.cellHeight() != first.cellHeight()
-                        || !fill.defaultBlock().equals(first.defaultBlock())
-                        || !uniqueChunks.add(fill.chunk())) {
-                    throw new IllegalArgumentException("incompatible or duplicate chunk in terrain write region");
-                }
-                // Match OCL's write-protection rule: a chunk whose noise stage
-                // already completed must never be rewritten by a duplicate or
-                // late region batch.
-                if (fill.chunk().getHighestGeneratedStatus().isOrAfter(ChunkStatus.NOISE)) {
-                    writeProtected[fillIndex] = true;
-                    written.set(fillIndex, fill.chunk());
-                    continue;
-                }
+        for (int fillIndex = 0; fillIndex < fills.size(); fillIndex++) {
+            ChunkFill fill = fills.get(fillIndex);
+            if (Math.floorDiv(fill.chunk().getPos().x, 4) != regionX
+                    || Math.floorDiv(fill.chunk().getPos().z, 4) != regionZ
+                    || fill.chunk().getHeightAccessorForGeneration() != worldIdentity
+                    || fill.minCellY() != first.minCellY()
+                    || fill.cellCountY() != first.cellCountY()
+                    || fill.cellWidth() != first.cellWidth()
+                    || fill.cellHeight() != first.cellHeight()
+                    || !fill.defaultBlock().equals(first.defaultBlock())
+                    || !uniqueChunks.add(fill.chunk())) {
+                throw new IllegalArgumentException("incompatible or duplicate chunk in terrain write region");
             }
-            // Resolve interpolation and Java material fallbacks before section
-            // ownership, just as OCL consumes its completed device block map.
-            // This keeps all expensive terrain evaluation out of the writer's
-            // critical section and makes the later block pass region ordered.
-            for (int fillIndex = 0; fillIndex < fills.size(); fillIndex++) {
-                if (writeProtected[fillIndex]) continue;
-                ChunkFill fill = fills.get(fillIndex);
-                GpuTerrainRuntime.bindFillCache(fill.cache());
-                try {
-                    prepared[fillIndex] = prepareChunk(fill);
-                } finally {
-                    GpuTerrainRuntime.clearFillCache();
-                }
+            // Match OCL's write-protection rule: a chunk whose noise stage
+            // already completed must never be rewritten by a duplicate or
+            // late region batch.
+            if (fill.chunk().getHighestGeneratedStatus().isOrAfter(ChunkStatus.NOISE)) {
+                writeProtected[fillIndex] = true;
+                written.set(fillIndex, fill.chunk());
+                continue;
             }
-            for (int fillIndex = 0; fillIndex < fills.size(); fillIndex++) {
-                if (writeProtected[fillIndex]) continue;
-                ChunkFill fill = fills.get(fillIndex);
-                int minY = fill.minCellY() * fill.cellHeight();
-                int top = fill.chunk().getSectionIndex(
-                        fill.cellCountY() * fill.cellHeight() - 1 + minY);
-                int bottom = fill.chunk().getSectionIndex(minY);
-                LevelChunkSection[] sections = fill.chunk().getSections();
-                if (bottom < 0 || top >= sections.length || bottom > top) {
-                    throw new IllegalArgumentException("terrain write range is outside chunk sections");
-                }
-                for (int sectionIndex = top; sectionIndex >= bottom; sectionIndex--) {
-                    LevelChunkSection section = sections[sectionIndex];
-                    section.acquire();
-                    acquired.add(section);
-                }
+        }
+        // Resolve interpolation and Java material fallbacks before section
+        // ownership, just as OCL consumes its completed device block map.
+        // This keeps all expensive terrain evaluation out of the writer's
+        // critical section and makes the later block pass region ordered.
+        for (int fillIndex = 0; fillIndex < fills.size(); fillIndex++) {
+            if (writeProtected[fillIndex]) continue;
+            ChunkFill fill = fills.get(fillIndex);
+            int minY = fill.minCellY() * fill.cellHeight();
+            int topSection = fill.chunk().getSectionIndex(
+                    fill.cellCountY() * fill.cellHeight() - 1 + minY);
+            int bottomSection = fill.chunk().getSectionIndex(minY);
+            if (bottomSection < 0 || topSection >= fill.chunk().getSections().length
+                    || bottomSection > topSection) {
+                throw new IllegalArgumentException("terrain write range is outside chunk sections");
             }
-            PreparedChunk[] byTile = new PreparedChunk[16];
-            for (PreparedChunk output : prepared) {
-                if (output == null) continue;
-                int tileIndex = (Math.floorMod(output.chunk().getPos().z, 4) << 2)
-                        | Math.floorMod(output.chunk().getPos().x, 4);
-                byTile[tileIndex] = output;
+            GpuTerrainRuntime.bindFillCache(fill.cache());
+            try {
+                prepared[fillIndex] = prepareChunk(fill);
+            } finally {
+                GpuTerrainRuntime.clearFillCache();
             }
-            writeRegionBlocks(byTile, regionX, regionZ,
-                    first.cellCountY() * first.cellHeight(), first.minCellY() * first.cellHeight());
-            // Recalculate once per touched section after this region-major pass
-            // so direct palette writes preserve exact counts even when a chunk
-            // arrived with pre-existing section contents.
-            for (LevelChunkSection section : acquired) section.recalcBlockCounts();
-            for (int fillIndex = 0; fillIndex < fills.size(); fillIndex++) {
-                if (prepared[fillIndex] != null) {
-                    ChunkAccess chunk = fills.get(fillIndex).chunk();
-                    written.set(fillIndex, chunk);
-                    heightmapsToPrime.add(chunk);
-                }
+        }
+        PreparedChunk[] byTile = new PreparedChunk[16];
+        for (PreparedChunk output : prepared) {
+            if (output == null) continue;
+            int tileIndex = (Math.floorMod(output.chunk().getPos().z, 4) << 2)
+                    | Math.floorMod(output.chunk().getPos().x, 4);
+            byTile[tileIndex] = output;
+        }
+        writeRegionBlocks(byTile, regionX, regionZ,
+                first.cellCountY() * first.cellHeight(), first.minCellY() * first.cellHeight());
+        for (int fillIndex = 0; fillIndex < fills.size(); fillIndex++) {
+            if (prepared[fillIndex] != null) {
+                ChunkAccess chunk = fills.get(fillIndex).chunk();
+                written.set(fillIndex, chunk);
+                heightmapsToPrime.add(chunk);
             }
-        } finally {
-            for (int i = acquired.size() - 1; i >= 0; i--) acquired.get(i).release();
         }
         // OCL updates these once after the batched palette writes. Besides
         // avoiding two heightmap probes for every solid block, doing this
@@ -161,8 +143,8 @@ public final class GpuTerrainDecisionWriter {
 
     /**
      * Preserves NoiseChunk's cell-interpolation lifecycle and uses resolved
-     * Vulkan aquifer states directly. The caller must acquire all touched
-     * sections and validate table coverage before this method writes. Rejected
+     * Vulkan aquifer states directly. The writer acquires each touched section
+     * layer and validates table coverage before its block pass. Rejected
      * rows continue through vanilla NoiseChunk interpolation and aquifer evaluation.
      */
     public static ChunkAccess write(ChunkAccess chunk, NoiseChunk noiseChunk,
@@ -333,50 +315,70 @@ public final class GpuTerrainDecisionWriter {
 
         ChunkPos regionOrigin = new ChunkPos(regionX << 2, regionZ << 2);
         LevelChunkSection[] sections = new LevelChunkSection[16];
-        int activeSectionIndex = Integer.MIN_VALUE;
         long writeStart = GpuTerrainProfiler.beginPhase();
-        for (int yOffset = 0; yOffset < verticalSize; yOffset++) {
-            int y = minY + yOffset;
-            int sectionIndex = sectionOwner.getSectionIndex(y);
-            if (sectionIndex != activeSectionIndex) {
+        int verticalEnd = minY + verticalSize;
+        for (int sectionStartY = minY; sectionStartY < verticalEnd;) {
+            int sectionIndex = sectionOwner.getSectionIndex(sectionStartY);
+            int sectionEndY = Math.min(verticalEnd,
+                    sectionStartY + (16 - Math.floorMod(sectionStartY, 16)));
+            int acquiredCount = 0;
+            try {
                 for (int tile = 0; tile < byTile.length; tile++) {
                     PreparedChunk output = byTile[tile];
-                    if (output != null) sections[tile] = output.chunk().getSection(sectionIndex);
-                }
-                activeSectionIndex = sectionIndex;
-            }
-
-            // Match C2ME-OCL's region-major Y/Z/X traversal. Keep the current
-            // section for each tile rather than resolving ChunkAccess sections
-            // once per row and chunk.
-            for (int z = 0; z < 64; z++) {
-                int tileZ = z >>> 4;
-                int localZ = z & 15;
-                int worldZ = regionOrigin.getMinBlockZ() + z;
-                for (int x = 0; x < 64; x++) {
-                    int tileX = x >>> 4;
-                    int tile = (tileZ << 2) | tileX;
-                    PreparedChunk output = byTile[tile];
                     if (output == null) continue;
-                    int localX = x & 15;
-                    int blockIndex = (yOffset << 8) | (localZ << 4) | localX;
-                    int paletteId = output.blockPaletteIds().stateId(blockIndex);
-                    if (paletteId == 0) continue;
+                    LevelChunkSection section = output.chunk().getSection(sectionIndex);
+                    section.acquire();
+                    sections[tile] = section;
+                    acquiredCount++;
+                }
 
-                    BlockState state = output.palette().get(paletteId);
-                    LevelChunkSection section = sections[tile];
-                    if (output.fillState().directWritesSafe) {
-                        ((GpuLevelChunkSectionAccess) (Object) section)
-                                .gpunoise$writeGpuBlock(((y & 15) << 8) | (localZ << 4) | localX, state);
-                    } else {
-                        section.setBlockState(localX, y & 15, localZ, state, false);
+                // Match C2ME-OCL's region-major Y/Z/X traversal, retaining
+                // only this section layer while visiting its block rows.
+                for (int y = sectionStartY; y < sectionEndY; y++) {
+                    int yOffset = y - minY;
+                    for (int z = 0; z < 64; z++) {
+                        int tileZ = z >>> 4;
+                        int localZ = z & 15;
+                        int worldZ = regionOrigin.getMinBlockZ() + z;
+                        for (int x = 0; x < 64; x++) {
+                            int tileX = x >>> 4;
+                            int tile = (tileZ << 2) | tileX;
+                            PreparedChunk output = byTile[tile];
+                            if (output == null) continue;
+                            int localX = x & 15;
+                            int blockIndex = (yOffset << 8) | (localZ << 4) | localX;
+                            int paletteId = output.blockPaletteIds().stateId(blockIndex);
+                            if (paletteId == 0) continue;
+
+                            BlockState state = output.palette().get(paletteId);
+                            LevelChunkSection section = sections[tile];
+                            if (output.fillState().directWritesSafe) {
+                                ((GpuLevelChunkSectionAccess) (Object) section)
+                                        .gpunoise$writeGpuBlock(((y & 15) << 8) | (localZ << 4) | localX, state);
+                            } else {
+                                section.setBlockState(localX, y & 15, localZ, state, false);
+                            }
+                            if (output.blockPaletteIds().needsFluidPostProcessing(blockIndex)) {
+                                mutable.set(regionOrigin.getMinBlockX() + x, y, worldZ);
+                                output.chunk().markPosForPostprocessing(mutable);
+                            }
+                        }
                     }
-                    if (output.blockPaletteIds().needsFluidPostProcessing(blockIndex)) {
-                        mutable.set(regionOrigin.getMinBlockX() + x, y, worldZ);
-                        output.chunk().markPosForPostprocessing(mutable);
+                }
+                for (LevelChunkSection section : sections) {
+                    if (section != null) section.recalcBlockCounts();
+                }
+            } finally {
+                for (int tile = byTile.length - 1; tile >= 0 && acquiredCount > 0; tile--) {
+                    LevelChunkSection section = sections[tile];
+                    if (section != null) {
+                        section.release();
+                        sections[tile] = null;
+                        acquiredCount--;
                     }
                 }
             }
+            sectionStartY = sectionEndY;
         }
         GpuTerrainProfiler.recordBlockWrite(writeStart);
     }
