@@ -735,16 +735,18 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 for (OreVeinRequest request : requests) combined.put(request.records.duplicate());
                 combined.flip();
             }
-            slot.submitOreVeinDecisionsAsync(combined, totalRows).whenComplete((rows, failure) -> {
+            slot.submitOreVeinDecisionsAsync(combined, totalRows).whenComplete((packedRows, failure) -> {
                 if (failure != null) {
                     for (OreVeinRequest request : requests)
                         completeOnDispatchWorker(request.future, null, new IllegalStateException(
                                 "GPU ring ore-vein batch submission failed", failure));
                     return;
                 }
-                if (rows == null || rows.length != totalRows) {
+                int expectedWords = (totalRows + 9) / 10;
+                if (packedRows == null || packedRows.length != expectedWords) {
                     IllegalStateException invalid = new IllegalStateException("Vulkan ore-vein batch returned "
-                            + (rows == null ? "null" : rows.length) + " rows for " + totalRows + " inputs");
+                            + (packedRows == null ? "null" : packedRows.length) + " packed words for "
+                            + totalRows + " inputs (expected " + expectedWords + ")");
                     for (OreVeinRequest request : requests)
                         completeOnDispatchWorker(request.future, null, invalid);
                     return;
@@ -753,8 +755,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 int offset = 0;
                 for (OreVeinRequest request : requests) {
                     completeOnDispatchWorker(request.future,
-                            new GpuOreVeinBatchResult(rows, offset, request.count), null);
-                    offset = end;
+                            new GpuOreVeinBatchResult(packedRows, totalRows, offset, request.count), null);
+                    offset += request.count;
                 }
             });
         } catch (Throwable failure) {

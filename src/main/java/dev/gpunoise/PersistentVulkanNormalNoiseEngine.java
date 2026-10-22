@@ -112,7 +112,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private CompletableFuture<int[]> inFlightAquiferRows;
     private AquiferRowStage inFlightAquiferRowStage;
     private int inFlightAquiferRowCount;
-    private CompletableFuture<byte[]> inFlightOreVeinRows;
+    private CompletableFuture<int[]> inFlightOreVeinRows;
     private int inFlightOreVeinRowCount;
     private enum AquiferRowStage {
         NEAREST(GpuAquiferNearestThree.OUTPUT_INTS),
@@ -556,7 +556,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         CompletableFuture<GpuTerrainBatchResult> terrainFuture = inFlightTerrain;
         CompletableFuture<GpuAquiferPrefillResult> aquiferFuture = inFlightAquiferPrefill;
         CompletableFuture<int[]> aquiferRowsFuture = inFlightAquiferRows;
-        CompletableFuture<byte[]> oreVeinFuture = inFlightOreVeinRows;
+        CompletableFuture<int[]> oreVeinFuture = inFlightOreVeinRows;
         if (future == null && terrainFuture == null && aquiferFuture == null
                 && aquiferRowsFuture == null && oreVeinFuture == null) return;
         int status = vkGetFenceStatus(device, fence);
@@ -572,12 +572,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 values.clear();
                 int outputWords = (inFlightOreVeinRowCount + 9) / 10;
                 values.limit(outputWords);
-                byte[] output = new byte[inFlightOreVeinRowCount];
-                for (int word = 0, row = 0; word < outputWords; word++) {
-                    int packed = values.get();
-                    for (int offset = 0; offset < 10 && row < output.length; offset++, row++)
-                        output[row] = (byte) ((packed >>> (offset * 3)) & 0x7);
-                }
+                int[] output = new int[outputWords];
+                values.get(output);
                 check(vkResetFences(device, fence), "reset async ore-vein decision fence");
                 inFlightOreVeinRows = null;
                 inFlightOreVeinRowCount = 0;
@@ -1213,7 +1209,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     }
 
     /** Queues OCL's per-block OreVeinifier classification for fence-polled completion. */
-    synchronized CompletableFuture<byte[]> submitOreVeinDecisionsAsync(ByteBuffer records, int count)
+    synchronized CompletableFuture<int[]> submitOreVeinDecisionsAsync(ByteBuffer records, int count)
             throws Exception {
         if (hasInFlightWork()) throw new IllegalStateException("Vulkan slot is still in flight");
         if (count <= 0 || count > CAPACITY
@@ -2122,7 +2118,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         inFlightAquiferRowStage = null;
         if (unfinishedAquiferRows != null) unfinishedAquiferRows.completeExceptionally(
                 new IllegalStateException("GPU engine closed before aquifer decision completion was observed"));
-        CompletableFuture<byte[]> unfinishedOreVeinRows = inFlightOreVeinRows;
+        CompletableFuture<int[]> unfinishedOreVeinRows = inFlightOreVeinRows;
         inFlightOreVeinRows = null;
         inFlightOreVeinRowCount = 0;
         if (unfinishedOreVeinRows != null) unfinishedOreVeinRows.completeExceptionally(
