@@ -128,6 +128,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private int inFlightTerrainOutputRoots;
     private int inFlightTerrainBlocksPerChunk;
     private int inFlightTerrainCornerRoots;
+    private int[] inFlightTerrainCornerRootIndexes;
     private int[] inFlightTerrainRootIndexes;
     private long inFlightFenceSubmittedNanos;
     private long inFlightGraphPreparationNanos;
@@ -621,7 +622,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 aquiferFuture.complete(new GpuAquiferPrefillResult(nearestRows, statusRows, decisionRows));
             } else if (terrainFuture != null) {
                 long[] stageGpuNanos = GPU_TIMING_ENABLED ? readTerrainGpuTimestamps(stack) : null;
-                float[] corners = readRootResults(inFlightSamples, inFlightTerrainCornerRoots);
+                float[] corners = readSelectedRootResults(inFlightSamples, inFlightTerrainCornerRoots,
+                        inFlightTerrainCornerRootIndexes);
                 FloatBuffer blockValues = persistentMappings.get(interpolationOutput).duplicate()
                         .order(ByteOrder.nativeOrder()).asFloatBuffer();
                 blockValues.clear();
@@ -631,7 +633,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 if (GPU_TIMING_ENABLED) recordTerrainBatchDuration(inFlightTerrainPreparationNanos,
                         fenceDuration, stageGpuNanos, System.nanoTime() - readbackStarted);
                 GpuTerrainBatchResult result = new GpuTerrainBatchResult(
-                        new GpuTerrainRootsResult(corners, 0, corners.length, inFlightTerrainCornerRoots),
+                        new GpuTerrainRootsResult(corners, 0, corners.length,
+                                inFlightTerrainCornerRoots, inFlightTerrainCornerRootIndexes.length,
+                                0, inFlightTerrainCornerRootIndexes),
                         new GpuTerrainBlockResult(blocks, 0, inFlightTerrainBlockCount,
                                 inFlightTerrainRootIndexes, 16, inFlightTerrainBlocksPerChunk / 256, 16));
                 check(vkResetFences(device, fence), "reset async terrain fence");
@@ -787,6 +791,18 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                                                                                          int samplesPerChunk, ByteBuffer outputMetadata,
                                                                                          int blocksPerChunk,
                                                                                          int[] outputRootIndexes) throws Exception {
+        int[] cornerRoots = new int[graph.routerRootCount()];
+        for (int i = 0; i < cornerRoots.length; i++) cornerRoots[i] = i;
+        return submitGraphGridInterpolated(graph, gridMetadata, chunkCount, samplesPerChunk,
+                outputMetadata, blocksPerChunk, outputRootIndexes, cornerRoots);
+    }
+
+    synchronized CompletableFuture<GpuTerrainBatchResult> submitGraphGridInterpolated(GpuDensityGraph graph,
+                                                                                         ByteBuffer gridMetadata, int chunkCount,
+                                                                                         int samplesPerChunk, ByteBuffer outputMetadata,
+                                                                                         int blocksPerChunk,
+                                                                                         int[] outputRootIndexes,
+                                                                                         int[] cornerRootIndexes) throws Exception {
         if (hasInFlightWork()) throw new IllegalStateException("Vulkan slot is still in flight");
         if (chunkCount <= 0 || samplesPerChunk <= 0 || blocksPerChunk <= 0
                 || (long) chunkCount * samplesPerChunk > CAPACITY
@@ -808,6 +824,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         }
         int markerCount = graph.interpolatedMarkerCount();
         int cornerStride = rootCount + markerCount;
+        validateRootIndexes(cornerRootIndexes, rootCount, "corner");
         ByteBuffer terrainMetadata = outputMetadata.duplicate().order(ByteOrder.nativeOrder());
         GpuInterpolationBatch.setTerrainLayout(terrainMetadata, chunkCount, cornerStride, blocksPerChunk);
         GpuInterpolationBatch.validateForDispatch(terrainMetadata, chunkCount,
@@ -822,7 +839,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             throw new IllegalArgumentException("grid interpolation batch exceeds GPU capacity");
         long preparationStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
         long metadataUploadBytes = (long) chunkCount * (32L + GpuInterpolationBatch.METADATA_BYTES);
-        long cornerReadbackBytes = (long) sampleCount * rootCount * Float.BYTES;
+        long cornerReadbackBytes = (long) sampleCount * cornerRootIndexes.length * Float.BYTES;
         long blockReadbackBytes = (long) blockCount * outputRoots * Float.BYTES;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
@@ -895,6 +912,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             inFlightTerrainOutputRoots = outputRoots;
             inFlightTerrainBlocksPerChunk = blocksPerChunk;
             inFlightTerrainCornerRoots = rootCount;
+            inFlightTerrainCornerRootIndexes = cornerRootIndexes.clone();
             inFlightTerrainRootIndexes = outputRootIndexes.clone();
             totalTerrainMetadataUploadBytes += metadataUploadBytes;
             totalTerrainMarkerCornerBytes += (long) sampleCount * markerCount * Float.BYTES;
@@ -986,6 +1004,30 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         source.limit(output.length);
         source.get(output);
         return output;
+    }
+
+    /** Copies only parity-admitted router roots from the mapped terrain result. */
+    private float[] readSelectedRootResults(int samples, int roots, int[] selectedRoots) {
+        if (selectedRoots.length == roots) return readRootResults(samples, roots);
+        float[] output = new float[Math.multiplyExact(samples, selectedRoots.length)];
+        FloatBuffer source = persistentResults.duplicate().order(ByteOrder.nativeOrder()).asFloatBuffer();
+        int destination = 0;
+        for (int sample = 0; sample < samples; sample++) {
+            int sourceBase = sample * roots;
+            for (int root : selectedRoots) output[destination++] = source.get(sourceBase + root);
+        }
+        return output;
+    }
+
+    private static void validateRootIndexes(int[] indexes, int rootCount, String kind) {
+        if (indexes == null || indexes.length == 0 || indexes.length > rootCount)
+            throw new IllegalArgumentException("invalid " + kind + " root selection");
+        boolean[] seen = new boolean[rootCount];
+        for (int root : indexes) {
+            if (root < 0 || root >= rootCount || seen[root])
+                throw new IllegalArgumentException("invalid " + kind + " root index " + root);
+            seen[root] = true;
+        }
     }
 
     /** Executes the batched corner-to-block interpolation shader. */

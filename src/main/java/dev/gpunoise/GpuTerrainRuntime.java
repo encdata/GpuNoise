@@ -643,7 +643,8 @@ public final class GpuTerrainRuntime {
         }
         return ownedMetadata
                 ? ring.submitGraphGridInterpolatedOwned(graph, gridMetadata, chunkCount, samplesPerChunk,
-                        outputMetadata, blocksPerChunk, terrainBlockOutputRootIndexes())
+                        outputMetadata, blocksPerChunk, terrainBlockOutputRootIndexes(),
+                        terrainCornerOutputRootIndexes())
                 : ring.submitGraphGridInterpolated(graph, gridMetadata, chunkCount, samplesPerChunk,
                         outputMetadata, blocksPerChunk, terrainBlockOutputRootIndexes());
     }
@@ -751,6 +752,27 @@ public final class GpuTerrainRuntime {
         for (int root = 0; root < GpuTerrainRoots.COUNT; root++) {
             if ((mask & (1 << root)) != 0) roots[output++] = root;
         }
+        return roots;
+    }
+
+    /** Only verified graph roots need to cross the host-visible corner-result boundary. */
+    private static int[] terrainCornerOutputRootIndexes() {
+        GpuDensityGraph graph = terrainGraph;
+        if (graph == null) return new int[] { GpuTerrainRoots.FINAL_DENSITY };
+        int rootLimit = Math.min(GpuTerrainRoots.COUNT, graph.routerRootCount());
+        int mask = supportedTerrainRootMask() & ((1 << rootLimit) - 1);
+        if (mask == 0) return allRouterRootIndexes(graph.routerRootCount());
+        int[] roots = new int[Integer.bitCount(mask)];
+        int output = 0;
+        for (int root = 0; root < rootLimit; root++) {
+            if ((mask & (1 << root)) != 0) roots[output++] = root;
+        }
+        return roots;
+    }
+
+    private static int[] allRouterRootIndexes(int rootCount) {
+        int[] roots = new int[rootCount];
+        for (int root = 0; root < rootCount; root++) roots[root] = root;
         return roots;
     }
 

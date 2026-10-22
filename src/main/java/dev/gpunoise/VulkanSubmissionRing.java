@@ -563,7 +563,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
                     TerrainGridRequest value = (TerrainGridRequest) request;
                     slot.submitGraphGridInterpolated(value.graph, value.gridMetadata,
                                     value.chunkCount, value.samplesPerChunk, value.outputMetadata,
-                                    value.blocksPerChunk, value.outputRootIndexes)
+                                    value.blocksPerChunk, value.outputRootIndexes,
+                                    value.cornerRootIndexes)
                             .whenComplete((result, failure) -> completeOnDispatchWorker(value.future, result, failure));
                 }
                 case BLOCKING -> runBlockingReserved((BlockingRequest<?>) request, slot);
@@ -1427,8 +1428,19 @@ final class VulkanSubmissionRing implements AutoCloseable {
     CompletableFuture<GpuTerrainBatchResult> submitGraphGridInterpolatedOwned(
             GpuDensityGraph graph, ByteBuffer gridMetadata, int chunkCount, int samplesPerChunk,
             ByteBuffer outputMetadata, int blocksPerChunk, int[] outputRootIndexes) {
+        int[] cornerRootIndexes = new int[graph.routerRootCount()];
+        for (int i = 0; i < cornerRootIndexes.length; i++) cornerRootIndexes[i] = i;
+        return submitGraphGridInterpolatedOwned(graph, gridMetadata, chunkCount, samplesPerChunk,
+                outputMetadata, blocksPerChunk, outputRootIndexes, cornerRootIndexes);
+    }
+
+    /** Compact the host corner result to roots already admitted by terrain parity. */
+    CompletableFuture<GpuTerrainBatchResult> submitGraphGridInterpolatedOwned(
+            GpuDensityGraph graph, ByteBuffer gridMetadata, int chunkCount, int samplesPerChunk,
+            ByteBuffer outputMetadata, int blocksPerChunk, int[] outputRootIndexes,
+            int[] cornerRootIndexes) {
         return submitGraphGridInterpolated(graph, gridMetadata, chunkCount, samplesPerChunk,
-                outputMetadata, blocksPerChunk, outputRootIndexes, false);
+                outputMetadata, blocksPerChunk, outputRootIndexes, cornerRootIndexes, false);
     }
 
     private CompletableFuture<GpuTerrainBatchResult> submitGraphGridInterpolated(
@@ -1439,10 +1451,30 @@ final class VulkanSubmissionRing implements AutoCloseable {
         enqueue(pendingTerrainGrids, () -> new TerrainGridRequest(graph,
                 copyMetadata ? snapshot(gridMetadata) : gridMetadata, chunkCount,
                 samplesPerChunk, copyMetadata ? snapshot(outputMetadata) : outputMetadata,
-                blocksPerChunk, outputRootIndexes.clone(), future,
+                blocksPerChunk, outputRootIndexes.clone(),
+                allRouterRoots(graph), future,
                 System.nanoTime()),
                 future, "full terrain grid");
         return future;
+    }
+
+    private CompletableFuture<GpuTerrainBatchResult> submitGraphGridInterpolated(
+            GpuDensityGraph graph, ByteBuffer gridMetadata, int chunkCount, int samplesPerChunk,
+            ByteBuffer outputMetadata, int blocksPerChunk, int[] outputRootIndexes,
+            int[] cornerRootIndexes, boolean copyMetadata) {
+        CompletableFuture<GpuTerrainBatchResult> future = new CompletableFuture<>();
+        enqueue(pendingTerrainGrids, () -> new TerrainGridRequest(graph,
+                copyMetadata ? snapshot(gridMetadata) : gridMetadata, chunkCount,
+                samplesPerChunk, copyMetadata ? snapshot(outputMetadata) : outputMetadata,
+                blocksPerChunk, outputRootIndexes.clone(), cornerRootIndexes.clone(), future,
+                System.nanoTime()), future, "full terrain grid");
+        return future;
+    }
+
+    private static int[] allRouterRoots(GpuDensityGraph graph) {
+        int[] roots = new int[graph.routerRootCount()];
+        for (int i = 0; i < roots.length; i++) roots[i] = i;
+        return roots;
     }
 
     /**
@@ -1563,7 +1595,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
             implements DispatchRequest {}
     private record TerrainGridRequest(GpuDensityGraph graph, ByteBuffer gridMetadata, int chunkCount,
                                       int samplesPerChunk, ByteBuffer outputMetadata, int blocksPerChunk,
-                                      int[] outputRootIndexes, CompletableFuture<GpuTerrainBatchResult> future,
+                                      int[] outputRootIndexes, int[] cornerRootIndexes,
+                                      CompletableFuture<GpuTerrainBatchResult> future,
                                       long enqueuedNanos) implements DispatchRequest {}
     private record AquiferNearestRequest(ByteBuffer records, int count, CompletableFuture<int[]> future,
                                         long enqueuedNanos) implements DispatchRequest {}
