@@ -33,8 +33,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
     /** Bound retained request payloads across every queue class, including in-flight work. */
     private static final int MAX_PENDING_SUBMISSIONS = (int) Math.max(8L,
             Math.min(256L, Long.getLong("gpunoise.submissionQueueCapacity", 32L)));
-    /** Bound the extra copy slab used to merge sparse/short aquifer batches. */
-    private static final long MAX_COALESCED_NEAREST_BYTES = 24L * 1024L * 1024L;
+    /** Match the bounded direct-buffer pool budget so more chunks can share a dispatch. */
+    private static final long MAX_COALESCED_NEAREST_BYTES = 32L * 1024L * 1024L;
     private static final QueueClass[] QUEUE_CLASSES = QueueClass.values();
     // Terrain callers block on their futures after submitting. Poll more
     // frequently while a graph dispatch is in flight, then back off while idle
