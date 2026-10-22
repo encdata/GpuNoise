@@ -43,7 +43,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private static final int MAX_GRAPH_OUTPUTS = 32;
     /** Keep common parity/production root masks warm without retaining unbounded pipelines. */
     private static final int MAX_CACHED_BLOCK_GRAPH_VARIANTS = 3;
-    private static final int[] GRAPH_DESCRIPTOR_BINDINGS = {0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14};
+    private static final int[] GRAPH_DESCRIPTOR_BINDINGS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14};
     static final int INTERPOLATED_INPUT_FLOATS = CAPACITY * MAX_INTERPOLATORS;
     private final VkInstance instance;
     private final VkPhysicalDevice physical;
@@ -144,8 +144,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long totalTerrainFenceNanos;
     private long totalTerrainReadbackNanos;
     private long totalTerrainGridGpuNanos;
-    private long totalTerrainInterpolationGpuNanos;
-    private long totalTerrainBlockGpuNanos;
+    private long totalTerrainFusedBlockGpuNanos;
     private long terrainGpuTimestampSamples;
     private long totalTerrainMetadataUploadBytes;
     private long totalTerrainCornerReadbackBytes;
@@ -712,30 +711,26 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         totalTerrainPreparationNanos += preparationNanos;
         totalTerrainFenceNanos += fenceNanos;
         totalTerrainReadbackNanos += readbackNanos;
-        if (stageGpuNanos.length == 3 && stageGpuNanos[0] >= 0L
-                && stageGpuNanos[1] >= 0L && stageGpuNanos[2] >= 0L) {
+        if (stageGpuNanos.length == 2 && stageGpuNanos[0] >= 0L && stageGpuNanos[1] >= 0L) {
             totalTerrainGridGpuNanos += stageGpuNanos[0];
-            totalTerrainInterpolationGpuNanos += stageGpuNanos[1];
-            totalTerrainBlockGpuNanos += stageGpuNanos[2];
+            totalTerrainFusedBlockGpuNanos += stageGpuNanos[1];
             terrainGpuTimestampSamples++;
         }
         long completed = ++completedTerrainBatchSamples;
         if ((completed & 7L) == 0L) {
             double averageGridGpuMs = terrainGpuTimestampSamples == 0 ? -1.0
                     : totalTerrainGridGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
-            double averageInterpolationGpuMs = terrainGpuTimestampSamples == 0 ? -1.0
-                    : totalTerrainInterpolationGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
-            double averageBlockGpuMs = terrainGpuTimestampSamples == 0 ? -1.0
-                    : totalTerrainBlockGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
-            GpuNoise.LOGGER.info("GPU full terrain profile: batches={}, queueSubmissions={}, computeDispatches={}, avgCpuPrepareMs={}, avgSubmitToFenceMs={}, avgReadbackMs={}, gridMetadataUploadMiBPerBatch={}, cornerReadbackMiBPerBatch={}, blockReadbackMiBPerBatch={}, avgGridGpuMs={}, avgInterpolationGpuMs={}, avgBlockGpuMs={}, gpuTimingSamples={}",
-                    completed, completed, completed * 3L,
+            double averageFusedBlockGpuMs = terrainGpuTimestampSamples == 0 ? -1.0
+                    : totalTerrainFusedBlockGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
+            GpuNoise.LOGGER.info("GPU full terrain profile: batches={}, queueSubmissions={}, computeDispatches={}, avgCpuPrepareMs={}, avgSubmitToFenceMs={}, avgReadbackMs={}, gridMetadataUploadMiBPerBatch={}, cornerReadbackMiBPerBatch={}, blockReadbackMiBPerBatch={}, avgGridGpuMs={}, avgFusedBlockGpuMs={}, gpuTimingSamples={}",
+                    completed, completed, completed * 2L,
                     totalTerrainPreparationNanos / (double) completed / 1_000_000.0,
                     totalTerrainFenceNanos / (double) completed / 1_000_000.0,
                     totalTerrainReadbackNanos / (double) completed / 1_000_000.0,
                     totalTerrainMetadataUploadBytes / (double) completed / (1024.0 * 1024.0),
                     totalTerrainCornerReadbackBytes / (double) completed / (1024.0 * 1024.0),
                     totalTerrainBlockReadbackBytes / (double) completed / (1024.0 * 1024.0),
-                    averageGridGpuMs, averageInterpolationGpuMs, averageBlockGpuMs,
+                    averageGridGpuMs, averageFusedBlockGpuMs,
                     terrainGpuTimestampSamples);
         }
     }
@@ -804,8 +799,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 || gridMetadata.remaining() < chunkCount * 32L
                 || outputMetadata.remaining() < chunkCount * GpuInterpolationBatch.METADATA_BYTES)
             throw new IllegalArgumentException("invalid grid interpolation batch");
-        GpuInterpolationBatch.validateForDispatch(outputMetadata, chunkCount,
-                samplesPerChunk, blocksPerChunk);
         if (graph == null) throw new IllegalArgumentException("terrain graph is not installed");
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph, outputRootIndexes);
         int rootCount = graph.routerRootCount();
@@ -821,12 +814,15 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         }
         int markerCount = graph.interpolatedMarkerCount();
         int cornerStride = rootCount + markerCount;
+        ByteBuffer terrainMetadata = outputMetadata.duplicate().order(ByteOrder.nativeOrder());
+        GpuInterpolationBatch.setTerrainLayout(terrainMetadata, chunkCount, cornerStride, blocksPerChunk);
+        GpuInterpolationBatch.validateForDispatch(terrainMetadata, chunkCount,
+                samplesPerChunk, blocksPerChunk);
         int sampleCount = Math.multiplyExact(chunkCount, samplesPerChunk);
         int blockCount = Math.multiplyExact(chunkCount, blocksPerChunk);
         if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16 || outputRoots > rootCount
                 || markerCount > MAX_INTERPOLATORS || graph.registerCount() > 256
                 || (long) sampleCount * cornerStride * Float.BYTES > results.size
-                || (long) blockCount * markerCount > INTERPOLATED_INPUT_FLOATS
                 || (long) blockCount * outputRoots * Float.BYTES > interpolationOutput.size)
             throw new IllegalArgumentException("grid interpolation batch exceeds GPU capacity");
         long preparationStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
@@ -865,24 +861,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     .buffer(results.buffer).size((long) sampleCount * cornerStride * Float.BYTES);
             vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                     0, null, graphBarrier, null);
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, interpolationPipeline);
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, interpolationPipelineLayout, 0,
-                    stack.longs(interpolationDescriptorSet), null);
-            ByteBuffer interpolationPush = stack.malloc(16).order(ByteOrder.nativeOrder())
-                    .putInt(chunkCount).putInt(blocksPerChunk).putInt(cornerStride)
-                    .putInt(markerCount | 0x8000_0000).flip();
-            vkCmdPushConstants(commandBuffer, interpolationPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, interpolationPush);
-            writeGpuTimestamp(2, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-            vkCmdDispatch(commandBuffer, (blockCount + 63) / 64, 1, 1);
-            writeGpuTimestamp(3, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-            VkBufferMemoryBarrier.Buffer interpolationBarrier = VkBufferMemoryBarrier.calloc(2, stack).sType$Default();
-            interpolationBarrier.get(0).srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT)
-                    .buffer(interpolatedInputs.buffer).size(Math.max(4L, (long) blockCount * markerCount * Float.BYTES));
-            interpolationBarrier.get(1).srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT)
-                    .dstAccessMask(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
-                    .buffer(graphCoordinates.buffer).size((long) blockCount * 16L);
-            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, null, interpolationBarrier, null);
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, blockGraphPipeline);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipelineLayout, 0,
                     stack.longs(graphDescriptorSet), null);
@@ -891,20 +869,16 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     .putInt((packed.blockNodeOffset() << 5) | outputRoots)
                     .putInt(0x8000_0000 | markerCount).flip();
             vkCmdPushConstants(commandBuffer, graphPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, blockPush);
-            writeGpuTimestamp(4, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+            writeGpuTimestamp(2, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
             vkCmdDispatch(commandBuffer, (blockCount + 63) / 64, 1, 1);
-            writeGpuTimestamp(5, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-            VkBufferMemoryBarrier.Buffer finalBarriers = VkBufferMemoryBarrier.calloc(3, stack);
+            writeGpuTimestamp(3, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            VkBufferMemoryBarrier.Buffer finalBarriers = VkBufferMemoryBarrier.calloc(2, stack);
             finalBarriers.get(0).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
                     .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(results.buffer)
                     .size((long) sampleCount * cornerStride * Float.BYTES);
             finalBarriers.get(1).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
                     .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(interpolationOutput.buffer)
                     .size((long) blockCount * outputRoots * Float.BYTES);
-            finalBarriers.get(2).sType$Default()
-                    .srcAccessMask(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
-                    .dstAccessMask(VK_ACCESS_HOST_WRITE_BIT).buffer(graphCoordinates.buffer)
-                    .size((long) blockCount * 16L);
             vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
                     0, null, finalBarriers, null);
             check(vkEndCommandBuffer(commandBuffer), "end grid interpolation command buffer");
@@ -1921,8 +1895,10 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         }
         long nextShader = compileRuntimeShader("/assets/gpunoise/shaders/density_graph.comp",
                 "block density graph", FAST_GRAPH_MATH
-                        ? Map.of("REGISTER_COUNT", Integer.toString(variant), "FAST_MATH", "1")
-                        : Map.of("REGISTER_COUNT", Integer.toString(variant)), graph, packed, true);
+                        ? Map.of("REGISTER_COUNT", Integer.toString(variant), "FAST_MATH", "1",
+                                "FUSED_TERRAIN_BLOCK", "1")
+                        : Map.of("REGISTER_COUNT", Integer.toString(variant),
+                                "FUSED_TERRAIN_BLOCK", "1"), graph, packed, true);
         long nextPipeline;
         try {
             nextPipeline = graphPipeline(nextShader, stack);
@@ -1967,7 +1943,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     }
     private long graphDescriptorPool(MemoryStack s){VkDescriptorPoolSize.Buffer z=VkDescriptorPoolSize.calloc(1,s).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(GRAPH_DESCRIPTOR_BINDINGS.length);VkDescriptorPoolCreateInfo i=VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(z);LongBuffer h=s.longs(0);check(vkCreateDescriptorPool(device,i,null,h),"graph pool");return h.get(0);}
     private long graphDescriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(graphDescriptorPool).pSetLayouts(s.longs(graphDescriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"graph set");return h.get(0);}
-    private void graphDescriptors(MemoryStack s){NativeBuffer[] bs={graphCoordinates,results,graphNodes,permutations,octaves,samplerMetadata,graphSplinePoints,graphBlendedMetadata,graphRoots,graphMthSinTable,interpolatedInputs,interpolatorMap,interpolationOutput,graphCoordinates};VkWriteDescriptorSet.Buffer w=VkWriteDescriptorSet.calloc(bs.length,s);for(int i=0;i<bs.length;i++){VkDescriptorBufferInfo.Buffer bi=VkDescriptorBufferInfo.calloc(1,s).buffer(bs[i].buffer).range(bs[i].size);w.get(i).sType$Default().dstSet(graphDescriptorSet).dstBinding(GRAPH_DESCRIPTOR_BINDINGS[i]).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bi);}vkUpdateDescriptorSets(device,w,null);}
+    private void graphDescriptors(MemoryStack s){NativeBuffer[] bs={graphCoordinates,results,graphNodes,permutations,octaves,samplerMetadata,graphSplinePoints,graphBlendedMetadata,interpolationMetadata,graphRoots,graphMthSinTable,interpolatedInputs,interpolatorMap,interpolationOutput,graphCoordinates};VkWriteDescriptorSet.Buffer w=VkWriteDescriptorSet.calloc(bs.length,s);for(int i=0;i<bs.length;i++){VkDescriptorBufferInfo.Buffer bi=VkDescriptorBufferInfo.calloc(1,s).buffer(bs[i].buffer).range(bs[i].size);w.get(i).sType$Default().dstSet(graphDescriptorSet).dstBinding(GRAPH_DESCRIPTOR_BINDINGS[i]).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bi);}vkUpdateDescriptorSets(device,w,null);}
     private long interpolationShader(MemoryStack s)throws Exception{try(var in=getClass().getResourceAsStream("/assets/gpunoise/shaders/noise_interpolation.comp.spv")){byte[] b=in.readAllBytes();ByteBuffer c=MemoryUtil.memAlloc(b.length).put(b).flip();try{VkShaderModuleCreateInfo i=VkShaderModuleCreateInfo.calloc(s).sType$Default().pCode(c);LongBuffer h=s.longs(0);check(vkCreateShaderModule(device,i,null,h),"interpolation shader");return h.get(0);}finally{MemoryUtil.memFree(c);}}}
     private long interpolationDescriptorLayout(MemoryStack s){VkDescriptorSetLayoutBinding.Buffer b=VkDescriptorSetLayoutBinding.calloc(5,s);for(int i=0;i<5;i++)b.get(i).binding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);VkDescriptorSetLayoutCreateInfo i=VkDescriptorSetLayoutCreateInfo.calloc(s).sType$Default().pBindings(b);LongBuffer h=s.longs(0);check(vkCreateDescriptorSetLayout(device,i,null,h),"interpolation layout");return h.get(0);}
     private long interpolationPipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(16);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(interpolationDescriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"interpolation pipeline layout");return h.get(0);}
@@ -2087,12 +2063,12 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private record BlockGraphProgram(long shader, long pipeline) { }
 
     private long[] readTerrainGpuTimestamps(MemoryStack stack) {
-        if (timestampQueryPool == 0L) return new long[]{-1L, -1L, -1L};
-        ByteBuffer results = stack.malloc(6 * Long.BYTES).order(ByteOrder.nativeOrder());
-        int status = vkGetQueryPoolResults(device, timestampQueryPool, 0, 6, results,
+        if (timestampQueryPool == 0L) return new long[]{-1L, -1L};
+        ByteBuffer results = stack.malloc(4 * Long.BYTES).order(ByteOrder.nativeOrder());
+        int status = vkGetQueryPoolResults(device, timestampQueryPool, 0, 4, results,
                 Long.BYTES, VK_QUERY_RESULT_64_BIT);
-        if (status != VK_SUCCESS) return new long[]{-1L, -1L, -1L};
-        long[] elapsed = new long[3];
+        if (status != VK_SUCCESS) return new long[]{-1L, -1L};
+        long[] elapsed = new long[2];
         for (int stage = 0; stage < elapsed.length; stage++) {
             long ticks = results.getLong((stage * 2 + 1) * Long.BYTES)
                     - results.getLong(stage * 2 * Long.BYTES);

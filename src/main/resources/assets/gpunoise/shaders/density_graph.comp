@@ -13,7 +13,7 @@ layout(std430,set=0,binding=0) readonly buffer Coordinates { TerrainGrid grids[]
 #else
 layout(std430,set=0,binding=0) readonly buffer Coordinates { vec4 coordinates[]; };
 #endif
-layout(std430,set=0,binding=1) writeonly buffer Results { float results[]; };
+layout(std430,set=0,binding=1) buffer Results { float results[]; };
 layout(std430,set=0,binding=2) readonly buffer Nodes { Node nodes[]; };
 layout(std430,set=0,binding=3) readonly buffer Permutations { uint permutation[]; };
 layout(std430,set=0,binding=4) readonly buffer Octaves { vec4 octaveData[]; };
@@ -35,6 +35,7 @@ struct BlendedInfo {
     uint pad0; uint pad1; uint pad2; uint pad3; uint pad4; uint pad5;
 };
 layout(std430,set=0,binding=7) readonly buffer BlendedMetadata { BlendedInfo blended[]; };
+layout(std430,set=0,binding=8) readonly buffer TerrainBlockMetadata { uint blockMetadata[]; };
 layout(std430,set=0,binding=9) readonly buffer Roots { uint rootNodes[]; };
 layout(std430,set=0,binding=10) readonly buffer MthSinTable { float mthSinValues[]; };
 layout(std430,set=0,binding=11) readonly buffer InterpolatedInputs { float interpolatedInputs[]; };
@@ -467,6 +468,54 @@ double splineValue(double coordinate, uint base, uint count, double values[REGIS
 void main(){
     uint sampleIndex=gl_GlobalInvocationID.x; if(sampleIndex>=count)return;
     double values[REGISTER_COUNT];
+#ifdef FUSED_TERRAIN_BLOCK
+    uint interpolationCount=reserved & 31u;
+    float interpolatedMarkers[16];
+    uint blocksPerChunk=blockMetadata[11];
+    uint chunkIndex=sampleIndex/blocksPerChunk;
+    uint localBlockIndex=sampleIndex%blocksPerChunk;
+    uint metadataBase=chunkIndex*12u;
+    uint cornerOffset=blockMetadata[metadataBase+0u];
+    uint cellsX=blockMetadata[metadataBase+2u], cellsY=blockMetadata[metadataBase+3u];
+    uint cellsZ=blockMetadata[metadataBase+4u];
+    uint blocksPerCellX=blockMetadata[metadataBase+5u];
+    uint blocksPerCellY=blockMetadata[metadataBase+6u];
+    uint cornerStride=blockMetadata[metadataBase+7u];
+    uint blocksX=cellsX*blocksPerCellX, blocksZ=cellsZ*blocksPerCellX;
+    uint perLayer=blocksX*blocksZ;
+    uint blockY=localBlockIndex/perLayer;
+    uint rem=localBlockIndex%perLayer;
+    uint blockZ=rem/blocksX, blockX=rem%blocksX;
+    uint cellX=blockX/blocksPerCellX, cellY=blockY/blocksPerCellY;
+    uint cellZ=blockZ/blocksPerCellX;
+    vec3 t=vec3(blockX%blocksPerCellX,blockY%blocksPerCellY,blockZ%blocksPerCellX)
+        /vec3(float(blocksPerCellX),float(blocksPerCellY),float(blocksPerCellX));
+    uint gridX=cellsX+1u, gridZ=cellsZ+1u;
+    uint cellSample=cornerOffset+((cellY*gridX+cellX)*gridZ+cellZ);
+    uint markerBegin=cornerStride-interpolationCount;
+    uint strideX=gridZ*cornerStride, strideY=gridX*gridZ*cornerStride;
+    int originX=int(blockMetadata[metadataBase+8u]);
+    int originY=int(blockMetadata[metadataBase+9u]);
+    int originZ=int(blockMetadata[metadataBase+10u]);
+    ivec3 blockPosition=ivec3(originX+int(blockX),originY+int(blockY),originZ+int(blockZ));
+    for(uint marker=0u;marker<interpolationCount;marker++) {
+        uint valueBase=cellSample*cornerStride+markerBegin+marker;
+        precise float c000=results[valueBase];
+        precise float c100=results[valueBase+strideX];
+        precise float c010=results[valueBase+strideY];
+        precise float c110=results[valueBase+strideY+strideX];
+        precise float c001=results[valueBase+cornerStride];
+        precise float c101=results[valueBase+cornerStride+strideX];
+        precise float c011=results[valueBase+strideY+cornerStride];
+        precise float c111=results[valueBase+strideY+cornerStride+strideX];
+        precise float y00=c000+(c010-c000)*t.y, y10=c100+(c110-c100)*t.y;
+        precise float y01=c001+(c011-c001)*t.y, y11=c101+(c111-c101)*t.y;
+        precise float x0=y00+(y10-y00)*t.x, x1=y01+(y11-y01)*t.x;
+        interpolatedMarkers[marker]=x0+(x1-x0)*t.z;
+    }
+    dvec3 pExact=dvec3(blockPosition);
+    vec3 p=vec3(pExact);
+#else
 #ifdef GRID_INPUT
     uint chunkIndex = sampleIndex / reserved;
     uint localIndex = sampleIndex % reserved;
@@ -492,6 +541,7 @@ void main(){
         pExact=dvec3(p);
     }
 #endif
+#endif
     bool blockEvaluation=(reserved & BLOCK_EVALUATION)!=0u;
     uint nodeBase=blockEvaluation ? (rootCount >> 5u) : 0u;
     uint outputRootCount=blockEvaluation ? (rootCount & 31u) : rootCount;
@@ -514,6 +564,12 @@ void main(){
         case 5u: v=clamp(values[n.ids.y],double(n.params.x),double(n.params.y)); break;
         case 6u: v=mapValue(values[n.ids.y],n.meta.x); break;
         case 7u: {
+#ifdef FUSED_TERRAIN_BLOCK
+            if(blockEvaluation && n.meta.z<interpolationCount)
+                v=double(interpolatedMarkers[n.meta.z]);
+            else v=values[n.ids.y];
+            break;
+#else
 #if !defined(GRID_INPUT)
             uint interpolationCount=reserved & 0x7fffffffu;
             if(blockEvaluation && n.meta.z<interpolationCount)
@@ -522,6 +578,7 @@ void main(){
 #endif
                 v=values[n.ids.y];
             break;
+#endif
         }
         case 8u: v=normalNoiseTerrain(pExact*.25,uint(n.params.x))*4.0; break;
         case 9u: v=normalNoiseTerrain(dvec3(pExact.x,0.0,pExact.z)*.25,uint(n.params.x))*4.0; break;

@@ -397,6 +397,9 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         int cornerOffset = 0;
         int blockOffset = 0;
         int outputRoots = GpuTerrainRuntime.terrainBlockOutputRootCount();
+        GpuDensityGraph terrainGraph = blockOutput ? GpuTerrainRuntime.currentTerrainGraph() : null;
+        int cornerStride = blockOutput ? GpuTerrainRuntime.terrainRootCount()
+                + (terrainGraph == null ? 0 : terrainGraph.interpolatedMarkerCount()) : 0;
         int metadataChunk = 0;
         for (Pending item : batch) {
             GpuTerrainGrid g = item.grid;
@@ -409,7 +412,7 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
             int cellsZ = g.gridZ() - 1;
             GpuInterpolationBatch.write(outputMetadata, metadataChunk++, cornerOffset, blockOffset,
                     cellsX, cellsY, cellsZ, g.cellWidth(), g.cellHeight(),
-                    g.minX(), g.minY(), g.minZ());
+                    g.minX(), g.minY(), g.minZ(), cornerStride, blocksPerChunk);
             cornerOffset += g.sampleCount();
             blockOffset += blocksPerChunk;
         }

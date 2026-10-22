@@ -14,9 +14,11 @@ final class GpuInterpolationBatch {
     private static final int CELLS_Z_WORD = 4;
     private static final int BLOCKS_PER_CELL_X_WORD = 5;
     private static final int BLOCKS_PER_CELL_Y_WORD = 6;
+    private static final int CORNER_STRIDE_WORD = 7;
     private static final int ORIGIN_X_WORD = 8;
     private static final int ORIGIN_Y_WORD = 9;
     private static final int ORIGIN_Z_WORD = 10;
+    private static final int BLOCKS_PER_CHUNK_WORD = 11;
     private static final int WORDS_PER_RECORD = METADATA_INTS;
 
     private GpuInterpolationBatch() {}
@@ -28,7 +30,8 @@ final class GpuInterpolationBatch {
                 .order(ByteOrder.nativeOrder());
         for (int chunk = 0; chunk < chunkCount; chunk++) {
             write(result, chunk, chunk * cornersPerChunk, chunk * blocksPerChunk,
-                    cellsX, cellsY, cellsZ, blocksPerCellX, blocksPerCellY, 0, 0, 0);
+                    cellsX, cellsY, cellsZ, blocksPerCellX, blocksPerCellY, 0, 0, 0,
+                    1, blocksPerChunk);
         }
         return (ByteBuffer) result.position(0).limit(result.capacity());
     }
@@ -49,7 +52,8 @@ final class GpuInterpolationBatch {
     static void write(ByteBuffer target, int chunk, int cornerOffset, int blockOffset,
                       int cellsX, int cellsY, int cellsZ,
                       int blocksPerCellX, int blocksPerCellY,
-                      int originX, int originY, int originZ) {
+                      int originX, int originY, int originZ,
+                      int cornerStride, int blocksPerChunk) {
         validateDestination(target, chunk);
         int baseWord = Math.multiplyExact(chunk, WORDS_PER_RECORD);
         putWord(target, baseWord + CORNER_OFFSET_WORD, cornerOffset);
@@ -59,11 +63,11 @@ final class GpuInterpolationBatch {
         putWord(target, baseWord + CELLS_Z_WORD, cellsZ);
         putWord(target, baseWord + BLOCKS_PER_CELL_X_WORD, blocksPerCellX);
         putWord(target, baseWord + BLOCKS_PER_CELL_Y_WORD, blocksPerCellY);
-        putWord(target, baseWord + 7, 0);
+        putWord(target, baseWord + CORNER_STRIDE_WORD, cornerStride);
         putWord(target, baseWord + ORIGIN_X_WORD, originX);
         putWord(target, baseWord + ORIGIN_Y_WORD, originY);
         putWord(target, baseWord + ORIGIN_Z_WORD, originZ);
-        putWord(target, baseWord + 11, 0);
+        putWord(target, baseWord + BLOCKS_PER_CHUNK_WORD, blocksPerChunk);
     }
 
     static void setOrigin(ByteBuffer target, int chunk, int x, int y, int z) {
@@ -72,6 +76,21 @@ final class GpuInterpolationBatch {
         putWord(target, baseWord + ORIGIN_X_WORD, x);
         putWord(target, baseWord + ORIGIN_Y_WORD, y);
         putWord(target, baseWord + ORIGIN_Z_WORD, z);
+    }
+
+    /** Supplies the graph-specific corner stride used by the fused terrain shader. */
+    static void setTerrainLayout(ByteBuffer target, int chunkCount,
+                                 int cornerStride, int blocksPerChunk) {
+        if (target == null || chunkCount <= 0 || cornerStride <= 0 || blocksPerChunk <= 0
+                || target.remaining() < (long) chunkCount * METADATA_BYTES) {
+            throw new IllegalArgumentException("invalid fused terrain metadata layout");
+        }
+        int start = target.position();
+        for (int chunk = 0; chunk < chunkCount; chunk++) {
+            int base = Math.addExact(start, Math.multiplyExact(chunk, METADATA_BYTES));
+            target.putInt(base + CORNER_STRIDE_WORD * Integer.BYTES, cornerStride);
+            target.putInt(base + BLOCKS_PER_CHUNK_WORD * Integer.BYTES, blocksPerChunk);
+        }
     }
 
     static void validateForDispatch(ByteBuffer metadata, int chunkCount,
@@ -91,6 +110,8 @@ final class GpuInterpolationBatch {
             int cellsZ = records.getInt(base + CELLS_Z_WORD * Integer.BYTES);
             int blocksPerCellX = records.getInt(base + BLOCKS_PER_CELL_X_WORD * Integer.BYTES);
             int blocksPerCellY = records.getInt(base + BLOCKS_PER_CELL_Y_WORD * Integer.BYTES);
+            int cornerStride = records.getInt(base + CORNER_STRIDE_WORD * Integer.BYTES);
+            int metadataBlocksPerChunk = records.getInt(base + BLOCKS_PER_CHUNK_WORD * Integer.BYTES);
             long cornerVolume = Math.multiplyExact(Math.multiplyExact(cellsX + 1L, cellsY + 1L), cellsZ + 1L);
             long blockVolume = Math.multiplyExact(Math.multiplyExact(
                     Math.multiplyExact(Math.multiplyExact((long) cellsX, cellsY), cellsZ),
@@ -99,6 +120,7 @@ final class GpuInterpolationBatch {
                     || blockOffset != Math.multiplyExact(chunk, blocksPerChunk)
                     || cellsX <= 0 || cellsY <= 0 || cellsZ <= 0
                     || blocksPerCellX <= 0 || blocksPerCellY <= 0
+                    || cornerStride <= 0 || metadataBlocksPerChunk != blocksPerChunk
                     || cornerVolume != samplesPerChunk || blockVolume != blocksPerChunk) {
                 throw new IllegalArgumentException("invalid interpolation metadata for chunk " + chunk);
             }

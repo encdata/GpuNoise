@@ -106,8 +106,7 @@ final class GpuDensityGraphShaderGenerator {
                 case 7 -> {
                     requireChildren(index, childCount, 1);
                     if (blockProgram) {
-                        out.append("double(interpolatedInputs[sampleIndex*(reserved&0x7fffffffu)+")
-                                .append(metadata).append("u])");
+                        out.append("double(interpolatedMarkers[").append(metadata).append("u])");
                     } else out.append(a);
                 }
                 case 8 -> out.append("normalNoiseTerrain(pExact*.25,uint(").append(doubleFloat(p0)).append("))*4.0");
