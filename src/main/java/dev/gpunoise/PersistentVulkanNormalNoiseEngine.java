@@ -868,6 +868,12 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             put(interpolationMetadata, metadata, stack);
             check(vkResetCommandBuffer(commandBuffer, 0), "reset grid interpolation command buffer");
             check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin grid interpolation command buffer");
+            VkBufferMemoryBarrier.Buffer rootUploadBarrier = VkBufferMemoryBarrier.calloc(1, stack)
+                    .sType$Default().srcAccessMask(VK_ACCESS_HOST_WRITE_BIT)
+                    .dstAccessMask(VK_ACCESS_SHADER_READ_BIT).buffer(graphRoots.buffer)
+                    .offset(0).size(graphRoots.size);
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_HOST_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, null, rootUploadBarrier, null);
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, gridPipeline);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipelineLayout, 0, stack.longs(graphDescriptorSet), null);
             ByteBuffer graphPush = stack.malloc(16).order(ByteOrder.nativeOrder())
