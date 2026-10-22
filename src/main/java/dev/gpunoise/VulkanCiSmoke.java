@@ -559,8 +559,11 @@ public final class VulkanCiSmoke {
             GpuTerrainBlockResult markerBlocks = markerTerrain.blocks();
             if (markerTerrain.corners().stride() != markerTerrain.roots()
                     || markerTerrain.corners().interpolatorCount() != 0
-                    || markerTerrain.corners().sampleCount() != 27) {
-                throw new IllegalStateException("Fused terrain readback included GPU-only marker corners");
+                    || markerTerrain.corners().sampleCount() != 8) {
+                throw new IllegalStateException("Fused terrain corner layout mismatch: roots="
+                        + markerTerrain.roots() + ", stride=" + markerTerrain.corners().stride()
+                        + ", interpolators=" + markerTerrain.corners().interpolatorCount()
+                        + ", samples=" + markerTerrain.corners().sampleCount());
             }
             GpuTerrainBatchResult compactCorners = ring.submitGraphGridInterpolatedOwned(markerGraph,
                     markerGrid.duplicate().position(0), 1, 8,
@@ -568,7 +571,7 @@ public final class VulkanCiSmoke {
                     .get(60, TimeUnit.SECONDS);
             if (compactCorners.corners().roots() != markerTerrain.corners().roots()
                     || compactCorners.corners().stride() != 2
-                    || compactCorners.corners().sampleCount() != 27
+                    || compactCorners.corners().sampleCount() != 8
                     || compactCorners.corners().valueAt(0, 0) != markerTerrain.corners().valueAt(0, 0)
                     || compactCorners.corners().valueAt(0, 1) != markerTerrain.corners().valueAt(0, 1)) {
                 throw new IllegalStateException("Compact terrain corner readback lost logical root identity");
