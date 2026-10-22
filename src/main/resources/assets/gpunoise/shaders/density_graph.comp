@@ -641,7 +641,11 @@ void main(){
         // the selected corner outputs. Keep one output-root lookup contract
         // for both regular graph and grid dispatches.
         uint rootNode=rootNodes[root];
-        results[sampleIndex * outputStride + root] = float(values[rootNode]);
+        // Temporary compact-output probe: lets CI distinguish an empty loop
+        // from an invalid register lookup without relying on driver tracing.
+        results[sampleIndex * outputStride + root] = fusedTerrainGrid
+                ? 1000000.0 + float(fusedOutputRootCount * 256u + rootNode)
+                : float(values[rootNode]);
     }
     for(uint marker=0u;marker<interpolationCount;marker++) {
         float markerValue=float(values[interpolatorMap[1u+marker]]);
