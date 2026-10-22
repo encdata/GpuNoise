@@ -480,8 +480,8 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
             if max(counts[2] for counts in gpu_counts) <= 0:
                 raise RuntimeError("GPU benchmark completed without any GPU terrain cache being consumed")
             material_batches = re.findall(
-                r"GPU terrain material decisions: skippedPositiveDensityQueries=(\d+), "
-                r"submittedAquiferRows=(\d+), .*?acceptedDecisions=(\d+), cpuFallback=(\d+)", run_log)
+                r"GPU terrain material decisions: positiveDensityDefaultRows=(\d+), "
+                r"submittedAquiferRows=(\d+), .*?acceptedAquiferDecisions=(\d+), cpuFallback=(\d+)", run_log)
             if not material_batches:
                 skip_reasons = re.findall(r"GPU aquifer decision preflight skipped: ([^\r\n]+)", run_log)
                 reason_detail = "; ".join(dict.fromkeys(skip_reasons)) or "no preflight skip reason was logged"
