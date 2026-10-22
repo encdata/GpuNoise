@@ -7,8 +7,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.atomic.AtomicLong;
 
-/** Bounded reuse for large direct aquifer input slabs held through async dispatch. */
-public final class GpuAquiferInputBufferPool {
+/** Bounded reuse for direct worldgen input slabs held through asynchronous Vulkan dispatch. */
+public final class GpuTerrainInputBufferPool {
     private static final int CAPACITY_ALIGNMENT = 4096;
     private static final int MAX_PER_CAPACITY = 4;
     private static final int MAX_CAPACITIES = 128;
@@ -18,7 +18,7 @@ public final class GpuAquiferInputBufferPool {
     private static final LongAdder reusedBuffers = new LongAdder();
     private static final ConcurrentHashMap<Integer, Bucket> buckets = new ConcurrentHashMap<>();
 
-    private GpuAquiferInputBufferPool() {}
+    private GpuTerrainInputBufferPool() {}
 
     public static ByteBuffer acquire(int capacity) {
         if (capacity <= 0) throw new IllegalArgumentException("aquifer input buffer capacity must be positive");

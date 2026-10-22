@@ -9,7 +9,7 @@ import dev.gpunoise.GpuAquiferCoordinatePlanner;
 import dev.gpunoise.GpuAquiferNearestThree;
 import dev.gpunoise.GpuAquiferRuntimeMode;
 import dev.gpunoise.GpuAquiferSubstance;
-import dev.gpunoise.GpuAquiferInputBufferPool;
+import dev.gpunoise.GpuTerrainInputBufferPool;
 import dev.gpunoise.GpuAquiferFluidStatus;
 import dev.gpunoise.GpuAquiferPrefillResult;
 import dev.gpunoise.GpuAquiferStatusRegionCache;
@@ -786,7 +786,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         CompletableFuture<int[]> future = GpuTerrainRuntime.submitAquiferNearestThree(records, count)
                 .toCompletableFuture();
         future.whenComplete((rows, failure) -> {
-            GpuAquiferInputBufferPool.release(records);
+            GpuTerrainInputBufferPool.release(records);
         });
         return future;
     }
@@ -797,7 +797,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         CompletableFuture<int[]> future = GpuTerrainRuntime.submitAquiferSubstance(records, count)
                 .toCompletableFuture();
         future.whenComplete((rows, failure) -> {
-            GpuAquiferInputBufferPool.release(records);
+            GpuTerrainInputBufferPool.release(records);
         });
         return future;
     }
@@ -974,7 +974,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             for (GpuAquiferStatusRegionCache.Reservation owner : owners) owner.fail(failure);
             throw failure;
         } finally {
-            if (statusRecords != null) GpuAquiferInputBufferPool.release(statusRecords);
+            if (statusRecords != null) GpuTerrainInputBufferPool.release(statusRecords);
         }
         try {
             for (int index = 0; index < centers.size(); index++) {

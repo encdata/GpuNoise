@@ -56,6 +56,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
     private final BlockingQueue<AquiferSubstanceRequest> pendingAquiferSubstance = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
     private final BlockingQueue<AquiferFluidStatusRequest> pendingAquiferFluidStatus = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
     private final BlockingQueue<AquiferPrefillRequest> pendingAquiferPrefill = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
+    private final BlockingQueue<OreVeinRequest> pendingOreVein = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
     /** Blocking compatibility requests run on bounded slot workers. */
     private final BlockingQueue<BlockingRequest<?>> pendingBlocking = new ArrayBlockingQueue<>(MAX_PENDING_SUBMISSIONS);
     /** Startup parity borrows a specific device asynchronously until one of its slots is free. */
@@ -277,6 +278,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
         return !pendingGraphRoots.isEmpty() || !pendingGraphGrids.isEmpty()
                 || !pendingAquiferNearest.isEmpty() || !pendingAquiferSubstance.isEmpty()
                 || !pendingAquiferFluidStatus.isEmpty() || !pendingAquiferPrefill.isEmpty()
+                || !pendingOreVein.isEmpty()
                 || !pendingBlocking.isEmpty() || !pendingTerrainGrids.isEmpty() || !pendingParity.isEmpty();
     }
 
@@ -284,6 +286,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
         boolean hasGeneralWork = !pendingGraphRoots.isEmpty() || !pendingGraphGrids.isEmpty()
                 || !pendingAquiferNearest.isEmpty() || !pendingAquiferSubstance.isEmpty()
                 || !pendingAquiferFluidStatus.isEmpty() || !pendingAquiferPrefill.isEmpty()
+                || !pendingOreVein.isEmpty()
                 || !pendingBlocking.isEmpty() || !pendingTerrainGrids.isEmpty();
         for (int i = 0; i < slots.length; i++) {
             PersistentVulkanNormalNoiseEngine slot = slots[i];
@@ -316,6 +319,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
         while ((fluid = pendingAquiferFluidStatus.poll()) != null) fluid.future.completeExceptionally(failure);
         AquiferPrefillRequest prefill;
         while ((prefill = pendingAquiferPrefill.poll()) != null) prefill.future.completeExceptionally(failure);
+        OreVeinRequest oreVein;
+        while ((oreVein = pendingOreVein.poll()) != null) oreVein.future.completeExceptionally(failure);
         BlockingRequest<?> blocking;
         while ((blocking = pendingBlocking.poll()) != null) blocking.future.completeExceptionally(failure);
         ParityRequest<?> parity;
@@ -501,6 +506,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 case FULL_TERRAIN -> pollLive(pendingTerrainGrids);
                 case BLOCKING -> pollLive(pendingBlocking);
                 case AQUIFER -> pollAquiferRequest();
+                case ORE_VEIN -> pollLive(pendingOreVein);
             };
             if (request == null) continue;
             recordQueueWait(enqueuedNanos(request), requestClass);
@@ -562,6 +568,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 }
                 case BLOCKING -> runBlockingReserved((BlockingRequest<?>) request, slot);
                 case AQUIFER -> executeAquiferReserved(slot, request);
+                case ORE_VEIN -> executeOreVeinBatch(slot, (OreVeinRequest) request);
             }
         } catch (Throwable failure) {
             failDispatch(dispatch, failure);
@@ -697,6 +704,60 @@ final class VulkanSubmissionRing implements AutoCloseable {
         }
     }
 
+    /** Coalesces chunk-local ore rows into one bounded device dispatch. */
+    private void executeOreVeinBatch(PersistentVulkanNormalNoiseEngine slot, OreVeinRequest first) {
+        List<OreVeinRequest> requests = new ArrayList<>();
+        requests.add(first);
+        int totalRows = first.count;
+        int totalBytes = first.records.remaining();
+        int maxRows = PersistentVulkanNormalNoiseEngine.CAPACITY;
+        synchronized (this) {
+            while (totalRows < maxRows) {
+                OreVeinRequest next = pendingOreVein.peek();
+                if (next == null || next.future.isDone()
+                        || next.count <= 0 || next.count > maxRows - totalRows
+                        || next.records.remaining() != next.count * GpuOreVeinDecisions.RECORD_BYTES) break;
+                next = pendingOreVein.poll();
+                if (next == null) break;
+                requests.add(next);
+                totalRows += next.count;
+                totalBytes += next.records.remaining();
+                recordQueueWait(next.enqueuedNanos, QueueClass.ORE_VEIN);
+            }
+        }
+
+        boolean merged = requests.size() > 1;
+        ByteBuffer combined = null;
+        try {
+            combined = merged ? GpuTerrainInputBufferPool.acquire(totalBytes)
+                    : first.records.duplicate();
+            if (merged) {
+                for (OreVeinRequest request : requests) combined.put(request.records.duplicate());
+                combined.flip();
+            }
+            int[] rows = slot.submitOreVeinDecisions(combined, totalRows);
+            if (rows == null || rows.length != totalRows) {
+                throw new IllegalStateException("Vulkan ore-vein batch returned "
+                        + (rows == null ? "null" : rows.length) + " rows for " + totalRows + " inputs");
+            }
+            GpuTerrainProfiler.recordOreVeinBatch(totalRows, requests.size());
+            int offset = 0;
+            for (OreVeinRequest request : requests) {
+                int end = offset + request.count;
+                completeOnDispatchWorker(request.future,
+                        java.util.Arrays.copyOfRange(rows, offset, end), null);
+                offset = end;
+            }
+        } catch (Throwable failure) {
+            for (OreVeinRequest request : requests) {
+                completeOnDispatchWorker(request.future, null, new IllegalStateException(
+                        "GPU ring ore-vein batch submission failed", failure));
+            }
+        } finally {
+            if (merged && combined != null) GpuTerrainInputBufferPool.release(combined);
+        }
+    }
+
     /** Merges compatible nearest-center payloads while preserving each query's neighborhood index. */
     private void executeAquiferNearestBatch(PersistentVulkanNormalNoiseEngine slot,
                                              AquiferNearestRequest first) {
@@ -760,7 +821,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
         }
         try {
             slot.submitAquiferNearestThreeAsync(combined, batchRowCount).whenComplete((rows, failure) -> {
-                GpuAquiferInputBufferPool.release(combined);
+                GpuTerrainInputBufferPool.release(combined);
                 if (failure != null) {
                     for (AquiferNearestRequest request : requests)
                         completeOnDispatchWorker(request.future, null, failure);
@@ -786,7 +847,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 }
             });
         } catch (Throwable failure) {
-            GpuAquiferInputBufferPool.release(combined);
+            GpuTerrainInputBufferPool.release(combined);
             for (AquiferNearestRequest request : requests)
                 completeOnDispatchWorker(request.future, null, new IllegalStateException(
                         "GPU ring nearest-center batch submission failed", failure));
@@ -813,7 +874,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
         if (bytes > MAX_COALESCED_NEAREST_BYTES || bytes > Integer.MAX_VALUE)
             throw new IllegalArgumentException("combined nearest-center input exceeds bounded staging budget");
 
-        ByteBuffer combined = GpuAquiferInputBufferPool.acquire((int) bytes);
+        ByteBuffer combined = GpuTerrainInputBufferPool.acquire((int) bytes);
         try {
             combined.putInt((int) rowCount).putInt((int) groupCount);
             int groupOffset = 0;
@@ -847,7 +908,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
             }
             return combined.flip();
         } catch (RuntimeException | Error failure) {
-            GpuAquiferInputBufferPool.release(combined);
+            GpuTerrainInputBufferPool.release(combined);
             throw failure;
         }
     }
@@ -924,10 +985,10 @@ final class VulkanSubmissionRing implements AutoCloseable {
         }
         ByteBuffer mergedStatus;
         try {
-            mergedStatus = GpuAquiferInputBufferPool.acquire(
+            mergedStatus = GpuTerrainInputBufferPool.acquire(
                     Math.multiplyExact(batchStatusRows, statusStride));
         } catch (Throwable failure) {
-            GpuAquiferInputBufferPool.release(mergedNearest);
+            GpuTerrainInputBufferPool.release(mergedNearest);
             for (AquiferPrefillRequest request : requests)
                 completeOnDispatchWorker(request.future, null, new IllegalStateException(
                         "GPU ring combined aquifer status packing failed", failure));
@@ -939,8 +1000,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
             mergedStatus.flip();
             slot.submitAquiferPrefillAsync(mergedNearest, batchNearestRows,
                     mergedStatus, batchStatusRows, first.decisionChain).whenComplete((rows, failure) -> {
-                GpuAquiferInputBufferPool.release(mergedNearest);
-                GpuAquiferInputBufferPool.release(mergedStatus);
+                GpuTerrainInputBufferPool.release(mergedNearest);
+                GpuTerrainInputBufferPool.release(mergedStatus);
                 if (failure != null) {
                     for (AquiferPrefillRequest request : requests)
                         completeOnDispatchWorker(request.future, null, failure);
@@ -979,8 +1040,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 }
             });
         } catch (Throwable failure) {
-            GpuAquiferInputBufferPool.release(mergedNearest);
-            GpuAquiferInputBufferPool.release(mergedStatus);
+            GpuTerrainInputBufferPool.release(mergedNearest);
+            GpuTerrainInputBufferPool.release(mergedStatus);
             for (AquiferPrefillRequest request : requests)
                 completeOnDispatchWorker(request.future, null, new IllegalStateException(
                         "GPU ring combined aquifer prefill submission failed", failure));
@@ -1052,7 +1113,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
         }
         int batchRowCount = totalRows;
 
-        ByteBuffer combined = GpuAquiferInputBufferPool.acquire(
+        ByteBuffer combined = GpuTerrainInputBufferPool.acquire(
                 Math.multiplyExact(batchRowCount, GpuAquiferSubstance.RECORD_BYTES));
         try {
             for (AquiferSubstanceRequest request : requests) {
@@ -1061,7 +1122,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
             }
             combined.flip();
             slot.submitAquiferSubstanceAsync(combined, batchRowCount).whenComplete((rows, failure) -> {
-                GpuAquiferInputBufferPool.release(combined);
+                GpuTerrainInputBufferPool.release(combined);
                 if (failure != null) {
                     for (AquiferSubstanceRequest request : requests)
                         completeOnDispatchWorker(request.future, null, failure);
@@ -1087,7 +1148,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 }
             });
         } catch (Throwable failure) {
-            GpuAquiferInputBufferPool.release(combined);
+            GpuTerrainInputBufferPool.release(combined);
             for (AquiferSubstanceRequest request : requests)
                 completeOnDispatchWorker(request.future, null, new IllegalStateException(
                         "GPU ring aquifer substance batch submission failed", failure));
@@ -1191,11 +1252,11 @@ final class VulkanSubmissionRing implements AutoCloseable {
         return best;
     }
 
-    private enum QueueClass { GRAPH_ROOTS, GRAPH_GRIDS, FULL_TERRAIN, BLOCKING, AQUIFER }
+    private enum QueueClass { GRAPH_ROOTS, GRAPH_GRIDS, FULL_TERRAIN, BLOCKING, AQUIFER, ORE_VEIN }
 
     private sealed interface DispatchRequest permits GraphRootsRequest, GraphRootsGridRequest,
             TerrainGridRequest, BlockingRequest, AquiferNearestRequest, AquiferSubstanceRequest,
-            AquiferFluidStatusRequest, AquiferPrefillRequest {
+            AquiferFluidStatusRequest, AquiferPrefillRequest, OreVeinRequest {
         CompletableFuture<?> future();
         long enqueuedNanos();
     }
@@ -1265,8 +1326,15 @@ final class VulkanSubmissionRing implements AutoCloseable {
     }
 
     CompletableFuture<int[]> submitOreVeinDecisions(ByteBuffer records, int count) {
-        ByteBuffer input = records.duplicate();
-        return submitBlocking("ore vein decisions", slot -> slot.submitOreVeinDecisions(input, count));
+        CompletableFuture<int[]> future = new CompletableFuture<>();
+        if (records == null || count <= 0 || count > PersistentVulkanNormalNoiseEngine.CAPACITY
+                || records.remaining() != (long) count * GpuOreVeinDecisions.RECORD_BYTES) {
+            future.completeExceptionally(new IllegalArgumentException("invalid ore-vein decision request"));
+            return future;
+        }
+        enqueue(pendingOreVein, () -> new OreVeinRequest(records.duplicate(), count,
+                future, System.nanoTime()), future, "ore-vein decisions");
+        return future;
     }
 
     CompletableFuture<int[]> submitBiomeSearch(ByteBuffer targets, GpuBiomeSearchTree tree, int count) {
@@ -1460,6 +1528,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
         AquiferPrefillRequest prefillRequest;
         while ((prefillRequest = pendingAquiferPrefill.poll()) != null)
             prefillRequest.future.completeExceptionally(stopped);
+        OreVeinRequest oreVeinRequest;
+        while ((oreVeinRequest = pendingOreVein.poll()) != null)
+            oreVeinRequest.future.completeExceptionally(stopped);
         BlockingRequest<?> blockingRequest;
         while ((blockingRequest = pendingBlocking.poll()) != null)
             blockingRequest.future.completeExceptionally(stopped);
@@ -1493,6 +1564,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                          boolean decisionChain,
                                          CompletableFuture<GpuAquiferPrefillResult> future, long enqueuedNanos)
             implements DispatchRequest {}
+    private record OreVeinRequest(ByteBuffer records, int count, CompletableFuture<int[]> future,
+                                  long enqueuedNanos) implements DispatchRequest {}
     private record NearestPayload(ByteBuffer records, int count, int statusRowOffset) {}
     @FunctionalInterface
     private interface SlotOperation<T> {

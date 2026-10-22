@@ -163,7 +163,7 @@ public final class GpuAquiferNearestThree {
                 + (long) uniqueCenters.size() * CENTER_RECORD_BYTES;
         if (byteCount > MAX_PACKED_BYTES || byteCount > Integer.MAX_VALUE)
             throw new IllegalArgumentException("aquifer nearest-center payload exceeds GPU capacity");
-        ByteBuffer packed = (pooled ? GpuAquiferInputBufferPool.acquire((int) byteCount)
+        ByteBuffer packed = (pooled ? GpuTerrainInputBufferPool.acquire((int) byteCount)
                 : ByteBuffer.allocateDirect((int) byteCount)).order(ByteOrder.nativeOrder());
         packed.putInt(count).putInt(uniqueCenters.size());
         for (int i = 0; i < count; i++) {

@@ -80,7 +80,7 @@ public final class GpuAquiferFluidStatus {
                 throw new IllegalArgumentException("invalid aquifer fluid-status row count");
             this.expectedRows = expectedRows;
             this.compactPrecomputed = compactPrecomputed;
-            this.packed = GpuAquiferInputBufferPool.acquire(
+            this.packed = GpuTerrainInputBufferPool.acquire(
                     Math.multiplyExact(expectedRows, compactPrecomputed
                             ? COMPACT_PRECOMPUTED_RECORD_BYTES : RECORD_BYTES));
         }
@@ -148,10 +148,10 @@ public final class GpuAquiferFluidStatus {
 
             ByteBuffer compact;
             try {
-                compact = GpuAquiferInputBufferPool.acquire(Math.multiplyExact(
+                compact = GpuTerrainInputBufferPool.acquire(Math.multiplyExact(
                         expectedRows, COMPACT_PRECOMPUTED_RECORD_BYTES));
             } catch (RuntimeException | Error failure) {
-                GpuAquiferInputBufferPool.release(packed);
+                GpuTerrainInputBufferPool.release(packed);
                 throw failure;
             }
             try {
@@ -163,11 +163,11 @@ public final class GpuAquiferFluidStatus {
                     compact.putInt(packed.getInt(source + 260));
                 }
                 compact.flip();
-                GpuAquiferInputBufferPool.release(packed);
+                GpuTerrainInputBufferPool.release(packed);
                 return compact;
             } catch (RuntimeException | Error failure) {
-                GpuAquiferInputBufferPool.release(compact);
-                GpuAquiferInputBufferPool.release(packed);
+                GpuTerrainInputBufferPool.release(compact);
+                GpuTerrainInputBufferPool.release(packed);
                 throw failure;
             }
         }
@@ -176,7 +176,7 @@ public final class GpuAquiferFluidStatus {
         public void close() {
             if (finished) return;
             finished = true;
-            GpuAquiferInputBufferPool.release(packed);
+            GpuTerrainInputBufferPool.release(packed);
         }
     }
 

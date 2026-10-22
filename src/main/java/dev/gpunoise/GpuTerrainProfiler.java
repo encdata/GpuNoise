@@ -51,6 +51,9 @@ public final class GpuTerrainProfiler {
     private static final LongAdder aquiferSubstanceRows = new LongAdder();
     private static final LongAdder aquiferSubstanceCoalescedDispatches = new LongAdder();
     private static final LongAdder aquiferSubstanceCoalescedRequests = new LongAdder();
+    private static final LongAdder oreVeinDispatches = new LongAdder();
+    private static final LongAdder oreVeinRows = new LongAdder();
+    private static final LongAdder oreVeinRequests = new LongAdder();
     private static final LongAdder aquiferRegionStatusCacheHits = new LongAdder();
     private static final LongAdder aquiferRegionStatusCacheMisses = new LongAdder();
     private static final LongAdder aquiferRegionSurfaceCacheHits = new LongAdder();
@@ -271,6 +274,13 @@ public final class GpuTerrainProfiler {
         aquiferSubstanceCoalescedRequests.add(requests);
     }
 
+    public static void recordOreVeinBatch(int rows, int requests) {
+        if (!ENABLED || rows <= 0) return;
+        oreVeinDispatches.increment();
+        oreVeinRows.add(rows);
+        oreVeinRequests.add(Math.max(0, requests));
+    }
+
     public static void recordBlockWrite() {
         if (ENABLED) blockWrites.increment();
     }
@@ -335,10 +345,13 @@ public final class GpuTerrainProfiler {
                 aquiferSubstanceDispatches.sum(), aquiferSubstanceRows.sum(),
                 averageRows(aquiferSubstanceRows, aquiferSubstanceDispatches),
                 aquiferSubstanceCoalescedDispatches.sum(), aquiferSubstanceCoalescedRequests.sum());
-        GpuNoise.LOGGER.info("GPU terrain aquifer staging slabs: allocated={}, reused={}, pooledBytes={}",
-                GpuAquiferInputBufferPool.allocatedBufferCount(),
-                GpuAquiferInputBufferPool.reusedBufferCount(),
-                GpuAquiferInputBufferPool.pooledByteCount());
+        GpuNoise.LOGGER.info("GPU terrain ore-vein batches: dispatches={}, rows={}, avgRows={}, requests={}",
+                oreVeinDispatches.sum(), oreVeinRows.sum(),
+                averageRows(oreVeinRows, oreVeinDispatches), oreVeinRequests.sum());
+        GpuNoise.LOGGER.info("GPU terrain input staging slabs: allocated={}, reused={}, pooledBytes={}",
+                GpuTerrainInputBufferPool.allocatedBufferCount(),
+                GpuTerrainInputBufferPool.reusedBufferCount(),
+                GpuTerrainInputBufferPool.pooledByteCount());
         GpuNoise.LOGGER.info("GPU terrain aquifer phase average ns: {}",
                 formatAquiferPhases());
         GpuNoise.LOGGER.info("GPU terrain aquifer region-status cache: hits={}, misses={}",

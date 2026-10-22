@@ -1014,18 +1014,18 @@ public final class VulkanCiSmoke {
             if (!stagedRecords.equals(GpuAquiferSubstance.pack(stagedSubstances))) {
                 throw new IllegalStateException("streamed aquifer substance records changed layout or values");
             }
-            for (ByteBuffer batch : stagedSubstanceBatches) GpuAquiferInputBufferPool.release(batch);
-            long reusedBefore = GpuAquiferInputBufferPool.reusedBufferCount();
+            for (ByteBuffer batch : stagedSubstanceBatches) GpuTerrainInputBufferPool.release(batch);
+            long reusedBefore = GpuTerrainInputBufferPool.reusedBufferCount();
             GpuAquiferSubstance.BatchWriter reuseWriter = new GpuAquiferSubstance.BatchWriter(1, 2);
             reuseWriter.add(stagedSubstances[0]);
             List<ByteBuffer> reusedBatches = reuseWriter.finish();
             if (reusedBatches.size() != 1
                     || !reusedBatches.get(0).equals(GpuAquiferSubstance.pack(
                             new GpuAquiferSubstance.Input[]{stagedSubstances[0]}))
-                    || GpuAquiferInputBufferPool.reusedBufferCount() <= reusedBefore) {
+                    || GpuTerrainInputBufferPool.reusedBufferCount() <= reusedBefore) {
                 throw new IllegalStateException("aquifer input slab pool failed to reuse a compatible buffer");
             }
-            for (ByteBuffer batch : reusedBatches) GpuAquiferInputBufferPool.release(batch);
+            for (ByteBuffer batch : reusedBatches) GpuTerrainInputBufferPool.release(batch);
             GpuAquiferSubstance.PackedBatch packedSubstanceCases =
                     GpuAquiferSubstance.packBatch(substanceCases);
             var substanceFuture = ring.submitAquiferSubstance(
@@ -1056,7 +1056,7 @@ public final class VulkanCiSmoke {
                     new GpuAquiferFluidStatus.Input[]{fluidStatusCase}))) {
                 throw new IllegalStateException("streamed C2ME fluid-status record changed layout or values");
             }
-            GpuAquiferInputBufferPool.release(streamedFluidStatus);
+            GpuTerrainInputBufferPool.release(streamedFluidStatus);
             int[] fluidStatusResults = ring.submitAquiferFluidStatus(
                     GpuAquiferFluidStatus.pack(fluidStatusCases), fluidStatusCases.length)
                     .get(60, TimeUnit.SECONDS);

@@ -257,7 +257,7 @@ public final class GpuAquiferSubstance {
                 }
                 // Keep slab capacities stable so drained buffers can be reused
                 // across chunks even when the final slab is only partly full.
-                current = GpuAquiferInputBufferPool.acquire(
+                current = GpuTerrainInputBufferPool.acquire(
                         Math.multiplyExact(rowsPerBuffer, RECORD_BYTES));
             }
             int flags = (directGlobalFluid ? 1 : 0) | (belowIsLava ? 2 : 0)
