@@ -1774,11 +1774,22 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         int totalBytes = 0;
         for (int i = 0; i < sources.length; i++) {
             int bytes = sources[i].remaining();
-            if (bytes < 0 || bytes > targets[i].size || persistentMappings.containsKey(targets[i])) {
+            if (bytes < 0 || bytes > targets[i].size) {
                 throw new IllegalArgumentException("invalid device-local graph resource upload at index " + i);
             }
-            offsets[i] = totalBytes;
-            totalBytes = Math.addExact(totalBytes, bytes);
+            ByteBuffer mapped = persistentMappings.get(targets[i]);
+            if (mapped != null) {
+                // Unified-memory Vulkan devices (including Lavapipe) may
+                // expose graph storage as host-visible. Write those targets
+                // directly and leave only truly device-local resources for
+                // the staging copy below.
+                mapped.clear();
+                mapped.put(sources[i].duplicate()).flip();
+                offsets[i] = -1;
+            } else {
+                offsets[i] = totalBytes;
+                totalBytes = Math.addExact(totalBytes, bytes);
+            }
         }
         if (totalBytes == 0) return;
 
@@ -1787,7 +1798,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         try {
             ByteBuffer stagingMap = staging.map(device, stack).order(ByteOrder.nativeOrder());
             stagingMapped = true;
-            for (ByteBuffer source : sources) stagingMap.put(source.duplicate());
+            for (int i = 0; i < sources.length; i++) {
+                if (offsets[i] >= 0) stagingMap.position(offsets[i]).put(sources[i].duplicate());
+            }
             check(vkResetCommandBuffer(commandBuffer, 0), "reset graph resource upload command buffer");
             check(vkBeginCommandBuffer(commandBuffer,
                     VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin graph resource upload command buffer");
@@ -1795,7 +1808,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             int barrierCount = 0;
             for (int i = 0; i < sources.length; i++) {
                 long bytes = sources[i].remaining();
-                if (bytes == 0L) continue;
+                if (bytes == 0L || offsets[i] < 0) continue;
                 VkBufferCopy.Buffer copy = VkBufferCopy.calloc(1, stack)
                         .srcOffset(offsets[i]).dstOffset(0).size(bytes);
                 vkCmdCopyBuffer(commandBuffer, staging.buffer, targets[i].buffer, copy);
