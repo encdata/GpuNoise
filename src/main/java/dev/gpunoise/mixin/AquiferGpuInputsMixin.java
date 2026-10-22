@@ -1021,7 +1021,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             throw failure;
         }
         GpuTerrainProfiler.recordAquiferStatusPrefill(prefillStart, centers.size(), javaFallbacks);
-        return combined != null ? combined : new GpuAquiferPrefillResult(
+        return combined != null ? combined.withoutFluidStatusRows() : new GpuAquiferPrefillResult(
                 nearestRows == null ? new int[0] : nearestRows, new int[0]);
     }
 

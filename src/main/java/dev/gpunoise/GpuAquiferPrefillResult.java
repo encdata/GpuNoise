@@ -4,6 +4,7 @@ import java.util.Arrays;
 
 /** Co-submitted aquifer outputs, optionally represented as ranges in a shared batch readback. */
 public final class GpuAquiferPrefillResult {
+    private static final int[] EMPTY = new int[0];
     private final int[] nearestStorage;
     private final int nearestOffset;
     private final int nearestLength;
@@ -49,6 +50,11 @@ public final class GpuAquiferPrefillResult {
         return new GpuAquiferPrefillResult(source.nearestStorage, nearestOffset, nearestLength,
                 source.fluidStatusStorage, fluidStatusOffset, fluidStatusLength,
                 source.decisionStorage, decisionOffset, decisionLength);
+    }
+
+    GpuAquiferPrefillResult withoutFluidStatusRows() {
+        return new GpuAquiferPrefillResult(nearestStorage, nearestOffset, nearestLength,
+                EMPTY, 0, 0, decisionStorage, decisionOffset, decisionLength);
     }
 
     /** Returns an owned array for sliced results; whole-batch results retain record-style access. */
