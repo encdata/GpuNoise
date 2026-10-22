@@ -636,6 +636,11 @@ void main(){
     uint fusedOutputRootCount=routerRootCount;
     uint gridOutputRootCount=fusedTerrainGrid?fusedOutputRootCount:routerRootCount;
     uint outputStride=fusedTerrainGrid?fusedOutputRootCount:routerRootCount+interpolationCount;
+    if (fusedTerrainGrid && sampleIndex == 0u) {
+        // Temporary probe: retained only if the root loop below is skipped.
+        results[0] = 9000000.0 + float(fusedOutputRootCount);
+        results[1] = 9000000.0 + float(fusedOutputRootCount);
+    }
     for (uint root = 0u; root < gridOutputRootCount; root++) {
         // In fused terrain mode the first root table is already compacted to
         // the selected corner outputs. Keep one output-root lookup contract
