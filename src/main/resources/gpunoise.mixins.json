@@ -12,6 +12,7 @@
     "NoiseDensityMixin",
     "NoiseChunkGpuDensityMixin",
     "NoiseInterpolatorGpuAccessMixin",
+      "PalettedContainerDataGpuAccessMixin",
       "PalettedContainerGpuWriteMixin",
       "BlockStateFluidAccessMixin",
     "LevelChunkSectionGpuWriteMixin",

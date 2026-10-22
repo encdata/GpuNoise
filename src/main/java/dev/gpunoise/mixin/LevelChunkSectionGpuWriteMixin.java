@@ -22,13 +22,26 @@ abstract class LevelChunkSectionGpuWriteMixin implements GpuLevelChunkSectionAcc
     @Override
     @SuppressWarnings("unchecked")
     public boolean gpunoise$writeGpuBlock(int index, BlockState state) {
+        return gpunoise$writeGpuBlock(index, state, false);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public boolean gpunoise$writeGpuBlockOwned(int index, BlockState state) {
+        return gpunoise$writeGpuBlock(index, state, true);
+    }
+
+    @SuppressWarnings("unchecked")
+    private boolean gpunoise$writeGpuBlock(int index, BlockState state, boolean owned) {
         this.nonEmptyBlockCount++;
         if (state.isRandomlyTicking()) this.tickingBlockCount++;
         FluidState fluidState = ((GpuBlockStateFluidAccess) (Object) state).gpunoise$fluidState();
         boolean hasFluid = fluidState.getType() != Fluids.EMPTY;
         if (hasFluid) this.tickingFluidCount++;
-        ((GpuPalettedContainerAccess<BlockState>) (Object) this.states)
-                .gpunoise$setGpuCached(index, state);
+        GpuPalettedContainerAccess<BlockState> palette =
+                (GpuPalettedContainerAccess<BlockState>) (Object) this.states;
+        if (owned) palette.gpunoise$setGpuOwned(index, state);
+        else palette.gpunoise$setGpuCached(index, state);
         return hasFluid;
     }
 }

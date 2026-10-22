@@ -383,7 +383,8 @@ public final class GpuTerrainDecisionWriter {
                             LevelChunkSection section = sections[tile];
                             if (output.fillState().directWritesSafe) {
                                 ((GpuLevelChunkSectionAccess) (Object) section)
-                                        .gpunoise$writeGpuBlock(((y & 15) << 8) | (localZ << 4) | localX, state);
+                                        .gpunoise$writeGpuBlockOwned(
+                                                ((y & 15) << 8) | (localZ << 4) | localX, state);
                             } else {
                                 section.setBlockState(localX, y & 15, localZ, state, false);
                             }
