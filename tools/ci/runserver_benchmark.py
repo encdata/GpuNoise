@@ -541,6 +541,10 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
                 raise RuntimeError(
                     f"GPU benchmark used CPU terrain fallback for {fallback_chunks} chunks"
                 )
+            if "GPU terrain custom DensityFunction translations passing root parity:" not in run_log:
+                raise RuntimeError(
+                    "GPU terrain startup did not report which custom DensityFunction translations passed root parity"
+                )
             if "Byepregen palette compatibility detected; using normal block writes" not in run_log:
                 raise RuntimeError(
                     "GPU worldgen did not activate the Byepregen palette compatibility path"

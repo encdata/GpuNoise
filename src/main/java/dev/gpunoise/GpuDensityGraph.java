@@ -106,6 +106,47 @@ record GpuDensityGraph(List<Node> nodes, int[] routerRoots, List<NormalNoise> no
         return List.copyOf(types);
     }
 
+    /** Custom implementations whose translated IR is reachable from parity-verified roots. */
+    List<String> translatedCustomDensityFunctionTypes(int verifiedRootMask) {
+        int selectedRoots = verifiedRootMask & supportedRouterRootMask;
+        boolean[] visited = new boolean[nodes.size()];
+        boolean[] queued = new boolean[nodes.size()];
+        int[] pending = new int[nodes.size()];
+        int pendingCount = 0;
+        for (int root = 0; root < routerRoots.length; root++) {
+            int index = routerRoots[root];
+            if ((selectedRoots & (1 << root)) != 0 && index >= 0 && index < nodes.size()
+                    && !queued[index]) {
+                queued[index] = true;
+                pending[pendingCount++] = index;
+            }
+        }
+        TreeSet<String> translated = new TreeSet<>();
+        while (pendingCount > 0) {
+            int index = pending[--pendingCount];
+            if (index < 0 || index >= nodes.size() || visited[index]) continue;
+            visited[index] = true;
+            Node node = nodes.get(index);
+            if (node.opcode().equals("Marker")
+                    && ("GpuDensityExpression".equals(node.payload())
+                    || "GpuDensityFunctionTranslator".equals(node.payload()))) {
+                DensityFunction source = sourceFunctions.get(index);
+                Class<?> type = source.getClass();
+                String name = type.getName();
+                if (!name.startsWith("net.minecraft.") && !name.startsWith("dev.gpunoise.")) {
+                    translated.add(name);
+                }
+            }
+            for (int child : node.children()) {
+                if (child >= 0 && child < nodes.size() && !queued[child]) {
+                    queued[child] = true;
+                    pending[pendingCount++] = child;
+                }
+            }
+        }
+        return List.copyOf(translated);
+    }
+
     /** Registers whose NoiseChunk marker requires per-function cell interpolation. */
     int[] interpolatedMarkerRegisters() {
         int[] registers = new int[interpolatedMarkerCount];

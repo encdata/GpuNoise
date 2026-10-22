@@ -246,6 +246,10 @@ public final class GpuNoise {
                     });
                 }
                 int verifiedRootMask = GpuTerrainRuntime.supportedTerrainRootMask();
+                var translatedCustomDensities = sourceTerrainGraph
+                        .translatedCustomDensityFunctionTypes(verifiedRootMask);
+                LOGGER.info("GPU terrain custom DensityFunction translations passing root parity: count={}, types={}",
+                        translatedCustomDensities.size(), translatedCustomDensities);
                 GpuDensityGraph activeTerrainGraph = validationGraph;
                 if (verifiedRootMask != 0
                         && verifiedRootMask != validationGraph.supportedRouterRootMask()) {
