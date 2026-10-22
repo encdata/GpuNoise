@@ -6,5 +6,7 @@ import net.minecraft.world.level.block.state.BlockState;
 public interface GpuLevelChunkSectionAccess {
     boolean gpunoise$writeGpuBlock(int index, BlockState state);
 
-    boolean gpunoise$writeGpuBlockOwned(int index, BlockState state);
+    boolean gpunoise$writeGpuBlockOwned(int index, BlockState state, int paletteId);
+
+    int gpunoise$resolveGpuPaletteId(BlockState state);
 }

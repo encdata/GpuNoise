@@ -344,6 +344,8 @@ public final class GpuTerrainDecisionWriter {
 
         ChunkPos regionOrigin = new ChunkPos(regionX << 2, regionZ << 2);
         LevelChunkSection[] sections = new LevelChunkSection[16];
+        int[][] sectionPaletteIds = new int[16][];
+        boolean[] sectionDirectWrites = new boolean[16];
         long writeStart = GpuTerrainProfiler.beginPhase();
         int verticalEnd = minY + verticalSize;
         for (int sectionStartY = minY; sectionStartY < verticalEnd;) {
@@ -359,6 +361,11 @@ public final class GpuTerrainDecisionWriter {
                     section.acquire();
                     sections[tile] = section;
                     acquiredCount++;
+                    if (output.fillState().directWritesSafe) {
+                        sectionPaletteIds[tile] = new int[output.palette().size()];
+                        java.util.Arrays.fill(sectionPaletteIds[tile], -1);
+                        sectionDirectWrites[tile] = true;
+                    }
                 }
 
                 // Match C2ME-OCL's region-major Y/Z/X traversal, retaining
@@ -381,13 +388,31 @@ public final class GpuTerrainDecisionWriter {
 
                             BlockState state = output.palette().state(paletteId);
                             LevelChunkSection section = sections[tile];
-                            if (output.fillState().directWritesSafe) {
-                                ((GpuLevelChunkSectionAccess) (Object) section)
-                                        .gpunoise$writeGpuBlockOwned(
-                                                ((y & 15) << 8) | (localZ << 4) | localX, state);
-                            } else {
-                                section.setBlockState(localX, y & 15, localZ, state, false);
-                            }
+                            if (sectionDirectWrites[tile]) {
+                                int[] paletteMap = sectionPaletteIds[tile];
+                                int sectionPaletteId = paletteMap[paletteId];
+                                if (sectionPaletteId < 0) {
+                                    sectionPaletteId = ((GpuLevelChunkSectionAccess) (Object) section)
+                                            .gpunoise$resolveGpuPaletteId(state);
+                                    if (sectionPaletteId == -2) {
+                                        // Palette growth can remap every old ID; drop this section's
+                                        // cache and resolve the just-added state against the new data.
+                                        java.util.Arrays.fill(paletteMap, -1);
+                                        sectionPaletteId = ((GpuLevelChunkSectionAccess) (Object) section)
+                                                .gpunoise$resolveGpuPaletteId(state);
+                                    }
+                                    if (sectionPaletteId >= 0) paletteMap[paletteId] = sectionPaletteId;
+                                    else sectionDirectWrites[tile] = false;
+                                }
+                                if (sectionDirectWrites[tile]) {
+                                    ((GpuLevelChunkSectionAccess) (Object) section)
+                                            .gpunoise$writeGpuBlockOwned(
+                                                    ((y & 15) << 8) | (localZ << 4) | localX,
+                                                    state, sectionPaletteId);
+                                } else {
+                                    section.setBlockState(localX, y & 15, localZ, state, false);
+                                }
+                            } else section.setBlockState(localX, y & 15, localZ, state, false);
                             if (output.blockPaletteIds().needsFluidPostProcessing(blockIndex)) {
                                 mutable.set(regionOrigin.getMinBlockX() + x, y, worldZ);
                                 output.chunk().markPosForPostprocessing(mutable);
@@ -480,6 +505,7 @@ public final class GpuTerrainDecisionWriter {
         }
 
         private BlockState state(int id) { return states.get(id); }
+        private int size() { return states.size(); }
     }
 
     /** OCL-compatible compact IDs with automatic widening for large mod palettes. */

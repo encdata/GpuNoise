@@ -24,21 +24,21 @@ abstract class PalettedContainerGpuWriteMixin<T> implements GpuPalettedContainer
 
     @Override
     @SuppressWarnings("unchecked")
-    public void gpunoise$setGpuOwned(int index, T value) {
+    public void gpunoise$setGpuOwned(int index, T value, int paletteId) {
         Object current = gpunoise$data();
         if (!(current instanceof GpuPalettedContainerDataAccess<?>)) {
             this.gpunoise$setUnchecked(index, value);
             return;
         }
-        GpuPalettedContainerDataAccess<T> data = (GpuPalettedContainerDataAccess<T>) current;
-        int paletteId = data.gpunoise$palette().idFor(value);
-        // idFor may resize the palette and replace PalettedContainer.data.
-        // Always fetch the current storage after that callback has completed.
-        Object resized = gpunoise$data();
-        if (!(resized instanceof GpuPalettedContainerDataAccess<?>)) {
-            this.gpunoise$setUnchecked(index, value);
-            return;
-        }
-        ((GpuPalettedContainerDataAccess<T>) resized).gpunoise$storage().set(index, paletteId);
+        ((GpuPalettedContainerDataAccess<T>) current).gpunoise$storage().set(index, paletteId);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public int gpunoise$resolveGpuPaletteId(T value) {
+        Object current = gpunoise$data();
+        if (!(current instanceof GpuPalettedContainerDataAccess<?>)) return -1;
+        int paletteId = ((GpuPalettedContainerDataAccess<T>) current).gpunoise$palette().idFor(value);
+        return current == gpunoise$data() ? paletteId : -2;
     }
 }

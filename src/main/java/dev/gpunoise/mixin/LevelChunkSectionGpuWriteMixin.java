@@ -27,12 +27,16 @@ abstract class LevelChunkSectionGpuWriteMixin implements GpuLevelChunkSectionAcc
 
     @Override
     @SuppressWarnings("unchecked")
-    public boolean gpunoise$writeGpuBlockOwned(int index, BlockState state) {
-        return gpunoise$writeGpuBlock(index, state, true);
+    public boolean gpunoise$writeGpuBlockOwned(int index, BlockState state, int paletteId) {
+        return gpunoise$writeGpuBlock(index, state, true, paletteId);
     }
 
     @SuppressWarnings("unchecked")
     private boolean gpunoise$writeGpuBlock(int index, BlockState state, boolean owned) {
+        return gpunoise$writeGpuBlock(index, state, owned, -1);
+    }
+
+    private boolean gpunoise$writeGpuBlock(int index, BlockState state, boolean owned, int paletteId) {
         this.nonEmptyBlockCount++;
         if (state.isRandomlyTicking()) this.tickingBlockCount++;
         FluidState fluidState = ((GpuBlockStateFluidAccess) (Object) state).gpunoise$fluidState();
@@ -40,8 +44,15 @@ abstract class LevelChunkSectionGpuWriteMixin implements GpuLevelChunkSectionAcc
         if (hasFluid) this.tickingFluidCount++;
         GpuPalettedContainerAccess<BlockState> palette =
                 (GpuPalettedContainerAccess<BlockState>) (Object) this.states;
-        if (owned) palette.gpunoise$setGpuOwned(index, state);
+        if (owned) palette.gpunoise$setGpuOwned(index, state, paletteId);
         else palette.gpunoise$setGpuCached(index, state);
         return hasFluid;
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public int gpunoise$resolveGpuPaletteId(BlockState state) {
+        return ((GpuPalettedContainerAccess<BlockState>) (Object) this.states)
+                .gpunoise$resolveGpuPaletteId(state);
     }
 }
