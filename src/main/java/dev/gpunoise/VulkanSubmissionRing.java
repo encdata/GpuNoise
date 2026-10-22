@@ -727,6 +727,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
         }
 
         boolean merged = requests.size() > 1;
+        int dispatchedRows = totalRows;
         ByteBuffer combined = null;
         try {
             combined = merged ? GpuTerrainInputBufferPool.acquire(totalBytes)
@@ -735,27 +736,27 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 for (OreVeinRequest request : requests) combined.put(request.records.duplicate());
                 combined.flip();
             }
-            slot.submitOreVeinDecisionsAsync(combined, totalRows).whenComplete((packedRows, failure) -> {
+            slot.submitOreVeinDecisionsAsync(combined, dispatchedRows).whenComplete((packedRows, failure) -> {
                 if (failure != null) {
                     for (OreVeinRequest request : requests)
                         completeOnDispatchWorker(request.future, null, new IllegalStateException(
                                 "GPU ring ore-vein batch submission failed", failure));
                     return;
                 }
-                int expectedWords = (totalRows + 9) / 10;
+                int expectedWords = (dispatchedRows + 9) / 10;
                 if (packedRows == null || packedRows.length != expectedWords) {
                     IllegalStateException invalid = new IllegalStateException("Vulkan ore-vein batch returned "
                             + (packedRows == null ? "null" : packedRows.length) + " packed words for "
-                            + totalRows + " inputs (expected " + expectedWords + ")");
+                            + dispatchedRows + " inputs (expected " + expectedWords + ")");
                     for (OreVeinRequest request : requests)
                         completeOnDispatchWorker(request.future, null, invalid);
                     return;
                 }
-                GpuTerrainProfiler.recordOreVeinBatch(totalRows, requests.size());
+                GpuTerrainProfiler.recordOreVeinBatch(dispatchedRows, requests.size());
                 int offset = 0;
                 for (OreVeinRequest request : requests) {
                     completeOnDispatchWorker(request.future,
-                            new GpuOreVeinBatchResult(packedRows, totalRows, offset, request.count), null);
+                            new GpuOreVeinBatchResult(packedRows, dispatchedRows, offset, request.count), null);
                     offset += request.count;
                 }
             });
