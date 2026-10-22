@@ -641,17 +641,13 @@ void main(){
         // the selected corner outputs. Keep one output-root lookup contract
         // for both regular graph and grid dispatches.
         uint rootNode=rootNodes[root];
-        // Temporary compact-output probe: lets CI distinguish an empty loop
-        // from an invalid register lookup without relying on driver tracing.
-        results[sampleIndex * outputStride + root] = fusedTerrainGrid
-                ? 1000000.0 + float(fusedOutputRootCount * 256u + rootNode)
-                : float(values[rootNode]);
+        results[sampleIndex * outputStride + root] = float(values[rootNode]);
     }
     // Temporary CI probe runs after the root loop so it remains visible even
     // when the decoded output count is zero.
-    if (sampleIndex == 0u) {
+    if (fusedTerrainGrid && sampleIndex == 0u) {
         float diagnosticBase = 9000000.0
-                + (fusedTerrainGrid ? 1000000.0 : 0.0)
+                + 1000000.0
                 + float(routerRootCount * 512u);
         results[0] = diagnosticBase + float(rootNodes[0]);
         results[1] = diagnosticBase + float(rootNodes[1]);
