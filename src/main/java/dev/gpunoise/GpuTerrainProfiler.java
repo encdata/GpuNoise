@@ -54,6 +54,8 @@ public final class GpuTerrainProfiler {
     private static final LongAdder oreVeinDispatches = new LongAdder();
     private static final LongAdder oreVeinRows = new LongAdder();
     private static final LongAdder oreVeinRequests = new LongAdder();
+    private static final LongAdder oreVeinInputBytes = new LongAdder();
+    private static final LongAdder oreVeinOutputBytes = new LongAdder();
     private static final LongAdder aquiferRegionStatusCacheHits = new LongAdder();
     private static final LongAdder aquiferRegionStatusCacheMisses = new LongAdder();
     private static final LongAdder aquiferRegionSurfaceCacheHits = new LongAdder();
@@ -279,6 +281,9 @@ public final class GpuTerrainProfiler {
         oreVeinDispatches.increment();
         oreVeinRows.add(rows);
         oreVeinRequests.add(Math.max(0, requests));
+        oreVeinInputBytes.add((long) rows * GpuOreVeinDecisions.RECORD_BYTES
+                + GpuOreVeinDecisions.PUSH_CONSTANT_BYTES);
+        oreVeinOutputBytes.add((long) ((rows + 9) / 10) * Integer.BYTES);
     }
 
     public static void recordBlockWrite() {
@@ -348,6 +353,9 @@ public final class GpuTerrainProfiler {
         GpuNoise.LOGGER.info("GPU terrain ore-vein batches: dispatches={}, rows={}, avgRows={}, requests={}",
                 oreVeinDispatches.sum(), oreVeinRows.sum(),
                 averageRows(oreVeinRows, oreVeinDispatches), oreVeinRequests.sum());
+        GpuNoise.LOGGER.info("GPU terrain ore-vein transfer: inputBytes={}, compactReadbackBytes={}, inputBytesPerRow={}",
+                oreVeinInputBytes.sum(), oreVeinOutputBytes.sum(),
+                oreVeinRows.sum() == 0L ? 0.0 : (double) oreVeinInputBytes.sum() / oreVeinRows.sum());
         GpuNoise.LOGGER.info("GPU terrain input staging slabs: allocated={}, reused={}, pooledBytes={}",
                 GpuTerrainInputBufferPool.allocatedBufferCount(),
                 GpuTerrainInputBufferPool.reusedBufferCount(),
