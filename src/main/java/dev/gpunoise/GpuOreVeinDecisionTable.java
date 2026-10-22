@@ -47,7 +47,7 @@ public final class GpuOreVeinDecisionTable {
         }
         int firstRow = Math.multiplyExact(firstY - minY, 256);
         int activeRows = Math.multiplyExact(endY - firstY, 256);
-        CompletableFuture<int[]> batches = CompletableFuture.completedFuture(states);
+        CompletableFuture<byte[]> batches = CompletableFuture.completedFuture(states);
         int maxRows = PersistentVulkanNormalNoiseEngine.CAPACITY;
         for (int offset = 0; offset < activeRows; offset += maxRows) {
             int batchOffset = firstRow + offset;
