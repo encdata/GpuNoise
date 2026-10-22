@@ -10,7 +10,9 @@ import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 
 /** Packed per-block inputs and Java reference for OCL's OreVeinifier stage. */
 public final class GpuOreVeinDecisions {
-    public static final int RECORD_BYTES = 52;
+    /** Three graph roots, Y, and three positional-random rolls; block IDs are sent once per batch. */
+    public static final int RECORD_BYTES = 28;
+    static final int PUSH_CONSTANT_BYTES = 28;
     public static final int NO_VEIN = -1;
     public static final int CPU_FALLBACK = -2;
     static final int COMPACT_NO_VEIN = 0;
@@ -43,6 +45,14 @@ public final class GpuOreVeinDecisions {
         return (byte) COMPACT_CPU_FALLBACK;
     }
 
+    static ByteBuffer putBatchParameters(ByteBuffer target, int count) {
+        if (target == null || target.remaining() < PUSH_CONSTANT_BYTES || count <= 0)
+            throw new IllegalArgumentException("invalid ore-vein batch parameters");
+        target.putInt(count);
+        for (int code = 2; code < COMPACT_STATE_IDS.length; code++) target.putInt(COMPACT_STATE_IDS[code]);
+        return target;
+    }
+
     /** Packs one block row using the same positional random stream as OreVeinifier. */
     public static ByteBuffer pack(float veinToggle, float veinRidged, float veinGap,
                                   int x, int y, int z, PositionalRandomFactory randomFactory) {
@@ -64,13 +74,7 @@ public final class GpuOreVeinDecisions {
             throw new IllegalArgumentException("invalid ore-vein row destination");
         RandomSource random = randomFactory.at(x, y, z);
         target.putFloat(veinToggle).putFloat(veinRidged).putFloat(veinGap).putInt(y)
-                .putFloat(random.nextFloat()).putFloat(random.nextFloat()).putFloat(random.nextFloat())
-                .putInt(Block.getId(Blocks.COPPER_ORE.defaultBlockState()))
-                .putInt(Block.getId(Blocks.RAW_COPPER_BLOCK.defaultBlockState()))
-                .putInt(Block.getId(Blocks.GRANITE.defaultBlockState()))
-                .putInt(Block.getId(Blocks.DEEPSLATE_IRON_ORE.defaultBlockState()))
-                .putInt(Block.getId(Blocks.RAW_IRON_BLOCK.defaultBlockState()))
-                .putInt(Block.getId(Blocks.TUFF.defaultBlockState()));
+                .putFloat(random.nextFloat()).putFloat(random.nextFloat()).putFloat(random.nextFloat());
     }
 
     /** CPU reference used for Vulkan parity checks and threshold fallback. */
@@ -112,8 +116,8 @@ public final class GpuOreVeinDecisions {
             throw new IllegalArgumentException("invalid ore-vein record");
         ByteBuffer row = record.duplicate().order(ByteOrder.nativeOrder());
         return evaluate(row.getFloat(), row.getFloat(), row.getFloat(), row.getInt(),
-                row.getFloat(), row.getFloat(), row.getFloat(),
-                row.getInt(), row.getInt(), row.getInt(), row.getInt(), row.getInt(), row.getInt());
+                row.getFloat(), row.getFloat(), row.getFloat(), COMPACT_STATE_IDS[2], COMPACT_STATE_IDS[3],
+                COMPACT_STATE_IDS[4], COMPACT_STATE_IDS[5], COMPACT_STATE_IDS[6], COMPACT_STATE_IDS[7]);
     }
 
     public static ByteBuffer packBatch(ByteBuffer[] records) {

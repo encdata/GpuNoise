@@ -219,7 +219,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             aquiferSubstancePipelineLayout = aquiferSubstancePipelineLayout(stack);
             aquiferSubstancePipeline = aquiferSubstancePipeline(stack);
             oreVeinShader = loadShader(stack, "/assets/gpunoise/shaders/ore_vein.comp.spv", "ore vein shader");
-            oreVeinPipelineLayout = aquiferSubstancePipelineLayout(stack);
+            oreVeinPipelineLayout = oreVeinPipelineLayout(stack);
             oreVeinPipeline = aquiferPipeline(oreVeinShader, oreVeinPipelineLayout, stack, "ore vein pipeline");
             aquiferFluidStatusShader = loadShader(stack, "/assets/gpunoise/shaders/aquifer_fluid_status.comp.spv", "aquifer fluid-status shader");
             aquiferFluidStatusPipelineLayout = aquiferFluidStatusPipelineLayout(stack);
@@ -309,7 +309,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             aquiferSubstancePipelineLayout = aquiferSubstancePipelineLayout(stack);
             aquiferSubstancePipeline = aquiferSubstancePipeline(stack);
             oreVeinShader = loadShader(stack, "/assets/gpunoise/shaders/ore_vein.comp.spv", "ore vein shader");
-            oreVeinPipelineLayout = aquiferSubstancePipelineLayout(stack);
+            oreVeinPipelineLayout = oreVeinPipelineLayout(stack);
             oreVeinPipeline = aquiferPipeline(oreVeinShader, oreVeinPipelineLayout, stack, "ore vein pipeline");
             aquiferFluidStatusShader = loadShader(stack, "/assets/gpunoise/shaders/aquifer_fluid_status.comp.spv", "aquifer fluid-status shader");
             aquiferFluidStatusPipelineLayout = aquiferFluidStatusPipelineLayout(stack);
@@ -1228,7 +1228,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, oreVeinPipeline);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                     oreVeinPipelineLayout, 0, stack.longs(aquiferNearestDescriptorSet), null);
-            ByteBuffer push = stack.malloc(4).order(ByteOrder.nativeOrder()).putInt(count).flip();
+            ByteBuffer push = GpuOreVeinDecisions.putBatchParameters(
+                    stack.malloc(GpuOreVeinDecisions.PUSH_CONSTANT_BYTES).order(ByteOrder.nativeOrder()), count).flip();
             vkCmdPushConstants(commandBuffer, oreVeinPipelineLayout,
                     VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
             int outputWords = (count + 9) / 10;
@@ -1986,6 +1987,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long biomeSearchDescriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(biomeSearchDescriptorPool).pSetLayouts(s.longs(biomeSearchDescriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"biome search set");return h.get(0);}
     private void biomeSearchDescriptors(MemoryStack s){NativeBuffer[] bs={aquiferNearestInputs,biomeTreeBuffer,interpolationOutput};VkWriteDescriptorSet.Buffer w=VkWriteDescriptorSet.calloc(bs.length,s);for(int i=0;i<bs.length;i++){VkDescriptorBufferInfo.Buffer bi=VkDescriptorBufferInfo.calloc(1,s).buffer(bs[i].buffer).range(bs[i].size);w.get(i).sType$Default().dstSet(biomeSearchDescriptorSet).dstBinding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bi);}vkUpdateDescriptorSets(device,w,null);}
     private void aquiferNearestDescriptors(MemoryStack s){NativeBuffer[] bs={aquiferNearestInputs,aquiferNearestOutput};VkWriteDescriptorSet.Buffer w=VkWriteDescriptorSet.calloc(2,s);for(int i=0;i<2;i++){VkDescriptorBufferInfo.Buffer bi=VkDescriptorBufferInfo.calloc(1,s).buffer(bs[i].buffer).range(bs[i].size);w.get(i).sType$Default().dstSet(aquiferNearestDescriptorSet).dstBinding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bi);}vkUpdateDescriptorSets(device,w,null);}
+    private long oreVeinPipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(GpuOreVeinDecisions.PUSH_CONSTANT_BYTES);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(aquiferNearestDescriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"ore vein pipeline layout");return h.get(0);}
     private long aquiferSubstancePipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(4);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(aquiferNearestDescriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"aquifer substance pipeline layout");return h.get(0);}
     private long aquiferFluidStatusPipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(16);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(aquiferNearestDescriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"aquifer fluid-status pipeline layout");return h.get(0);}
     private long aquiferDecisionChainPipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(16);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(aquiferNearestDescriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"aquifer decision-chain pipeline layout");return h.get(0);}

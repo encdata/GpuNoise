@@ -9,6 +9,11 @@ struct InputRecord {
     float roll0;
     float roll1;
     float roll2;
+};
+layout(std430, set = 0, binding = 0) readonly buffer Inputs { InputRecord items[]; };
+layout(std430, set = 0, binding = 1) writeonly buffer Outputs { uint packedCodes[]; };
+layout(push_constant) uniform Parameters {
+    uint count;
     int copperOre;
     int copperRaw;
     int copperFiller;
@@ -16,9 +21,6 @@ struct InputRecord {
     int ironRaw;
     int ironFiller;
 };
-layout(std430, set = 0, binding = 0) readonly buffer Inputs { InputRecord items[]; };
-layout(std430, set = 0, binding = 1) writeonly buffer Outputs { uint packedCodes[]; };
-layout(push_constant) uniform Parameters { uint count; };
 
 const int NO_VEIN = -1;
 const int CPU_FALLBACK = -2;
@@ -59,24 +61,21 @@ int evaluate(InputRecord r) {
     if (near(r.roll1, oreChance) || near(r.veinGap, -0.3)) return CPU_FALLBACK;
     if (r.roll1 < oreChance && r.veinGap > -0.3) {
         if (near(r.roll2, 0.02)) return CPU_FALLBACK;
-        if (r.roll2 < 0.02) return copper ? r.copperRaw : r.ironRaw;
-        return copper ? r.copperOre : r.ironOre;
+        if (r.roll2 < 0.02) return copper ? copperRaw : ironRaw;
+        return copper ? copperOre : ironOre;
     }
-    return copper ? r.copperFiller : r.ironFiller;
+    return copper ? copperFiller : ironFiller;
 }
 
-uint compactCode(int state, InputRecord r) {
+uint compactCode(int state) {
     if (state == NO_VEIN) return 0u;
     if (state == CPU_FALLBACK) return 1u;
-    if (state == r.copperOre) return 2u;
-    if (state == r.copperRaw) return 3u;
-    if (state == r.copperFiller) return 4u;
-    if (state == r.ironOre) return 5u;
-    if (state == r.ironRaw) return 6u;
-    if (state == r.ironFiller) return 7u;
-    // Inputs currently carry the six vanilla OreVeinifier states. Preserve
-    // parity if a future caller supplies an unrecognized state by marking it
-    // for the Java path rather than silently selecting another palette slot.
+    if (state == copperOre) return 2u;
+    if (state == copperRaw) return 3u;
+    if (state == copperFiller) return 4u;
+    if (state == ironOre) return 5u;
+    if (state == ironRaw) return 6u;
+    if (state == ironFiller) return 7u;
     return 1u;
 }
 
@@ -87,7 +86,7 @@ void main() {
     uint packed = 0u;
     for (uint offset = 0u; offset < 10u && firstRow + offset < count; offset++) {
         InputRecord row = items[firstRow + offset];
-        uint code = compactCode(evaluate(row), row);
+        uint code = compactCode(evaluate(row));
         packed |= code << (offset * 3u);
     }
     packedCodes[wordIndex] = packed;
