@@ -64,7 +64,6 @@ jobs:
 
       - name: Install GLSL compiler
         run: |
-          sudo apt-get update
           sudo apt-get install --yes glslc mesa-vulkan-drivers vulkan-tools xvfb
 
       - name: Verify Mesa Lavapipe is available
@@ -133,7 +132,6 @@ jobs:
 
       - name: Install Mesa Lavapipe and Vulkan tools
         run: |
-          sudo apt-get update
           sudo apt-get install --yes glslc mesa-vulkan-drivers vulkan-tools
 
       - name: Verify Mesa Lavapipe is available
