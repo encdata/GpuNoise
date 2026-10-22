@@ -377,11 +377,19 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     if (!Double.isFinite(density)) continue;
                     int index = (y - minY) * 256 + (z - minZ) * 16 + (x - minX);
                     if (density > 0.0) {
-                        // Positive density never asks the aquifer for a block
-                        // state. OreVeinifier and any mod material rules still
-                        // require the vanilla rule list, so sending a null
-                        // aquifer result through a separate Vulkan dispatch
-                        // only adds records and readback with no writer benefit.
+                        if (GpuAquiferSubstance.nearDensityDecisionThreshold(density)) {
+                            // The graph's float result may have a different
+                            // sign from vanilla's double result at this
+                            // boundary. Keep NoiseChunk's Java calculation
+                            // authoritative for these samples.
+                            continue;
+                        }
+                        // Vanilla NoiseBasedAquifer returns null immediately
+                        // for positive density. Publish that exact result in
+                        // the same table as dispatched substance decisions so
+                        // the writer can skip NoiseChunk interpolation without
+                        // another GPU dispatch or readback.
+                        decisions.set(index, null, density, false);
                         positiveDensityDecisions++;
                         continue;
                     }
@@ -747,9 +755,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         if (cumulativePositive > 0
                 && gpunoise$terrainDecisionBatchLogged.compareAndSet(false, true)) {
             dev.gpunoise.GpuNoise.LOGGER.info(
-                    "GPU terrain material decisions: skippedPositiveDensityQueries={}, submittedAquiferRows={}, "
+                    "GPU terrain material decisions: positiveDensityDefaultRows={}, submittedAquiferRows={}, "
                             + "centerStatusReferences={}, uniqueCenterStatuses={}, "
-                            + "acceptedDecisions={}, cpuFallback={}, "
+                            + "acceptedAquiferDecisions={}, cpuFallback={}, "
                             + "directGlobalFluidQueries={}, javaReferenceSamples={}, javaReferenceMismatches={}",
                     cumulativePositive, cumulativeGpuRows,
                     queries.size() * 4L, fluidStatuses.size(),

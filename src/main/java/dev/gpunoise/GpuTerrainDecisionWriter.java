@@ -163,7 +163,7 @@ public final class GpuTerrainDecisionWriter {
      * Preserves NoiseChunk's cell-interpolation lifecycle and uses resolved
      * Vulkan aquifer states directly. The caller must acquire all touched
      * sections and validate table coverage before this method writes. Rejected
-     * rows and null aquifer results continue through vanilla material rules.
+     * rows continue through vanilla NoiseChunk interpolation and aquifer evaluation.
      */
     public static ChunkAccess write(ChunkAccess chunk, NoiseChunk noiseChunk,
                                     GpuAquiferDecisionTable decisions,
@@ -233,28 +233,26 @@ public final class GpuTerrainDecisionWriter {
                                 BlockState gpuState = null;
                                 boolean exactGpuDecision = false;
                                 // The table is tied to the exact density passed
-                                // to NoiseChunk's aquifer rule. Revalidate that
-                                // input while replaying interpolation, and
-                                // leave parity-traced columns on vanilla so its
+                                // to NoiseChunk's aquifer rule. A valid null is
+                                // meaningful: it is the aquifer's exact
+                                // RETURN_DEFAULT result, including positive
+                                // density rows, so it can bypass CPU
+                                // interpolation just like a returned block.
+                                // Leave parity-traced columns on vanilla so its
                                 // Java comparison still observes the real path.
                                 if (densityCache != null && decisions.isValid(decisionIndex)
                                         && !GpuTerrainDensityParity.shouldCompare(x, z)) {
                                     BlockState candidate = decisions.state(decisionIndex);
-                                    if (candidate != null) {
-                                        double cachedDensity = densityCache.finalDensity(x, y, z);
-                                        if (!Double.isNaN(cachedDensity)) {
-                                            double density = noiseAccess.gpunoise$withBeardifier(
-                                                    cachedDensity, x, y, z);
-                                            if (decisions.matchesDensity(decisionIndex, density)) {
-                                                gpuState = candidate;
-                                                exactGpuDecision = true;
-                                            }
+                                    double cachedDensity = densityCache.finalDensity(x, y, z);
+                                    if (!Double.isNaN(cachedDensity)) {
+                                        double density = noiseAccess.gpunoise$withBeardifier(
+                                                cachedDensity, x, y, z);
+                                        if (decisions.matchesDensity(decisionIndex, density)) {
+                                            gpuState = candidate;
+                                            exactGpuDecision = true;
                                         }
                                     }
                                 }
-                                // A null aquifer result must continue through
-                                // Minecraft's material-rule list (including
-                                // OreVeinifier) before using the default block.
                                 boolean gpuStateResolved = exactGpuDecision;
                                 BlockState state;
                                 if (gpuStateResolved) {
@@ -263,7 +261,7 @@ public final class GpuTerrainDecisionWriter {
                                     // walking every NoiseChunk interpolator for
                                     // this block; initialize the interpolation
                                     // context lazily only if a later block needs
-                                    // the full vanilla material-rule chain.
+                                    // the full vanilla interpolation/aquifer path.
                                     state = gpuState;
                                 } else {
                                     if (!yInterpolationReady) {
