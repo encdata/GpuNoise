@@ -30,8 +30,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: gpunoise-${{ github.workflow }}-${{ github.ref }}
-  # Keep an in-progress worldgen parity matrix alive while newer changes queue.
+  # Preserve each revision's full parity matrix without making an older run
+  # on the same branch hold the newest build and five profile checks hostage.
+  group: gpunoise-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
