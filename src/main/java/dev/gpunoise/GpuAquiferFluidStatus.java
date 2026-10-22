@@ -15,7 +15,12 @@ public final class GpuAquiferFluidStatus {
     /** Compact [y, level, exact state ID, kind] row for Java-precomputed statuses. */
     public static final int COMPACT_PRECOMPUTED_RECORD_BYTES = 16;
     /** Upper bound for a single C2ME chunk's unique center neighborhood. */
-    public static final int MAX_PREFILL_CENTERS = 8192;
+    /**
+     * Aquifer nearest queries can reference substantially more than 8k unique
+     * centers in large chunks. Keep enough status rows resident to co-submit
+     * the nearest, status, and substance passes as one Vulkan submission.
+     */
+    public static final int MAX_PREFILL_CENTERS = 32_768;
     /** Level, selected source, flags, exact fluid block-state ID, and broad kind. */
     public static final int OUTPUT_INTS = 5;
     public static final int MAX_QUERIES = PersistentVulkanNormalNoiseEngine.CAPACITY;
