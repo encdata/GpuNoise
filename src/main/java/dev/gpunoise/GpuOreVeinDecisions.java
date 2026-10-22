@@ -35,6 +35,14 @@ public final class GpuOreVeinDecisions {
         return COMPACT_STATE_IDS[code];
     }
 
+    static byte compactCodeForStateId(int stateId) {
+        for (byte code = 0; code < COMPACT_STATE_IDS.length; code++) {
+            if (COMPACT_STATE_IDS[code] == stateId) return code;
+        }
+        // Unknown output IDs must stay on the authoritative Java filler.
+        return (byte) COMPACT_CPU_FALLBACK;
+    }
+
     /** Packs one block row using the same positional random stream as OreVeinifier. */
     public static ByteBuffer pack(float veinToggle, float veinRidged, float veinGap,
                                   int x, int y, int z, PositionalRandomFactory randomFactory) {

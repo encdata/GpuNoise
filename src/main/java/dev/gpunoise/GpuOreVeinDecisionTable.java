@@ -1,6 +1,5 @@
 package dev.gpunoise;
 
-import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -10,17 +9,17 @@ import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 public final class GpuOreVeinDecisionTable {
     public static final int MISSING = Integer.MIN_VALUE;
     private final int minX, minY, minZ, height;
-    private final int[] stateIds;
+    private final byte[] stateCodes;
 
-    private GpuOreVeinDecisionTable(int minX, int minY, int minZ, int height, int[] stateIds) {
+    private GpuOreVeinDecisionTable(int minX, int minY, int minZ, int height, byte[] stateCodes) {
         int expected = Math.multiplyExact(height, 256);
-        if (height <= 0 || stateIds == null || stateIds.length != expected)
+        if (height <= 0 || stateCodes == null || stateCodes.length != expected)
             throw new IllegalArgumentException("invalid ore-vein result slab");
         this.minX = minX;
         this.minY = minY;
         this.minZ = minZ;
         this.height = height;
-        this.stateIds = stateIds;
+        this.stateCodes = stateCodes;
     }
 
     static CompletionStage<GpuOreVeinDecisionTable> build(GpuChunkDensityCache cache,
@@ -35,12 +34,11 @@ public final class GpuOreVeinDecisionTable {
             GpuNoise.LOGGER.warn("Ore-vein Vulkan output exceeds addressable chunk size; OreVeinifier stays on Java");
             return CompletableFuture.completedFuture(null);
         }
-        int[] states = new int[rows];
+        byte[] states = new byte[rows];
         // OreVeinifier's copper and iron veins are both hard-bounded to
         // [-60, 50]. Outside that union the vanilla result is always null,
         // regardless of density roots or positional randomness. Keep those
         // rows as NO_VEIN locally instead of uploading and reading them back.
-        Arrays.fill(states, GpuOreVeinDecisions.NO_VEIN);
         int firstY = Math.max(minY, -60);
         int endY = Math.min(Math.addExact(minY, height), 51);
         if (firstY >= endY) {
@@ -61,7 +59,9 @@ public final class GpuOreVeinDecisionTable {
                     .thenApply(batchStates -> {
                         if (batchStates == null || batchStates.length != count)
                             throw new IllegalStateException("Vulkan returned an invalid ore-vein result batch");
-                        System.arraycopy(batchStates, 0, output, batchOffset, count);
+                        for (int row = 0; row < count; row++) {
+                            output[batchOffset + row] = GpuOreVeinDecisions.compactCodeForStateId(batchStates[row]);
+                        }
                         return output;
                     }));
         }
@@ -99,6 +99,7 @@ public final class GpuOreVeinDecisionTable {
         int localX = x - minX, localY = y - minY, localZ = z - minZ;
         if (localX < 0 || localX >= 16 || localY < 0 || localY >= height
                 || localZ < 0 || localZ >= 16) return MISSING;
-        return stateIds[localY * 256 + localZ * 16 + localX];
+        int code = Byte.toUnsignedInt(stateCodes[localY * 256 + localZ * 16 + localX]);
+        return GpuOreVeinDecisions.decodeCompactCode(code);
     }
 }
