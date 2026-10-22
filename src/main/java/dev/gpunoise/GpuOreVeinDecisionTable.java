@@ -47,20 +47,21 @@ public final class GpuOreVeinDecisionTable {
         }
         int firstRow = Math.multiplyExact(firstY - minY, 256);
         int activeRows = Math.multiplyExact(endY - firstY, 256);
-        CompletableFuture<byte[]> batches = CompletableFuture.completedFuture(states);
+        CompletableFuture<GpuOreVeinDecisionTable> batches = CompletableFuture.completedFuture(
+                new GpuOreVeinDecisionTable(minX, minY, minZ, height, states));
         int maxRows = PersistentVulkanNormalNoiseEngine.CAPACITY;
         for (int offset = 0; offset < activeRows; offset += maxRows) {
             int batchOffset = firstRow + offset;
             int count = Math.min(maxRows, activeRows - offset);
-            batches = batches.thenCompose(output -> CompletableFuture.supplyAsync(
+            batches = batches.thenCompose(table -> CompletableFuture.supplyAsync(
                             () -> packRows(cache, randomFactory, minX, minY, minZ, batchOffset, count),
                             net.minecraft.Util.backgroundExecutor())
                     .thenCompose(records -> GpuTerrainRuntime.submitOreVeinDecisions(records, count))
-                    .thenApply(batchStates -> {
-                        if (batchStates == null || batchStates.length != count)
+                    .thenApply(batchResult -> {
+                        if (batchResult == null || batchResult.count() != count)
                             throw new IllegalStateException("Vulkan returned an invalid ore-vein result batch");
-                        System.arraycopy(batchStates, 0, output, batchOffset, count);
-                        return output;
+                        batchResult.copyTo(table.stateCodes, batchOffset);
+                        return table;
                     }));
         }
         return batches.handle((completed, failure) -> {
@@ -70,7 +71,7 @@ public final class GpuOreVeinDecisionTable {
             }
             GpuNoise.LOGGER.info("GPU ore-vein decision preparation completed: {} of {} blocks dispatched to Vulkan",
                     activeRows, rows);
-            return new GpuOreVeinDecisionTable(minX, minY, minZ, height, completed);
+            return completed;
         });
     }
 

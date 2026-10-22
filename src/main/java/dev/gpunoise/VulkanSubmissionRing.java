@@ -752,9 +752,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 GpuTerrainProfiler.recordOreVeinBatch(totalRows, requests.size());
                 int offset = 0;
                 for (OreVeinRequest request : requests) {
-                    int end = offset + request.count;
                     completeOnDispatchWorker(request.future,
-                            java.util.Arrays.copyOfRange(rows, offset, end), null);
+                            new GpuOreVeinBatchResult(rows, offset, request.count), null);
                     offset = end;
                 }
             });
@@ -1335,8 +1334,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
         return future;
     }
 
-    CompletableFuture<byte[]> submitOreVeinDecisions(ByteBuffer records, int count) {
-        CompletableFuture<byte[]> future = new CompletableFuture<>();
+    CompletableFuture<GpuOreVeinBatchResult> submitOreVeinDecisions(ByteBuffer records, int count) {
+        CompletableFuture<GpuOreVeinBatchResult> future = new CompletableFuture<>();
         if (records == null || count <= 0 || count > PersistentVulkanNormalNoiseEngine.CAPACITY
                 || records.remaining() != (long) count * GpuOreVeinDecisions.RECORD_BYTES) {
             future.completeExceptionally(new IllegalArgumentException("invalid ore-vein decision request"));
@@ -1574,7 +1573,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                          boolean decisionChain,
                                          CompletableFuture<GpuAquiferPrefillResult> future, long enqueuedNanos)
             implements DispatchRequest {}
-    private record OreVeinRequest(ByteBuffer records, int count, CompletableFuture<byte[]> future,
+    private record OreVeinRequest(ByteBuffer records, int count,
+                                  CompletableFuture<GpuOreVeinBatchResult> future,
                                   long enqueuedNanos) implements DispatchRequest {}
     private record NearestPayload(ByteBuffer records, int count, int statusRowOffset) {}
     @FunctionalInterface

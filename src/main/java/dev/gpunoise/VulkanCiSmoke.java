@@ -1403,7 +1403,12 @@ public final class VulkanCiSmoke {
             expected[i] = GpuOreVeinDecisions.evaluate(records[i]);
         }
         ByteBuffer packed = GpuOreVeinDecisions.packBatch(records);
-        byte[] actual = ring.submitOreVeinDecisions(packed, records.length).get(60, TimeUnit.SECONDS);
+        GpuOreVeinBatchResult batch = ring.submitOreVeinDecisions(packed, records.length)
+                .get(60, TimeUnit.SECONDS);
+        if (batch.count() != records.length)
+            throw new IllegalStateException("Ore-vein Vulkan output length differs from its input batch");
+        byte[] actual = new byte[records.length];
+        batch.copyTo(actual, 0);
         if (actual.length != expected.length)
             throw new IllegalStateException("Ore-vein Vulkan output length differs from its input batch");
         int gpuResolvedRows = 0;
