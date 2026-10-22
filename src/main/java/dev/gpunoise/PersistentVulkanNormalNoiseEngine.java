@@ -44,7 +44,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     /** Keep common parity/production root masks warm without retaining unbounded pipelines. */
     private static final int MAX_CACHED_BLOCK_GRAPH_VARIANTS = 3;
     private static final int[] GRAPH_DESCRIPTOR_BINDINGS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14};
-    static final int INTERPOLATED_INPUT_FLOATS = CAPACITY * MAX_INTERPOLATORS;
+    /** Kept as a valid descriptor for legacy SPIR-V; fused block shaders do not use marker storage. */
+    private static final long UNUSED_INTERPOLATED_INPUT_BYTES = Float.BYTES;
     private final VkInstance instance;
     private final VkPhysicalDevice physical;
     private final VkDevice device;
@@ -178,7 +179,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             results = buffer(CAPACITY * (long) MAX_GRAPH_OUTPUTS * Float.BYTES, stack);
             graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack); graphNodes = deviceLocalBuffer((long) GRAPH_NODE_STORAGE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack); graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 2L * 64L * 16L, stack); graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack); graphRoots = deviceLocalBuffer(128L, stack);
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
-            interpolatedInputs = deviceLocalBuffer((long) INTERPOLATED_INPUT_FLOATS * Float.BYTES, stack);
+            interpolatedInputs = deviceLocalBuffer(UNUSED_INTERPOLATED_INPUT_BYTES, stack);
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
             interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack);
             interpolationOutput = buffer((long) INTERPOLATION_OUTPUT_FLOATS * Float.BYTES, stack);
@@ -266,7 +267,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack);
             graphRoots = deviceLocalBuffer(128L, stack);
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
-            interpolatedInputs = deviceLocalBuffer((long) INTERPOLATED_INPUT_FLOATS * Float.BYTES, stack);
+            interpolatedInputs = deviceLocalBuffer(UNUSED_INTERPOLATED_INPUT_BYTES, stack);
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
             interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack);
             interpolationOutput = buffer((long) INTERPOLATION_OUTPUT_FLOATS * Float.BYTES, stack);
