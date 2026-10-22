@@ -571,9 +571,7 @@ public final class VulkanCiSmoke {
                     .get(60, TimeUnit.SECONDS);
             if (compactCorners.corners().roots() != markerTerrain.corners().roots()
                     || compactCorners.corners().stride() != 2
-                    || compactCorners.corners().sampleCount() != 8
-                    || compactCorners.corners().valueAt(0, 0) != markerTerrain.corners().valueAt(0, 0)
-                    || compactCorners.corners().valueAt(0, 1) != markerTerrain.corners().valueAt(0, 1)) {
+                    || compactCorners.corners().sampleCount() != 8) {
                 throw new IllegalStateException("Compact terrain corner readback lost logical root identity: logicalRoots="
                         + compactCorners.corners().roots() + "/" + markerTerrain.corners().roots()
                         + ", compactStride=" + compactCorners.corners().stride()
@@ -587,6 +585,17 @@ public final class VulkanCiSmoke {
                                 .map(node -> node.opcode() + "@" + node.register() + "<-"
                                         + java.util.Arrays.toString(node.children()))
                                 .toList());
+            }
+            for (int sample = 0; sample < markerTerrain.corners().sampleCount(); sample++) {
+                for (int root = 0; root < 2; root++) {
+                    float compactValue = compactCorners.corners().valueAt(sample, root);
+                    float fullValue = markerTerrain.corners().valueAt(sample, root);
+                    if (Float.floatToIntBits(compactValue) != Float.floatToIntBits(fullValue)) {
+                        throw new IllegalStateException("Compact terrain corner value mismatch at sample="
+                                + sample + ", logicalRoot=" + root + ": compact=" + compactValue
+                                + ", full=" + fullValue + ", selectedRoots=[1,0]");
+                    }
+                }
             }
             if (markerBlocks.rootCount() != GpuTerrainRoots.COUNT
                     || !markerBlocks.contains(15, 0, 15)) {
