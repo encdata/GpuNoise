@@ -26,13 +26,6 @@ public abstract class OreVeinifierGpuMixin {
     @org.spongepowered.asm.mixin.Unique
     private static final AtomicBoolean gpunoise$useLogged = new AtomicBoolean();
 
-    @org.spongepowered.asm.mixin.gen.Invoker("create")
-    public static NoiseChunk.BlockStateFiller gpunoise$invokeCreate(
-            DensityFunction toggle, DensityFunction ridged, DensityFunction gap,
-            PositionalRandomFactory randomFactory) {
-        throw new AssertionError("Mixin invoker was not transformed");
-    }
-
     @Inject(method = "create", at = @At("RETURN"), cancellable = true)
     private static void gpunoise$useGpuOreVeinRows(
             DensityFunction toggle, DensityFunction ridged, DensityFunction gap,
