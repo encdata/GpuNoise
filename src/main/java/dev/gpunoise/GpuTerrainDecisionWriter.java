@@ -193,6 +193,16 @@ public final class GpuTerrainDecisionWriter {
                 ? null : densityCache.finalDensityBlockView();
         net.minecraft.world.level.levelgen.Aquifer aquifer = noiseChunk.aquifer();
         long finalDensityBlockReads = 0L;
+        boolean[] parityColumns = null;
+        if (GpuTerrainDensityParity.enabled()) {
+            parityColumns = new boolean[256];
+            for (int localZ = 0; localZ < 16; localZ++) {
+                for (int localX = 0; localX < 16; localX++) {
+                    parityColumns[(localZ << 4) | localX] = GpuTerrainDensityParity.shouldCompare(
+                            startX + localX, startZ + localZ);
+                }
+            }
+        }
 
         noiseChunk.initializeForFirstCellX();
         for (int cellX = 0; cellX < cellsXZ; cellX++) {
@@ -215,6 +225,7 @@ public final class GpuTerrainDecisionWriter {
 
                                 int decisionIndex = (y - minDecisionY) * 256
                                         + (z - startZ) * 16 + (x - startX);
+                                int columnIndex = (localZ << 4) | localX;
                                 BlockState gpuState = null;
                                 boolean exactGpuDecision = false;
                                 // The table is tied to the exact density passed
@@ -226,7 +237,7 @@ public final class GpuTerrainDecisionWriter {
                                 // Leave parity-traced columns on vanilla so its
                                 // Java comparison still observes the real path.
                                 if (densityCache != null && decisions.isValid(decisionIndex)
-                                        && !GpuTerrainDensityParity.shouldCompare(x, z)) {
+                                        && (parityColumns == null || !parityColumns[columnIndex])) {
                                     BlockState candidate = decisions.state(decisionIndex);
                                     double cachedDensity;
                                     int densityX = x - densityCache.minX();
