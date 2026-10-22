@@ -52,7 +52,7 @@ public final class GpuAquiferPrefillResult {
                 source.decisionStorage, decisionOffset, decisionLength);
     }
 
-    GpuAquiferPrefillResult withoutFluidStatusRows() {
+    public GpuAquiferPrefillResult withoutFluidStatusRows() {
         return new GpuAquiferPrefillResult(nearestStorage, nearestOffset, nearestLength,
                 EMPTY, 0, 0, decisionStorage, decisionOffset, decisionLength);
     }

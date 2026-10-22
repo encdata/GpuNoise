@@ -262,7 +262,7 @@ public final class GpuTerrainRuntime {
             try {
                 preparedCache.prepareOreVeinDecisions(oreRandom);
             } catch (RuntimeException failure) {
-                LOGGER.warn("GPU ore-vein preparation could not be queued; OreVeinifier stays on Java", failure);
+                GpuNoise.LOGGER.warn("GPU ore-vein preparation could not be queued; OreVeinifier stays on Java", failure);
             }
             if (preparedCache.markCompleted()) gpuChunksCompleted.incrementAndGet();
             logChunkStatistics(false);
