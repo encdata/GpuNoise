@@ -178,7 +178,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             coordinates = buffer(CAPACITY * 16L, stack); // vec4 position; sampler id occupies unused w
             // Graph dispatches can return up to 16 router roots per sample.
             results = buffer(CAPACITY * (long) MAX_GRAPH_OUTPUTS * Float.BYTES, stack);
-            graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack); graphNodes = deviceLocalBuffer((long) GRAPH_NODE_STORAGE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack); graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 2L * 64L * 16L, stack); graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack); graphRoots = deviceLocalBuffer(128L, stack);
+            graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack); graphNodes = deviceLocalBuffer((long) GRAPH_NODE_STORAGE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack); graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 2L * 64L * 16L, stack); graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack); graphRoots = hostVisibleBuffer(128L, stack);
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
             terrainCornerMarkers = deviceLocalBuffer((long) TERRAIN_CORNER_MARKER_FLOATS * Float.BYTES, stack);
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
@@ -266,7 +266,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             graphNodes = deviceLocalBuffer((long) GRAPH_NODE_STORAGE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack);
             graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 2L * 64L * 16L, stack);
             graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack);
-            graphRoots = deviceLocalBuffer(128L, stack);
+            graphRoots = hostVisibleBuffer(128L, stack);
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
             terrainCornerMarkers = deviceLocalBuffer((long) TERRAIN_CORNER_MARKER_FLOATS * Float.BYTES, stack);
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
