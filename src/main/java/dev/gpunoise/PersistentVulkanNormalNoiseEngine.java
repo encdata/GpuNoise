@@ -148,6 +148,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long totalTerrainFusedBlockGpuNanos;
     private long terrainGpuTimestampSamples;
     private long totalTerrainMetadataUploadBytes;
+    private long totalTerrainGraphUploadBytes;
+    private long totalTerrainGraphUploadSubmissions;
     private long totalTerrainCornerReadbackBytes;
     private long totalTerrainBlockReadbackBytes;
     private long timestampQueryPool;
@@ -356,14 +358,10 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         if (packed.nodeCount() > GRAPH_NODE_CAPACITY) throw new IllegalArgumentException("density graph exceeds GPU node capacity");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             writeGraphCoordinates(xs, ys, zs, xs.length);
-            if (graphResourcesGraph != graph || graphResourcesPacked != packed) {
-                put(graphNodes, packed.nodes(), stack);
-                put(graphSplinePoints, packed.splinePoints(), stack);
-                put(graphBlendedMetadata, packed.blendedMetadata(), stack);
-            }
+            boolean graphChanged = graphResourcesGraph != graph || graphResourcesPacked != packed;
+            if (graphChanged) uploadGraphResources(packed, stack);
             uploadGraphRoots(new int[]{resultNode}, stack);
-            if (graphResourcesGraph != graph || graphResourcesPacked != packed) {
-                put(permutations, packed.permutations(), stack); put(octaves, packed.octaves(), stack); put(samplerMetadata, packed.samplerMetadata(), stack);
+            if (graphChanged) {
                 graphResourcesGraph = graph; graphResourcesPacked = packed;
             }
             check(vkResetCommandBuffer(commandBuffer, 0), "reset graph command buffer");
@@ -397,13 +395,10 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
             writeGraphCoordinates(xs, ys, zs, sampleCount);
-            if (graphResourcesGraph != graph || graphResourcesPacked != packed) {
-                put(graphNodes, packed.nodes(), stack);
-                put(graphSplinePoints, packed.splinePoints(), stack); put(graphBlendedMetadata, packed.blendedMetadata(), stack);
-            }
+            boolean graphChanged = graphResourcesGraph != graph || graphResourcesPacked != packed;
+            if (graphChanged) uploadGraphResources(packed, stack);
             uploadGraphRoots(graph.routerRoots(), stack);
-            if (graphResourcesGraph != graph || graphResourcesPacked != packed) {
-                put(permutations, packed.permutations(), stack); put(octaves, packed.octaves(), stack); put(samplerMetadata, packed.samplerMetadata(), stack);
+            if (graphChanged) {
                 graphResourcesGraph = graph; graphResourcesPacked = packed;
             }
             check(vkResetCommandBuffer(commandBuffer, 0), "reset graph roots command buffer");
@@ -460,10 +455,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             ensureGraphVariant(graph, stack);
             writeGraphCoordinates(xs, ys, zs, sampleCount);
             if (graphResourcesGraph != graph || graphResourcesPacked != packed) {
-                put(graphNodes, packed.nodes(), stack); put(graphSplinePoints, packed.splinePoints(), stack);
-                put(graphBlendedMetadata, packed.blendedMetadata(), stack);
-                put(permutations, packed.permutations(), stack); put(octaves, packed.octaves(), stack);
-                put(samplerMetadata, packed.samplerMetadata(), stack); graphResourcesGraph = graph; graphResourcesPacked = packed;
+                uploadGraphResources(packed, stack);
+                graphResourcesGraph = graph; graphResourcesPacked = packed;
             }
             uploadGraphRoots(selectedRootRegisters, stack);
             check(vkResetCommandBuffer(commandBuffer, 0), "reset async graph-roots command buffer");
@@ -521,10 +514,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             put(graphCoordinates, metadata, stack);
             uploadInterpolatorMap(graph, stack);
             if (graphResourcesGraph != graph || graphResourcesPacked != packed) {
-                put(graphNodes, packed.nodes(), stack); put(graphSplinePoints, packed.splinePoints(), stack);
-                put(graphBlendedMetadata, packed.blendedMetadata(), stack);
-                put(permutations, packed.permutations(), stack); put(octaves, packed.octaves(), stack);
-                put(samplerMetadata, packed.samplerMetadata(), stack); graphResourcesGraph = graph; graphResourcesPacked = packed;
+                uploadGraphResources(packed, stack);
+                graphResourcesGraph = graph; graphResourcesPacked = packed;
             }
             uploadGraphRoots(graph.routerRoots(), stack);
             check(vkResetCommandBuffer(commandBuffer, 0), "reset grid command buffer");
@@ -723,12 +714,15 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     : totalTerrainGridGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
             double averageFusedBlockGpuMs = terrainGpuTimestampSamples == 0 ? -1.0
                     : totalTerrainFusedBlockGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
-            GpuNoise.LOGGER.info("GPU full terrain profile: batches={}, queueSubmissions={}, computeDispatches={}, avgCpuPrepareMs={}, avgSubmitToFenceMs={}, avgReadbackMs={}, gridMetadataUploadMiBPerBatch={}, cornerReadbackMiBPerBatch={}, blockReadbackMiBPerBatch={}, avgGridGpuMs={}, avgFusedBlockGpuMs={}, gpuTimingSamples={}",
+            GpuNoise.LOGGER.info("GPU full terrain profile: batches={}, terrainQueueSubmissions={}, computeDispatches={}, avgCpuPrepareMs={}, avgSubmitToFenceMs={}, avgReadbackMs={}, gridMetadataUploadMiBPerBatch={}, graphResourceUploadMiBPerGraphChange={}, graphResourceUploadSubmissions={}, cornerReadbackMiBPerBatch={}, blockReadbackMiBPerBatch={}, avgGridGpuMs={}, avgFusedBlockGpuMs={}, gpuTimingSamples={}",
                     completed, completed, completed * 2L,
                     totalTerrainPreparationNanos / (double) completed / 1_000_000.0,
                     totalTerrainFenceNanos / (double) completed / 1_000_000.0,
                     totalTerrainReadbackNanos / (double) completed / 1_000_000.0,
                     totalTerrainMetadataUploadBytes / (double) completed / (1024.0 * 1024.0),
+                    totalTerrainGraphUploadBytes / (double) Math.max(1L, totalTerrainGraphUploadSubmissions)
+                            / (1024.0 * 1024.0),
+                    totalTerrainGraphUploadSubmissions,
                     totalTerrainCornerReadbackBytes / (double) completed / (1024.0 * 1024.0),
                     totalTerrainBlockReadbackBytes / (double) completed / (1024.0 * 1024.0),
                     averageGridGpuMs, averageFusedBlockGpuMs,
@@ -837,10 +831,11 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             grids.limit(grids.position() + chunkCount * 32);
             put(graphCoordinates, grids, stack);
             if (graphResourcesGraph != graph || graphResourcesPacked != packed) {
-                put(graphNodes, packed.nodes(), stack); put(graphSplinePoints, packed.splinePoints(), stack);
-                put(graphBlendedMetadata, packed.blendedMetadata(), stack);
-                put(permutations, packed.permutations(), stack); put(octaves, packed.octaves(), stack);
-                put(samplerMetadata, packed.samplerMetadata(), stack); graphResourcesGraph = graph; graphResourcesPacked = packed;
+                uploadGraphResources(packed, stack);
+                totalTerrainGraphUploadBytes += graphResourceUploadBytes(packed);
+                totalTerrainGraphUploadSubmissions++;
+                graphResourcesGraph = graph;
+                graphResourcesPacked = packed;
             }
             uploadInterpolatorMap(graph, stack);
             uploadGraphRoots(graph.routerRoots(), blockRootRegisters, stack);
@@ -921,10 +916,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             writeGraphCoordinates(xs, ys, zs, sampleCount);
             if (graphResourcesGraph != graph || graphResourcesPacked != packed) {
-                put(graphNodes, packed.nodes(), stack); put(graphSplinePoints, packed.splinePoints(), stack);
-                put(graphBlendedMetadata, packed.blendedMetadata(), stack);
-                put(permutations, packed.permutations(), stack); put(octaves, packed.octaves(), stack);
-                put(samplerMetadata, packed.samplerMetadata(), stack); graphResourcesGraph = graph; graphResourcesPacked = packed;
+                uploadGraphResources(packed, stack);
+                graphResourcesGraph = graph; graphResourcesPacked = packed;
             }
             uploadGraphRoots(graph.routerRoots(), stack); put(interpolationMetadata, metadata, stack);
             check(vkResetCommandBuffer(commandBuffer, 0), "reset fused command buffer");
@@ -1704,6 +1697,69 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         mapped.clear();
         for (int i = 0; i < count; i++) mapped.putFloat(xs[i]).putFloat(ys[i]).putFloat(zs[i]).putFloat(0.0f);
         mapped.flip();
+    }
+
+    /** Uploads the immutable graph buffers with one staging allocation and one queue submission. */
+    private void uploadGraphResources(GpuDensityGraphBuffer.Packed packed, MemoryStack stack) {
+        NativeBuffer[] targets = {graphNodes, graphSplinePoints, graphBlendedMetadata,
+                permutations, octaves, samplerMetadata};
+        ByteBuffer[] sources = {packed.nodes(), packed.splinePoints(), packed.blendedMetadata(),
+                packed.permutations(), packed.octaves(), packed.samplerMetadata()};
+        int[] offsets = new int[sources.length];
+        int totalBytes = 0;
+        for (int i = 0; i < sources.length; i++) {
+            int bytes = sources[i].remaining();
+            if (bytes < 0 || bytes > targets[i].size || persistentMappings.containsKey(targets[i])) {
+                throw new IllegalArgumentException("invalid device-local graph resource upload at index " + i);
+            }
+            offsets[i] = totalBytes;
+            totalBytes = Math.addExact(totalBytes, bytes);
+        }
+        if (totalBytes == 0) return;
+
+        NativeBuffer staging = hostVisibleBuffer(totalBytes, stack);
+        boolean stagingMapped = false;
+        try {
+            ByteBuffer stagingMap = staging.map(device, stack).order(ByteOrder.nativeOrder());
+            stagingMapped = true;
+            for (ByteBuffer source : sources) stagingMap.put(source.duplicate());
+            check(vkResetCommandBuffer(commandBuffer, 0), "reset graph resource upload command buffer");
+            check(vkBeginCommandBuffer(commandBuffer,
+                    VkCommandBufferBeginInfo.calloc(stack).sType$Default()), "begin graph resource upload command buffer");
+            VkBufferMemoryBarrier.Buffer uploadBarriers = VkBufferMemoryBarrier.calloc(sources.length, stack);
+            int barrierCount = 0;
+            for (int i = 0; i < sources.length; i++) {
+                long bytes = sources[i].remaining();
+                if (bytes == 0L) continue;
+                VkBufferCopy.Buffer copy = VkBufferCopy.calloc(1, stack)
+                        .srcOffset(offsets[i]).dstOffset(0).size(bytes);
+                vkCmdCopyBuffer(commandBuffer, staging.buffer, targets[i].buffer, copy);
+                uploadBarriers.get(barrierCount++).sType$Default()
+                        .srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_SHADER_READ_BIT)
+                        .buffer(targets[i].buffer).offset(0).size(bytes);
+            }
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, null,
+                    uploadBarriers.limit(barrierCount), null);
+            check(vkEndCommandBuffer(commandBuffer), "end graph resource upload command buffer");
+            synchronized (queueSubmitLock) {
+                check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default()
+                        .pCommandBuffers(stack.pointers(commandBuffer.address())), fence),
+                        "submit graph resource upload");
+            }
+            check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait graph resource upload");
+            check(vkResetFences(device, fence), "reset graph resource upload fence");
+        } finally {
+            if (stagingMapped) staging.unmap(device);
+            staging.destroy(device);
+        }
+    }
+
+    private static long graphResourceUploadBytes(GpuDensityGraphBuffer.Packed packed) {
+        return (long) packed.nodes().remaining() + packed.splinePoints().remaining()
+                + packed.blendedMetadata().remaining() + packed.permutations().remaining()
+                + packed.octaves().remaining() + packed.samplerMetadata().remaining();
     }
 
     private void put(NativeBuffer target, ByteBuffer source, MemoryStack stack) {
