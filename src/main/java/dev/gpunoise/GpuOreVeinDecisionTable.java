@@ -1,5 +1,6 @@
 package dev.gpunoise;
 
+import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -35,11 +36,24 @@ public final class GpuOreVeinDecisionTable {
             return CompletableFuture.completedFuture(null);
         }
         int[] states = new int[rows];
+        // OreVeinifier's copper and iron veins are both hard-bounded to
+        // [-60, 50]. Outside that union the vanilla result is always null,
+        // regardless of density roots or positional randomness. Keep those
+        // rows as NO_VEIN locally instead of uploading and reading them back.
+        Arrays.fill(states, GpuOreVeinDecisions.NO_VEIN);
+        int firstY = Math.max(minY, -60);
+        int endY = Math.min(Math.addExact(minY, height), 51);
+        if (firstY >= endY) {
+            return CompletableFuture.completedFuture(
+                    new GpuOreVeinDecisionTable(minX, minY, minZ, height, states));
+        }
+        int firstRow = Math.multiplyExact(firstY - minY, 256);
+        int activeRows = Math.multiplyExact(endY - firstY, 256);
         CompletableFuture<int[]> batches = CompletableFuture.completedFuture(states);
         int maxRows = PersistentVulkanNormalNoiseEngine.CAPACITY;
-        for (int offset = 0; offset < rows; offset += maxRows) {
-            int batchOffset = offset;
-            int count = Math.min(maxRows, rows - offset);
+        for (int offset = 0; offset < activeRows; offset += maxRows) {
+            int batchOffset = firstRow + offset;
+            int count = Math.min(maxRows, activeRows - offset);
             batches = batches.thenCompose(output -> CompletableFuture.supplyAsync(
                             () -> packRows(cache, randomFactory, minX, minY, minZ, batchOffset, count),
                             net.minecraft.Util.backgroundExecutor())
@@ -56,7 +70,8 @@ public final class GpuOreVeinDecisionTable {
                 GpuNoise.LOGGER.warn("Vulkan ore-vein decision batch failed; OreVeinifier stays on Java", failure);
                 return null;
             }
-            GpuNoise.LOGGER.info("GPU ore-vein decision preparation completed: {} blocks on Vulkan", rows);
+            GpuNoise.LOGGER.info("GPU ore-vein decision preparation completed: {} of {} blocks dispatched to Vulkan",
+                    activeRows, rows);
             return new GpuOreVeinDecisionTable(minX, minY, minZ, height, completed);
         });
     }
