@@ -564,12 +564,13 @@ public final class VulkanCiSmoke {
             }
             GpuTerrainBatchResult compactCorners = ring.submitGraphGridInterpolatedOwned(markerGraph,
                     markerGrid.duplicate().position(0), 1, 8,
-                    markerOutput.duplicate().position(0), 256, new int[] {0}, new int[] {0})
+                    markerOutput.duplicate().position(0), 256, new int[] {0}, new int[] {1, 0})
                     .get(60, TimeUnit.SECONDS);
             if (compactCorners.corners().roots() != markerTerrain.corners().roots()
-                    || compactCorners.corners().stride() != 1
+                    || compactCorners.corners().stride() != 2
                     || compactCorners.corners().sampleCount() != 27
-                    || compactCorners.corners().valueAt(0, 0) != markerTerrain.corners().valueAt(0, 0)) {
+                    || compactCorners.corners().valueAt(0, 0) != markerTerrain.corners().valueAt(0, 0)
+                    || compactCorners.corners().valueAt(0, 1) != markerTerrain.corners().valueAt(0, 1)) {
                 throw new IllegalStateException("Compact terrain corner readback lost logical root identity");
             }
             if (markerBlocks.rootCount() != GpuTerrainRoots.COUNT
