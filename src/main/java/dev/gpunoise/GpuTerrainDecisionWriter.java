@@ -177,6 +177,7 @@ public final class GpuTerrainDecisionWriter {
         if (decisions.validCount() == 0) {
             throw new IllegalArgumentException("GPU terrain writer requires at least one admitted decision");
         }
+        long preparationStart = GpuTerrainProfiler.beginTerrainBlockPreparation();
 
         ChunkPos chunkPos = chunk.getPos();
         int startX = chunkPos.getMinBlockX();
@@ -320,6 +321,7 @@ public final class GpuTerrainDecisionWriter {
             finalDensityBlockView.recordReads(finalDensityBlockReads);
         }
         noiseChunk.stopInterpolation();
+        GpuTerrainProfiler.recordTerrainBlockPreparation(preparationStart);
         return new PreparedChunk(chunk, minY, cellCountY * cellHeight, fillState,
                 blockPaletteIds, palette);
     }

@@ -68,11 +68,14 @@ public final class GpuTerrainProfiler {
     private static final LongAdder climateNanos = new LongAdder();
     private static final LongAdder aquiferNanos = new LongAdder();
     private static final LongAdder blockWriteNanos = new LongAdder();
+    private static final LongAdder terrainBlockPreparationNanos = new LongAdder();
     private static final LongAdder finalDensitySamples = new LongAdder();
     private static final LongAdder initialDensitySamples = new LongAdder();
     private static final LongAdder climateSamples = new LongAdder();
     private static final LongAdder aquiferSamples = new LongAdder();
     private static final LongAdder blockWriteSamples = new LongAdder();
+    private static final LongAdder terrainBlockPreparationCalls = new LongAdder();
+    private static final LongAdder terrainBlockPreparationSamples = new LongAdder();
     private static final LongAdder terrainCachePreparationCalls = new LongAdder();
     private static final LongAdder terrainCachePreparationNanos = new LongAdder();
     private static final LongAdder terrainCachePreparationSamples = new LongAdder();
@@ -294,6 +297,16 @@ public final class GpuTerrainProfiler {
         recordTimed(blockWrites, blockWriteNanos, blockWriteSamples, start);
     }
 
+    /** Samples CPU preparation of the block palette and vanilla fallback rows. */
+    public static long beginTerrainBlockPreparation() {
+        return beginPhase();
+    }
+
+    public static void recordTerrainBlockPreparation(long start) {
+        recordTimed(terrainBlockPreparationCalls, terrainBlockPreparationNanos,
+                terrainBlockPreparationSamples, start);
+    }
+
     private static void recordTimed(LongAdder calls, LongAdder nanos, LongAdder samples, long start) {
         if (!ENABLED) return;
         calls.increment();
@@ -310,13 +323,15 @@ public final class GpuTerrainProfiler {
     private static void logSnapshot(long completed) {
         long totalNanos = fillNanos.sum();
         double averageFillMs = totalNanos / 1_000_000.0 / completed;
-        GpuNoise.LOGGER.info("GPU terrain profile: fills={}, avgFillMs={}, p50FillMs={}, p95FillMs={}, p99FillMs={}, finalDensityCalls={} sampled={} avgNs={}, initialDensityCalls={} sampled={} avgNs={}, climateCalls={} sampled={} avgNs={}, aquiferCalls={} sampled={} avgNs={}, blockWrites={} sampled={} avgNs={}",
+        GpuNoise.LOGGER.info("GPU terrain profile: fills={}, avgFillMs={}, p50FillMs={}, p95FillMs={}, p99FillMs={}, finalDensityCalls={} sampled={} avgNs={}, initialDensityCalls={} sampled={} avgNs={}, climateCalls={} sampled={} avgNs={}, aquiferCalls={} sampled={} avgNs={}, blockPreparationCalls={} sampled={} avgNs={}, blockWrites={} sampled={} avgNs={}",
                 completed, round(averageFillMs), percentileMillis(0.50, completed),
                 percentileMillis(0.95, completed), percentileMillis(0.99, completed),
                 gpuFinalDensityCalls.sum(), finalDensitySamples.sum(), averageNanos(finalDensityNanos, finalDensitySamples),
                 gpuInitialDensityCalls.sum(), initialDensitySamples.sum(), averageNanos(initialDensityNanos, initialDensitySamples),
                 gpuClimateCalls.sum(), climateSamples.sum(), averageNanos(climateNanos, climateSamples),
                 aquiferCalls.sum(), aquiferSamples.sum(), averageNanos(aquiferNanos, aquiferSamples),
+                terrainBlockPreparationCalls.sum(), terrainBlockPreparationSamples.sum(),
+                averageNanos(terrainBlockPreparationNanos, terrainBlockPreparationSamples),
                 blockWrites.sum(), blockWriteSamples.sum(), averageNanos(blockWriteNanos, blockWriteSamples));
         long returnedRootValues = graphRootReturnedValues.sum();
         long fullRootValues = graphRootFullEquivalentValues.sum();
