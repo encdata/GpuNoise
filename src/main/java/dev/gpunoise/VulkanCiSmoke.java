@@ -574,7 +574,14 @@ public final class VulkanCiSmoke {
                     || compactCorners.corners().sampleCount() != 8
                     || compactCorners.corners().valueAt(0, 0) != markerTerrain.corners().valueAt(0, 0)
                     || compactCorners.corners().valueAt(0, 1) != markerTerrain.corners().valueAt(0, 1)) {
-                throw new IllegalStateException("Compact terrain corner readback lost logical root identity");
+                throw new IllegalStateException("Compact terrain corner readback lost logical root identity: logicalRoots="
+                        + compactCorners.corners().roots() + "/" + markerTerrain.corners().roots()
+                        + ", compactStride=" + compactCorners.corners().stride()
+                        + ", samples=" + compactCorners.corners().sampleCount()
+                        + ", selectedRoots=[1,0], compactRoot0=" + compactCorners.corners().valueAt(0, 0)
+                        + ", fullRoot0=" + markerTerrain.corners().valueAt(0, 0)
+                        + ", compactRoot1=" + compactCorners.corners().valueAt(0, 1)
+                        + ", fullRoot1=" + markerTerrain.corners().valueAt(0, 1));
             }
             if (markerBlocks.rootCount() != GpuTerrainRoots.COUNT
                     || !markerBlocks.contains(15, 0, 15)) {
