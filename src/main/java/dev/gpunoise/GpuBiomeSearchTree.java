@@ -208,13 +208,14 @@ public final class GpuBiomeSearchTree {
 
         private void add(Climate.ParameterPoint point, int biomeId) {
             List<Climate.Parameter> parameters = List.of(point.temperature(), point.humidity(),
-                    point.continentalness(), point.erosion(), point.depth(), point.weirdness(),
-                    Climate.Parameter.point(Climate.unquantizeCoord(point.offset())));
+                    point.continentalness(), point.erosion(), point.depth(), point.weirdness());
             short[] bounds = new short[DIMENSIONS * 2];
-            for (int dim = 0; dim < DIMENSIONS; dim++) {
+            for (int dim = 0; dim < parameters.size(); dim++) {
                 bounds[dim] = quantize(parameters.get(dim).min());
                 bounds[DIMENSIONS + dim] = quantize(parameters.get(dim).max());
             }
+            bounds[DIMENSIONS - 1] = quantize(point.offset());
+            bounds[DIMENSIONS * 2 - 1] = bounds[DIMENSIONS - 1];
             entries.add(new TreeEntry(bounds, biomeId));
         }
 
