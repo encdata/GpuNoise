@@ -112,6 +112,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private CompletableFuture<int[]> inFlightAquiferRows;
     private AquiferRowStage inFlightAquiferRowStage;
     private int inFlightAquiferRowCount;
+    private CompletableFuture<byte[]> inFlightOreVeinRows;
+    private int inFlightOreVeinRowCount;
     private enum AquiferRowStage {
         NEAREST(GpuAquiferNearestThree.OUTPUT_INTS),
         SUBSTANCE(GpuAquiferSubstance.OUTPUT_INTS),
@@ -554,7 +556,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         CompletableFuture<GpuTerrainBatchResult> terrainFuture = inFlightTerrain;
         CompletableFuture<GpuAquiferPrefillResult> aquiferFuture = inFlightAquiferPrefill;
         CompletableFuture<int[]> aquiferRowsFuture = inFlightAquiferRows;
-        if (future == null && terrainFuture == null && aquiferFuture == null && aquiferRowsFuture == null) return;
+        CompletableFuture<byte[]> oreVeinFuture = inFlightOreVeinRows;
+        if (future == null && terrainFuture == null && aquiferFuture == null
+                && aquiferRowsFuture == null && oreVeinFuture == null) return;
         int status = vkGetFenceStatus(device, fence);
         if (status == VK_NOT_READY) return;
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -562,7 +566,23 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             long fenceDuration = GPU_TIMING_ENABLED
                     ? System.nanoTime() - inFlightFenceSubmittedNanos : 0L;
             long readbackStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
-            if (aquiferRowsFuture != null) {
+            if (oreVeinFuture != null) {
+                IntBuffer values = persistentMappings.get(aquiferNearestOutput)
+                        .duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
+                values.clear();
+                int outputWords = (inFlightOreVeinRowCount + 9) / 10;
+                values.limit(outputWords);
+                byte[] output = new byte[inFlightOreVeinRowCount];
+                for (int word = 0, row = 0; word < outputWords; word++) {
+                    int packed = values.get();
+                    for (int offset = 0; offset < 10 && row < output.length; offset++, row++)
+                        output[row] = (byte) ((packed >>> (offset * 3)) & 0x7);
+                }
+                check(vkResetFences(device, fence), "reset async ore-vein decision fence");
+                inFlightOreVeinRows = null;
+                inFlightOreVeinRowCount = 0;
+                oreVeinFuture.complete(output);
+            } else if (aquiferRowsFuture != null) {
                 IntBuffer values = persistentMappings.get(aquiferNearestOutput)
                         .duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
                 values.clear();
@@ -645,10 +665,13 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             inFlightAquiferRows = null;
             inFlightAquiferRowStage = null;
             inFlightAquiferRowCount = 0;
+            inFlightOreVeinRows = null;
+            inFlightOreVeinRowCount = 0;
             if (future != null) future.completeExceptionally(failure);
             if (terrainFuture != null) terrainFuture.completeExceptionally(failure);
             if (aquiferFuture != null) aquiferFuture.completeExceptionally(failure);
             if (aquiferRowsFuture != null) aquiferRowsFuture.completeExceptionally(failure);
+            if (oreVeinFuture != null) oreVeinFuture.completeExceptionally(failure);
         }
     }
 
@@ -659,7 +682,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
      */
     synchronized boolean fenceReadyForReadback() {
         if (inFlightGraphRoots == null && inFlightTerrain == null
-                && inFlightAquiferPrefill == null && inFlightAquiferRows == null) return false;
+                && inFlightAquiferPrefill == null && inFlightAquiferRows == null
+                && inFlightOreVeinRows == null) return false;
         return vkGetFenceStatus(device, fence) != VK_NOT_READY;
     }
 
@@ -716,7 +740,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     synchronized boolean graphRootsInFlight() { return inFlightGraphRoots != null; }
     synchronized boolean hasInFlightWork() {
         return inFlightGraphRoots != null || inFlightTerrain != null
-                || inFlightAquiferPrefill != null || inFlightAquiferRows != null;
+                || inFlightAquiferPrefill != null || inFlightAquiferRows != null
+                || inFlightOreVeinRows != null;
     }
 
     private float[] submit(GpuGlobalNoiseBatch.Packed packed, MemoryStack stack) throws Exception {
@@ -1187,17 +1212,19 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         }
     }
 
-    /** Runs OCL's per-block OreVeinifier classification on Vulkan. */
-    synchronized byte[] submitOreVeinDecisions(ByteBuffer records, int count) throws Exception {
+    /** Queues OCL's per-block OreVeinifier classification for fence-polled completion. */
+    synchronized CompletableFuture<byte[]> submitOreVeinDecisionsAsync(ByteBuffer records, int count)
+            throws Exception {
         if (hasInFlightWork()) throw new IllegalStateException("Vulkan slot is still in flight");
         if (count <= 0 || count > CAPACITY
-                || records.remaining() != count * GpuOreVeinDecisions.RECORD_BYTES)
+                || records == null
+                || records.remaining() != (long) count * GpuOreVeinDecisions.RECORD_BYTES)
             throw new IllegalArgumentException("invalid ore-vein decision batch");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             put(aquiferNearestInputs, records, stack);
-            check(vkResetCommandBuffer(commandBuffer, 0), "reset ore-vein command buffer");
+            check(vkResetCommandBuffer(commandBuffer, 0), "reset async ore-vein command buffer");
             check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()),
-                    "begin ore-vein command buffer");
+                    "begin async ore-vein command buffer");
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, oreVeinPipeline);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                     oreVeinPipelineLayout, 0, stack.longs(aquiferNearestDescriptorSet), null);
@@ -1205,33 +1232,24 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             vkCmdPushConstants(commandBuffer, oreVeinPipelineLayout,
                     VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
             int outputWords = (count + 9) / 10;
-            int invocations = outputWords;
-            vkCmdDispatch(commandBuffer, (invocations + 63) / 64, 1, 1);
+            vkCmdDispatch(commandBuffer, (outputWords + 63) / 64, 1, 1);
             VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
                     .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
                     .buffer(aquiferNearestOutput.buffer).size((long) outputWords * Integer.BYTES);
             vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                     VK_PIPELINE_STAGE_HOST_BIT, 0, null, barrier, null);
-            check(vkEndCommandBuffer(commandBuffer), "end ore-vein command buffer");
+            check(vkEndCommandBuffer(commandBuffer), "end async ore-vein command buffer");
+            long submittedNanos = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
             synchronized (queueSubmitLock) {
                 check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default()
-                        .pCommandBuffers(stack.pointers(commandBuffer.address())), fence), "submit ore-vein decisions");
+                        .pCommandBuffers(stack.pointers(commandBuffer.address())), fence),
+                        "submit async ore-vein decisions");
             }
-            check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait ore-vein decisions");
-            check(vkResetFences(device, fence), "reset ore-vein decision fence");
-            IntBuffer values = persistentMappings.get(aquiferNearestOutput)
-                    .duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
-            values.clear();
-            values.limit(outputWords);
-            byte[] output = new byte[count];
-            for (int word = 0, row = 0; word < outputWords; word++) {
-                int packed = values.get();
-                for (int offset = 0; offset < 10 && row < count; offset++, row++) {
-                    output[row] = (byte) ((packed >>> (offset * 3)) & 0x7);
-                }
-            }
-            return output;
+            inFlightFenceSubmittedNanos = submittedNanos;
         }
+        inFlightOreVeinRowCount = count;
+        inFlightOreVeinRows = new CompletableFuture<>();
+        return inFlightOreVeinRows;
     }
 
     /** Runs OCL's compact multi-noise tree search for a packed terrain region. */
@@ -2102,6 +2120,11 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         inFlightAquiferRowStage = null;
         if (unfinishedAquiferRows != null) unfinishedAquiferRows.completeExceptionally(
                 new IllegalStateException("GPU engine closed before aquifer decision completion was observed"));
+        CompletableFuture<byte[]> unfinishedOreVeinRows = inFlightOreVeinRows;
+        inFlightOreVeinRows = null;
+        inFlightOreVeinRowCount = 0;
+        if (unfinishedOreVeinRows != null) unfinishedOreVeinRows.completeExceptionally(
+                new IllegalStateException("GPU engine closed before ore-vein decision completion was observed"));
         for (NativeBuffer buffer : persistentMappings.keySet()) buffer.unmap(device);
         vkDestroyFence(device, fence, null);
         if (timestampQueryPool != 0L) vkDestroyQueryPool(device, timestampQueryPool, null);

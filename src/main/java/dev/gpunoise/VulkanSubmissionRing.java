@@ -735,19 +735,29 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 for (OreVeinRequest request : requests) combined.put(request.records.duplicate());
                 combined.flip();
             }
-            byte[] rows = slot.submitOreVeinDecisions(combined, totalRows);
-            if (rows == null || rows.length != totalRows) {
-                throw new IllegalStateException("Vulkan ore-vein batch returned "
-                        + (rows == null ? "null" : rows.length) + " rows for " + totalRows + " inputs");
-            }
-            GpuTerrainProfiler.recordOreVeinBatch(totalRows, requests.size());
-            int offset = 0;
-            for (OreVeinRequest request : requests) {
-                int end = offset + request.count;
-                completeOnDispatchWorker(request.future,
-                        java.util.Arrays.copyOfRange(rows, offset, end), null);
-                offset = end;
-            }
+            slot.submitOreVeinDecisionsAsync(combined, totalRows).whenComplete((rows, failure) -> {
+                if (failure != null) {
+                    for (OreVeinRequest request : requests)
+                        completeOnDispatchWorker(request.future, null, new IllegalStateException(
+                                "GPU ring ore-vein batch submission failed", failure));
+                    return;
+                }
+                if (rows == null || rows.length != totalRows) {
+                    IllegalStateException invalid = new IllegalStateException("Vulkan ore-vein batch returned "
+                            + (rows == null ? "null" : rows.length) + " rows for " + totalRows + " inputs");
+                    for (OreVeinRequest request : requests)
+                        completeOnDispatchWorker(request.future, null, invalid);
+                    return;
+                }
+                GpuTerrainProfiler.recordOreVeinBatch(totalRows, requests.size());
+                int offset = 0;
+                for (OreVeinRequest request : requests) {
+                    int end = offset + request.count;
+                    completeOnDispatchWorker(request.future,
+                            java.util.Arrays.copyOfRange(rows, offset, end), null);
+                    offset = end;
+                }
+            });
         } catch (Throwable failure) {
             for (OreVeinRequest request : requests) {
                 completeOnDispatchWorker(request.future, null, new IllegalStateException(
