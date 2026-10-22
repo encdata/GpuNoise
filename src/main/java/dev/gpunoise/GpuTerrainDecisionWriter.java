@@ -189,7 +189,10 @@ public final class GpuTerrainDecisionWriter {
         BlockState air = Blocks.AIR.defaultBlockState();
         GpuNoiseChunkAccess noiseAccess = (GpuNoiseChunkAccess) (Object) noiseChunk;
         GpuChunkDensityCache densityCache = noiseAccess.gpunoise$gpuCache();
+        GpuChunkDensityCache.FinalDensityBlockView finalDensityBlockView = densityCache == null
+                ? null : densityCache.finalDensityBlockView();
         net.minecraft.world.level.levelgen.Aquifer aquifer = noiseChunk.aquifer();
+        long finalDensityBlockReads = 0L;
 
         noiseChunk.initializeForFirstCellX();
         for (int cellX = 0; cellX < cellsXZ; cellX++) {
@@ -225,7 +228,20 @@ public final class GpuTerrainDecisionWriter {
                                 if (densityCache != null && decisions.isValid(decisionIndex)
                                         && !GpuTerrainDensityParity.shouldCompare(x, z)) {
                                     BlockState candidate = decisions.state(decisionIndex);
-                                    double cachedDensity = densityCache.finalDensity(x, y, z);
+                                    double cachedDensity;
+                                    int densityX = x - densityCache.minX();
+                                    int densityY = y - densityCache.minY();
+                                    int densityZ = z - densityCache.minZ();
+                                    if (finalDensityBlockView != null
+                                            && densityX >= 0 && densityX < 16
+                                            && densityY >= 0 && densityY < densityCache.height()
+                                            && densityZ >= 0 && densityZ < 16) {
+                                        cachedDensity = finalDensityBlockView.valueAtLocalUnchecked(
+                                                densityX, densityY, densityZ);
+                                        finalDensityBlockReads++;
+                                    } else {
+                                        cachedDensity = densityCache.finalDensity(x, y, z);
+                                    }
                                     if (!Double.isNaN(cachedDensity)) {
                                         double density = noiseAccess.gpunoise$withBeardifier(
                                                 cachedDensity, x, y, z);
@@ -288,6 +304,9 @@ public final class GpuTerrainDecisionWriter {
                 }
             }
             noiseChunk.swapSlices();
+        }
+        if (finalDensityBlockView != null) {
+            finalDensityBlockView.recordReads(finalDensityBlockReads);
         }
         noiseChunk.stopInterpolation();
         return new PreparedChunk(chunk, minY, cellCountY * cellHeight, fillState,

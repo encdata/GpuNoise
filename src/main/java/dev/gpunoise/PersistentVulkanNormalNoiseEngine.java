@@ -727,7 +727,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     : totalTerrainInterpolationGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
             double averageBlockGpuMs = terrainGpuTimestampSamples == 0 ? -1.0
                     : totalTerrainBlockGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
-            GpuNoise.LOGGER.info("GPU full terrain profile: batches={}, queueSubmissions={}, computeDispatches={}, avgCpuPrepareMs={}, avgSubmitToFenceMs={}, avgReadbackMs={}, metadataUploadMiBPerBatch={}, cornerReadbackMiBPerBatch={}, blockReadbackMiBPerBatch={}, avgGridGpuMs={}, avgInterpolationGpuMs={}, avgBlockGpuMs={}, gpuTimingSamples={}",
+            GpuNoise.LOGGER.info("GPU full terrain profile: batches={}, queueSubmissions={}, computeDispatches={}, avgCpuPrepareMs={}, avgSubmitToFenceMs={}, avgReadbackMs={}, gridMetadataUploadMiBPerBatch={}, cornerReadbackMiBPerBatch={}, blockReadbackMiBPerBatch={}, avgGridGpuMs={}, avgInterpolationGpuMs={}, avgBlockGpuMs={}, gpuTimingSamples={}",
                     completed, completed, completed * 3L,
                     totalTerrainPreparationNanos / (double) completed / 1_000_000.0,
                     totalTerrainFenceNanos / (double) completed / 1_000_000.0,
