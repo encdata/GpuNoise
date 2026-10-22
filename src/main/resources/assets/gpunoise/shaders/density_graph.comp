@@ -637,7 +637,10 @@ void main(){
     uint gridOutputRootCount=fusedTerrainGrid?fusedOutputRootCount:routerRootCount;
     uint outputStride=fusedTerrainGrid?fusedOutputRootCount:routerRootCount+interpolationCount;
     for (uint root = 0u; root < gridOutputRootCount; root++) {
-        uint rootNode=fusedTerrainGrid?rootNodes[32u+root]:rootNodes[root];
+        // In fused terrain mode the first root table is already compacted to
+        // the selected corner outputs. Keep one output-root lookup contract
+        // for both regular graph and grid dispatches.
+        uint rootNode=rootNodes[root];
         results[sampleIndex * outputStride + root] = float(values[rootNode]);
     }
     for(uint marker=0u;marker<interpolationCount;marker++) {
