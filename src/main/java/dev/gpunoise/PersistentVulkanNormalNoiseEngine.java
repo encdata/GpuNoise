@@ -40,12 +40,11 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     // interpolationOutput stores the interleaved per-block terrain roots.
     static final int INTERPOLATION_OUTPUT_FLOATS = INTERPOLATION_OUTPUT_MIB * 1024 * 1024 / Float.BYTES;
     private static final int MAX_INTERPOLATORS = 16;
+    static final int TERRAIN_CORNER_MARKER_FLOATS = CAPACITY * MAX_INTERPOLATORS;
     private static final int MAX_GRAPH_OUTPUTS = 32;
     /** Keep common parity/production root masks warm without retaining unbounded pipelines. */
     private static final int MAX_CACHED_BLOCK_GRAPH_VARIANTS = 3;
     private static final int[] GRAPH_DESCRIPTOR_BINDINGS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14};
-    /** Kept as a valid descriptor for legacy SPIR-V; fused block shaders do not use marker storage. */
-    private static final long UNUSED_INTERPOLATED_INPUT_BYTES = Float.BYTES;
     private final VkInstance instance;
     private final VkPhysicalDevice physical;
     private final VkDevice device;
@@ -53,7 +52,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private final int queueFamily;
     private final NativeBuffer coordinates, results, permutations, octaves, samplerMetadata;
     private final NativeBuffer graphCoordinates, graphNodes, graphSplinePoints, graphBlendedMetadata,
-            graphRoots, graphMthSinTable, interpolatedInputs, interpolatorMap;
+            graphRoots, graphMthSinTable, terrainCornerMarkers, interpolatorMap;
     private final NativeBuffer interpolationMetadata, interpolationOutput, aquiferPressureInputs,
             aquiferNearestInputs, aquiferNearestOutput, biomeTreeBuffer;
     private final long shader, descriptorLayout, pipelineLayout, pipeline, descriptorPool, descriptorSet, commandPool;
@@ -129,7 +128,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private int inFlightTerrainOutputRoots;
     private int inFlightTerrainBlocksPerChunk;
     private int inFlightTerrainCornerRoots;
-    private int inFlightTerrainCornerStride;
     private int[] inFlightTerrainRootIndexes;
     private long inFlightFenceSubmittedNanos;
     private long inFlightGraphPreparationNanos;
@@ -148,6 +146,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long totalTerrainFusedBlockGpuNanos;
     private long terrainGpuTimestampSamples;
     private long totalTerrainMetadataUploadBytes;
+    private long totalTerrainMarkerCornerBytes;
     private long totalTerrainGraphUploadBytes;
     private long totalTerrainGraphUploadSubmissions;
     private long totalTerrainCornerReadbackBytes;
@@ -181,7 +180,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             results = buffer(CAPACITY * (long) MAX_GRAPH_OUTPUTS * Float.BYTES, stack);
             graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack); graphNodes = deviceLocalBuffer((long) GRAPH_NODE_STORAGE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack); graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 2L * 64L * 16L, stack); graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack); graphRoots = deviceLocalBuffer(128L, stack);
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
-            interpolatedInputs = deviceLocalBuffer(UNUSED_INTERPOLATED_INPUT_BYTES, stack);
+            terrainCornerMarkers = deviceLocalBuffer((long) TERRAIN_CORNER_MARKER_FLOATS * Float.BYTES, stack);
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
             interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack);
             interpolationOutput = buffer((long) INTERPOLATION_OUTPUT_FLOATS * Float.BYTES, stack);
@@ -269,7 +268,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack);
             graphRoots = deviceLocalBuffer(128L, stack);
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
-            interpolatedInputs = deviceLocalBuffer(UNUSED_INTERPOLATED_INPUT_BYTES, stack);
+            terrainCornerMarkers = deviceLocalBuffer((long) TERRAIN_CORNER_MARKER_FLOATS * Float.BYTES, stack);
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
             interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack);
             interpolationOutput = buffer((long) INTERPOLATION_OUTPUT_FLOATS * Float.BYTES, stack);
@@ -622,8 +621,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 aquiferFuture.complete(new GpuAquiferPrefillResult(nearestRows, statusRows, decisionRows));
             } else if (terrainFuture != null) {
                 long[] stageGpuNanos = GPU_TIMING_ENABLED ? readTerrainGpuTimestamps(stack) : null;
-                float[] corners = readRootResults(inFlightSamples, inFlightTerrainCornerRoots,
-                        inFlightTerrainCornerStride, stack);
+                float[] corners = readRootResults(inFlightSamples, inFlightTerrainCornerRoots);
                 FloatBuffer blockValues = persistentMappings.get(interpolationOutput).duplicate()
                         .order(ByteOrder.nativeOrder()).asFloatBuffer();
                 blockValues.clear();
@@ -714,7 +712,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     : totalTerrainGridGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
             double averageFusedBlockGpuMs = terrainGpuTimestampSamples == 0 ? -1.0
                     : totalTerrainFusedBlockGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
-            GpuNoise.LOGGER.info("GPU full terrain profile: batches={}, terrainQueueSubmissions={}, computeDispatches={}, avgCpuPrepareMs={}, avgSubmitToFenceMs={}, avgReadbackMs={}, gridMetadataUploadMiBPerBatch={}, graphResourceUploadMiBPerGraphChange={}, graphResourceUploadSubmissions={}, cornerReadbackMiBPerBatch={}, blockReadbackMiBPerBatch={}, avgGridGpuMs={}, avgFusedBlockGpuMs={}, gpuTimingSamples={}",
+            GpuNoise.LOGGER.info("GPU full terrain profile: batches={}, terrainQueueSubmissions={}, computeDispatches={}, avgCpuPrepareMs={}, avgSubmitToFenceMs={}, avgReadbackMs={}, gridMetadataUploadMiBPerBatch={}, graphResourceUploadMiBPerGraphChange={}, graphResourceUploadSubmissions={}, markerCornerBufferMiBPerBatch={}, cornerReadbackMiBPerBatch={}, blockReadbackMiBPerBatch={}, avgGridGpuMs={}, avgFusedBlockGpuMs={}, gpuTimingSamples={}",
                     completed, completed, completed * 2L,
                     totalTerrainPreparationNanos / (double) completed / 1_000_000.0,
                     totalTerrainFenceNanos / (double) completed / 1_000_000.0,
@@ -723,6 +721,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     totalTerrainGraphUploadBytes / (double) Math.max(1L, totalTerrainGraphUploadSubmissions)
                             / (1024.0 * 1024.0),
                     totalTerrainGraphUploadSubmissions,
+                    totalTerrainMarkerCornerBytes / (double) completed / (1024.0 * 1024.0),
                     totalTerrainCornerReadbackBytes / (double) completed / (1024.0 * 1024.0),
                     totalTerrainBlockReadbackBytes / (double) completed / (1024.0 * 1024.0),
                     averageGridGpuMs, averageFusedBlockGpuMs,
@@ -817,7 +816,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         int blockCount = Math.multiplyExact(chunkCount, blocksPerChunk);
         if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16 || outputRoots > rootCount
                 || markerCount > MAX_INTERPOLATORS || graph.registerCount() > 256
-                || (long) sampleCount * cornerStride * Float.BYTES > results.size
+                || (long) sampleCount * rootCount * Float.BYTES > results.size
+                || (long) sampleCount * markerCount > TERRAIN_CORNER_MARKER_FLOATS
                 || (long) blockCount * outputRoots * Float.BYTES > interpolationOutput.size)
             throw new IllegalArgumentException("grid interpolation batch exceeds GPU capacity");
         long preparationStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
@@ -847,16 +847,20 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, gridPipeline);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipelineLayout, 0, stack.longs(graphDescriptorSet), null);
             ByteBuffer graphPush = stack.malloc(16).order(ByteOrder.nativeOrder())
-                    .putInt(sampleCount).putInt(packed.nodeCount()).putInt(rootCount).putInt(samplesPerChunk).flip();
+                    .putInt(sampleCount).putInt(packed.nodeCount()).putInt(rootCount | 0x8000_0000)
+                    .putInt(samplesPerChunk).flip();
             vkCmdPushConstants(commandBuffer, graphPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, graphPush);
             beginTerrainGpuTimestamps();
             vkCmdDispatch(commandBuffer, (sampleCount + 63) / 64, 1, 1);
             writeGpuTimestamp(1, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-            VkBufferMemoryBarrier.Buffer graphBarrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
-                    .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT)
-                    .buffer(results.buffer).size((long) sampleCount * cornerStride * Float.BYTES);
-            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                    0, null, graphBarrier, null);
+            VkBufferMemoryBarrier.Buffer graphBarrier = VkBufferMemoryBarrier.calloc(1, stack);
+            if (markerCount > 0) {
+                graphBarrier.get(0).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_SHADER_READ_BIT).buffer(terrainCornerMarkers.buffer)
+                        .size((long) sampleCount * markerCount * Float.BYTES);
+                vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, null, graphBarrier, null);
+            }
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, blockGraphPipeline);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipelineLayout, 0,
                     stack.longs(graphDescriptorSet), null);
@@ -871,7 +875,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             VkBufferMemoryBarrier.Buffer finalBarriers = VkBufferMemoryBarrier.calloc(2, stack);
             finalBarriers.get(0).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
                     .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(results.buffer)
-                    .size((long) sampleCount * cornerStride * Float.BYTES);
+                    .size((long) sampleCount * rootCount * Float.BYTES);
             finalBarriers.get(1).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
                     .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(interpolationOutput.buffer)
                     .size((long) blockCount * outputRoots * Float.BYTES);
@@ -891,9 +895,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             inFlightTerrainOutputRoots = outputRoots;
             inFlightTerrainBlocksPerChunk = blocksPerChunk;
             inFlightTerrainCornerRoots = rootCount;
-            inFlightTerrainCornerStride = cornerStride;
             inFlightTerrainRootIndexes = outputRootIndexes.clone();
             totalTerrainMetadataUploadBytes += metadataUploadBytes;
+            totalTerrainMarkerCornerBytes += (long) sampleCount * markerCount * Float.BYTES;
             totalTerrainCornerReadbackBytes += cornerReadbackBytes;
             totalTerrainBlockReadbackBytes += blockReadbackBytes;
             inFlightTerrain = new CompletableFuture<>();
@@ -974,16 +978,13 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         return output;
     }
 
-    /** Copies router roots to Java while leaving GPU-only marker corners out of the batch result. */
-    private float[] readRootResults(int samples, int roots, int sourceStride, MemoryStack stack) {
+    /** Reads contiguous router-root corners; GPU-only marker corners stay in device-local memory. */
+    private float[] readRootResults(int samples, int roots) {
         float[] output = new float[Math.multiplyExact(samples, roots)];
         FloatBuffer source = persistentResults.duplicate().order(ByteOrder.nativeOrder()).asFloatBuffer();
         source.clear();
-        source.limit(Math.multiplyExact(samples, sourceStride));
-        for (int sample = 0; sample < samples; sample++) {
-            source.get(output, sample * roots, roots);
-            source.position(source.position() + sourceStride - roots);
-        }
+        source.limit(output.length);
+        source.get(output);
         return output;
     }
 
@@ -2000,14 +2001,14 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     }
     private long graphDescriptorPool(MemoryStack s){VkDescriptorPoolSize.Buffer z=VkDescriptorPoolSize.calloc(1,s).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(GRAPH_DESCRIPTOR_BINDINGS.length);VkDescriptorPoolCreateInfo i=VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(z);LongBuffer h=s.longs(0);check(vkCreateDescriptorPool(device,i,null,h),"graph pool");return h.get(0);}
     private long graphDescriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(graphDescriptorPool).pSetLayouts(s.longs(graphDescriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"graph set");return h.get(0);}
-    private void graphDescriptors(MemoryStack s){NativeBuffer[] bs={graphCoordinates,results,graphNodes,permutations,octaves,samplerMetadata,graphSplinePoints,graphBlendedMetadata,interpolationMetadata,graphRoots,graphMthSinTable,interpolatedInputs,interpolatorMap,interpolationOutput,graphCoordinates};VkWriteDescriptorSet.Buffer w=VkWriteDescriptorSet.calloc(bs.length,s);for(int i=0;i<bs.length;i++){VkDescriptorBufferInfo.Buffer bi=VkDescriptorBufferInfo.calloc(1,s).buffer(bs[i].buffer).range(bs[i].size);w.get(i).sType$Default().dstSet(graphDescriptorSet).dstBinding(GRAPH_DESCRIPTOR_BINDINGS[i]).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bi);}vkUpdateDescriptorSets(device,w,null);}
+    private void graphDescriptors(MemoryStack s){NativeBuffer[] bs={graphCoordinates,results,graphNodes,permutations,octaves,samplerMetadata,graphSplinePoints,graphBlendedMetadata,interpolationMetadata,graphRoots,graphMthSinTable,terrainCornerMarkers,interpolatorMap,interpolationOutput,graphCoordinates};VkWriteDescriptorSet.Buffer w=VkWriteDescriptorSet.calloc(bs.length,s);for(int i=0;i<bs.length;i++){VkDescriptorBufferInfo.Buffer bi=VkDescriptorBufferInfo.calloc(1,s).buffer(bs[i].buffer).range(bs[i].size);w.get(i).sType$Default().dstSet(graphDescriptorSet).dstBinding(GRAPH_DESCRIPTOR_BINDINGS[i]).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bi);}vkUpdateDescriptorSets(device,w,null);}
     private long interpolationShader(MemoryStack s)throws Exception{try(var in=getClass().getResourceAsStream("/assets/gpunoise/shaders/noise_interpolation.comp.spv")){byte[] b=in.readAllBytes();ByteBuffer c=MemoryUtil.memAlloc(b.length).put(b).flip();try{VkShaderModuleCreateInfo i=VkShaderModuleCreateInfo.calloc(s).sType$Default().pCode(c);LongBuffer h=s.longs(0);check(vkCreateShaderModule(device,i,null,h),"interpolation shader");return h.get(0);}finally{MemoryUtil.memFree(c);}}}
     private long interpolationDescriptorLayout(MemoryStack s){VkDescriptorSetLayoutBinding.Buffer b=VkDescriptorSetLayoutBinding.calloc(5,s);for(int i=0;i<5;i++)b.get(i).binding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);VkDescriptorSetLayoutCreateInfo i=VkDescriptorSetLayoutCreateInfo.calloc(s).sType$Default().pBindings(b);LongBuffer h=s.longs(0);check(vkCreateDescriptorSetLayout(device,i,null,h),"interpolation layout");return h.get(0);}
     private long interpolationPipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(16);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(interpolationDescriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"interpolation pipeline layout");return h.get(0);}
     private long interpolationPipeline(MemoryStack s){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(interpolationShader).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(interpolationPipelineLayout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),"interpolation pipeline");return h.get(0);}
     private long interpolationDescriptorPool(MemoryStack s){VkDescriptorPoolSize.Buffer z=VkDescriptorPoolSize.calloc(1,s).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(5);VkDescriptorPoolCreateInfo i=VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(z);LongBuffer h=s.longs(0);check(vkCreateDescriptorPool(device,i,null,h),"interpolation pool");return h.get(0);}
     private long interpolationDescriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(interpolationDescriptorPool).pSetLayouts(s.longs(interpolationDescriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"interpolation set");return h.get(0);}
-    private void interpolationDescriptors(MemoryStack s){NativeBuffer[] bs={results,interpolatedInputs,interpolationMetadata,graphCoordinates,interpolationOutput};VkWriteDescriptorSet.Buffer w=VkWriteDescriptorSet.calloc(bs.length,s);for(int i=0;i<bs.length;i++){VkDescriptorBufferInfo.Buffer bi=VkDescriptorBufferInfo.calloc(1,s).buffer(bs[i].buffer).range(bs[i].size);w.get(i).sType$Default().dstSet(interpolationDescriptorSet).dstBinding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bi);}vkUpdateDescriptorSets(device,w,null);}
+    private void interpolationDescriptors(MemoryStack s){NativeBuffer[] bs={results,terrainCornerMarkers,interpolationMetadata,graphCoordinates,interpolationOutput};VkWriteDescriptorSet.Buffer w=VkWriteDescriptorSet.calloc(bs.length,s);for(int i=0;i<bs.length;i++){VkDescriptorBufferInfo.Buffer bi=VkDescriptorBufferInfo.calloc(1,s).buffer(bs[i].buffer).range(bs[i].size);w.get(i).sType$Default().dstSet(interpolationDescriptorSet).dstBinding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bi);}vkUpdateDescriptorSets(device,w,null);}
     private long aquiferPressureDescriptorLayout(MemoryStack s){VkDescriptorSetLayoutBinding.Buffer b=VkDescriptorSetLayoutBinding.calloc(2,s);for(int i=0;i<2;i++)b.get(i).binding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);VkDescriptorSetLayoutCreateInfo i=VkDescriptorSetLayoutCreateInfo.calloc(s).sType$Default().pBindings(b);LongBuffer h=s.longs(0);check(vkCreateDescriptorSetLayout(device,i,null,h),"aquifer pressure layout");return h.get(0);}
     private long aquiferPressurePipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(4);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(aquiferPressureDescriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"aquifer pressure pipeline layout");return h.get(0);}
     private long aquiferPressurePipeline(MemoryStack s){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(aquiferPressureShader).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(aquiferPressurePipelineLayout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),"aquifer pressure pipeline");return h.get(0);}
@@ -2226,7 +2227,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         graphBlendedMetadata.destroy(device);
         graphRoots.destroy(device);
         graphMthSinTable.destroy(device);
-        interpolatedInputs.destroy(device);
+        terrainCornerMarkers.destroy(device);
         interpolatorMap.destroy(device);
         interpolationMetadata.destroy(device);
         interpolationOutput.destroy(device);
