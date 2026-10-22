@@ -17,7 +17,7 @@ struct InputRecord {
     int ironFiller;
 };
 layout(std430, set = 0, binding = 0) readonly buffer Inputs { InputRecord items[]; };
-layout(std430, set = 0, binding = 1) writeonly buffer Outputs { int states[]; };
+layout(std430, set = 0, binding = 1) writeonly buffer Outputs { uint packedCodes[]; };
 layout(push_constant) uniform Parameters { uint count; };
 
 const int NO_VEIN = -1;
@@ -65,8 +65,30 @@ int evaluate(InputRecord r) {
     return copper ? r.copperFiller : r.ironFiller;
 }
 
+uint compactCode(int state, InputRecord r) {
+    if (state == NO_VEIN) return 0u;
+    if (state == CPU_FALLBACK) return 1u;
+    if (state == r.copperOre) return 2u;
+    if (state == r.copperRaw) return 3u;
+    if (state == r.copperFiller) return 4u;
+    if (state == r.ironOre) return 5u;
+    if (state == r.ironRaw) return 6u;
+    if (state == r.ironFiller) return 7u;
+    // Inputs currently carry the six vanilla OreVeinifier states. Preserve
+    // parity if a future caller supplies an unrecognized state by marking it
+    // for the Java path rather than silently selecting another palette slot.
+    return 1u;
+}
+
 void main() {
-    uint index = gl_GlobalInvocationID.x;
-    if (index >= count) return;
-    states[index] = evaluate(items[index]);
+    uint wordIndex = gl_GlobalInvocationID.x;
+    uint firstRow = wordIndex * 10u;
+    if (firstRow >= count) return;
+    uint packed = 0u;
+    for (uint offset = 0u; offset < 10u && firstRow + offset < count; offset++) {
+        InputRecord row = items[firstRow + offset];
+        uint code = compactCode(evaluate(row), row);
+        packed |= code << (offset * 3u);
+    }
+    packedCodes[wordIndex] = packed;
 }

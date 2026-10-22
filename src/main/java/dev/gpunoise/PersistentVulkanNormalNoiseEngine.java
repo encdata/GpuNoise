@@ -1204,10 +1204,12 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             ByteBuffer push = stack.malloc(4).order(ByteOrder.nativeOrder()).putInt(count).flip();
             vkCmdPushConstants(commandBuffer, oreVeinPipelineLayout,
                     VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
-            vkCmdDispatch(commandBuffer, (count + 63) / 64, 1, 1);
+            int outputWords = (count + 9) / 10;
+            int invocations = outputWords;
+            vkCmdDispatch(commandBuffer, (invocations + 63) / 64, 1, 1);
             VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
                     .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
-                    .buffer(aquiferNearestOutput.buffer).size((long) count * Integer.BYTES);
+                    .buffer(aquiferNearestOutput.buffer).size((long) outputWords * Integer.BYTES);
             vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                     VK_PIPELINE_STAGE_HOST_BIT, 0, null, barrier, null);
             check(vkEndCommandBuffer(commandBuffer), "end ore-vein command buffer");
@@ -1220,9 +1222,14 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             IntBuffer values = persistentMappings.get(aquiferNearestOutput)
                     .duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
             values.clear();
-            values.limit(count);
+            values.limit(outputWords);
+            int[] packed = new int[outputWords];
+            values.get(packed);
             int[] output = new int[count];
-            values.get(output);
+            for (int row = 0; row < count; row++) {
+                int code = (packed[row / 10] >>> ((row % 10) * 3)) & 0x7;
+                output[row] = GpuOreVeinDecisions.decodeCompactCode(code);
+            }
             return output;
         }
     }

@@ -13,9 +13,27 @@ public final class GpuOreVeinDecisions {
     public static final int RECORD_BYTES = 52;
     public static final int NO_VEIN = -1;
     public static final int CPU_FALLBACK = -2;
+    static final int COMPACT_NO_VEIN = 0;
+    static final int COMPACT_CPU_FALLBACK = 1;
+    private static final int[] COMPACT_STATE_IDS = {
+            NO_VEIN,
+            CPU_FALLBACK,
+            Block.getId(Blocks.COPPER_ORE.defaultBlockState()),
+            Block.getId(Blocks.RAW_COPPER_BLOCK.defaultBlockState()),
+            Block.getId(Blocks.GRANITE.defaultBlockState()),
+            Block.getId(Blocks.DEEPSLATE_IRON_ORE.defaultBlockState()),
+            Block.getId(Blocks.RAW_IRON_BLOCK.defaultBlockState()),
+            Block.getId(Blocks.TUFF.defaultBlockState())
+    };
     private static final float DECISION_EPSILON = GpuTerrainRuntime.GRAPH_PARITY_EPSILON;
 
     private GpuOreVeinDecisions() {}
+
+    static int decodeCompactCode(int code) {
+        if (code < 0 || code >= COMPACT_STATE_IDS.length)
+            throw new IllegalArgumentException("invalid compact ore-vein result " + code);
+        return COMPACT_STATE_IDS[code];
+    }
 
     /** Packs one block row using the same positional random stream as OreVeinifier. */
     public static ByteBuffer pack(float veinToggle, float veinRidged, float veinGap,
