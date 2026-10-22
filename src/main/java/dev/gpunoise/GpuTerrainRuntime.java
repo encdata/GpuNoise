@@ -726,9 +726,9 @@ public final class GpuTerrainRuntime {
     /**
      * Roots with dense per-block consumers stay in the full-volume result:
      * final/initial density drive material and surface decisions, aquifer
-     * roots feed the batched center/status and block decision passes, and vein
-     * roots drive OreVeinifier. Every root still needs its own block parity
-     * verification before the runtime consumes its output.
+     * roots feed the batched center/status and block decision passes, climate
+     * roots feed biome sampling, and vein roots drive OreVeinifier. Every root
+     * still needs its own block parity verification before runtime use.
      */
     private static int terrainBlockOutputEligibleRootMask() {
         return (1 << GpuTerrainRoots.FINAL_DENSITY)
@@ -739,6 +739,10 @@ public final class GpuTerrainRuntime {
                 | (1 << GpuTerrainRoots.LAVA)
                 | (1 << GpuTerrainRoots.EROSION)
                 | (1 << GpuTerrainRoots.DEPTH)
+                | (1 << GpuTerrainRoots.TEMPERATURE)
+                | (1 << GpuTerrainRoots.VEGETATION)
+                | (1 << GpuTerrainRoots.CONTINENTS)
+                | (1 << GpuTerrainRoots.RIDGES)
                 | (1 << GpuTerrainRoots.VEIN_TOGGLE)
                 | (1 << GpuTerrainRoots.VEIN_RIDGED)
                 | (1 << GpuTerrainRoots.VEIN_GAP);
