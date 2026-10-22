@@ -969,7 +969,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     : combined == null
                     ? GpuTerrainRuntime.submitAquiferFluidStatus(statusRecords, centers.size())
                             .toCompletableFuture().join()
-                    : combined.fluidStatusRows();
+                    : null;
         } catch (RuntimeException | Error failure) {
             for (GpuAquiferStatusRegionCache.Reservation owner : owners) owner.fail(failure);
             throw failure;
@@ -981,10 +981,10 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 int[] center = centers.get(index);
                 long key = BlockPos.asLong(center[0], center[1], center[2]);
                 int base = index * GpuAquiferFluidStatus.OUTPUT_INTS;
-                int level = outputs[base];
-                int source = outputs[base + 1];
-                int flags = outputs[base + 2];
-                int fluidStateId = outputs[base + 3];
+                int level = combined == null ? outputs[base] : combined.fluidStatusValue(index, 0);
+                int source = combined == null ? outputs[base + 1] : combined.fluidStatusValue(index, 1);
+                int flags = combined == null ? outputs[base + 2] : combined.fluidStatusValue(index, 2);
+                int fluidStateId = combined == null ? outputs[base + 3] : combined.fluidStatusValue(index, 3);
                 Aquifer.FluidStatus status;
                 if ((flags & GpuAquiferFluidStatus.FLAG_CPU_FALLBACK) != 0
                         || source < 0 || source > GpuAquiferFluidStatus.SURFACE_SAMPLES) {
@@ -1022,7 +1022,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         }
         GpuTerrainProfiler.recordAquiferStatusPrefill(prefillStart, centers.size(), javaFallbacks);
         return new GpuAquiferPrefillResult(nearestRows == null ? new int[0] : nearestRows,
-                outputs, combined == null ? new int[0] : combined.decisionRows());
+                new int[0], combined == null ? new int[0] : combined.decisionRows());
     }
 
     @org.spongepowered.asm.mixin.Unique

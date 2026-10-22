@@ -1018,11 +1018,11 @@ final class VulkanSubmissionRing implements AutoCloseable {
                         completeOnDispatchWorker(request.future, null, failure);
                     return;
                 }
-                if (rows == null || rows.nearestRows().length
+                if (rows == null || rows.nearestValueCount()
                         != batchNearestRows * GpuAquiferNearestThree.OUTPUT_INTS
-                        || rows.fluidStatusRows().length
+                        || rows.fluidStatusValueCount()
                         != batchStatusRows * GpuAquiferFluidStatus.OUTPUT_INTS
-                        || rows.decisionRows().length
+                        || rows.decisionValueCount()
                         != (first.decisionChain ? batchNearestRows * 3 : 0)) {
                     IllegalStateException invalid = new IllegalStateException(
                             "Vulkan combined aquifer prefill returned a mismatched row count");
@@ -1035,19 +1035,19 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 int nearestOffset = 0;
                 int statusOffset = 0;
                 for (AquiferPrefillRequest request : requests) {
-                    int nearestEnd = nearestOffset + request.nearestCount
+                    int nearestLength = request.nearestCount
                             * GpuAquiferNearestThree.OUTPUT_INTS;
-                    int statusEnd = statusOffset + request.statusCount
+                    int statusLength = request.statusCount
                             * GpuAquiferFluidStatus.OUTPUT_INTS;
-                    int decisionStart = nearestOffset / GpuAquiferNearestThree.OUTPUT_INTS * 3;
-                    int decisionEnd = decisionStart + request.nearestCount * 3;
-                    GpuAquiferPrefillResult chunkResult = new GpuAquiferPrefillResult(
-                            java.util.Arrays.copyOfRange(rows.nearestRows(), nearestOffset, nearestEnd),
-                            java.util.Arrays.copyOfRange(rows.fluidStatusRows(), statusOffset, statusEnd),
-                            java.util.Arrays.copyOfRange(rows.decisionRows(), decisionStart, decisionEnd));
+                    int decisionStart = first.decisionChain
+                            ? nearestOffset / GpuAquiferNearestThree.OUTPUT_INTS * 3 : 0;
+                    int decisionLength = first.decisionChain ? request.nearestCount * 3 : 0;
+                    GpuAquiferPrefillResult chunkResult = GpuAquiferPrefillResult.slice(rows,
+                            nearestOffset, nearestLength, statusOffset, statusLength,
+                            decisionStart, decisionLength);
                     completeOnDispatchWorker(request.future, chunkResult, null);
-                    nearestOffset = nearestEnd;
-                    statusOffset = statusEnd;
+                    nearestOffset += nearestLength;
+                    statusOffset += statusLength;
                 }
             });
         } catch (Throwable failure) {
