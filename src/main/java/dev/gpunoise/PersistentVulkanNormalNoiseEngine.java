@@ -898,7 +898,12 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             VkBufferMemoryBarrier.Buffer finalBarriers = VkBufferMemoryBarrier.calloc(2, stack);
             finalBarriers.get(0).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
                     .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(results.buffer)
-                    .size((long) sampleCount * rootCount * Float.BYTES);
+                    // The fused shader writes only the parity-admitted corner
+                    // roots at a compact per-sample stride. Keep the host
+                    // visibility dependency scoped to bytes actually written;
+                    // the logical router root count is only used to evaluate
+                    // the graph and is not the output stride in this path.
+                    .size((long) sampleCount * cornerRootIndexes.length * Float.BYTES);
             finalBarriers.get(1).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
                     .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(interpolationOutput.buffer)
                     .size((long) blockCount * outputRoots * Float.BYTES);
