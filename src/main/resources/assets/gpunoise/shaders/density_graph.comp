@@ -636,11 +636,6 @@ void main(){
     uint fusedOutputRootCount=routerRootCount;
     uint gridOutputRootCount=fusedTerrainGrid?fusedOutputRootCount:routerRootCount;
     uint outputStride=fusedTerrainGrid?fusedOutputRootCount:routerRootCount+interpolationCount;
-    if (fusedTerrainGrid && sampleIndex == 0u) {
-        // Temporary probe: retained only if the root loop below is skipped.
-        results[0] = 9000000.0 + float(fusedOutputRootCount);
-        results[1] = 9000000.0 + float(fusedOutputRootCount);
-    }
     for (uint root = 0u; root < gridOutputRootCount; root++) {
         // In fused terrain mode the first root table is already compacted to
         // the selected corner outputs. Keep one output-root lookup contract
@@ -651,6 +646,15 @@ void main(){
         results[sampleIndex * outputStride + root] = fusedTerrainGrid
                 ? 1000000.0 + float(fusedOutputRootCount * 256u + rootNode)
                 : float(values[rootNode]);
+    }
+    // Temporary CI probe runs after the root loop so it remains visible even
+    // when the decoded output count is zero.
+    if (sampleIndex == 0u) {
+        float diagnosticBase = 9000000.0
+                + (fusedTerrainGrid ? 1000000.0 : 0.0)
+                + float(routerRootCount * 512u);
+        results[0] = diagnosticBase + float(rootNodes[0]);
+        results[1] = diagnosticBase + float(rootNodes[1]);
     }
     for(uint marker=0u;marker<interpolationCount;marker++) {
         float markerValue=float(values[interpolatorMap[1u+marker]]);
