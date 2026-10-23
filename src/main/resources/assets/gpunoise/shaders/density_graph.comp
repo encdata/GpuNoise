@@ -643,16 +643,15 @@ void main(){
         uint rootNode=rootNodes[root];
         results[sampleIndex * outputStride + root] = float(values[rootNode]);
     }
-    // Temporary CI probe runs after the root loop so it remains visible even
-    // when the decoded output count is zero.
-    if (sampleIndex == 0u && nodeCount == 9u) {
-        float diagnosticBase = 9000000.0
-                + 1000000.0
-                + (fusedTerrainGrid ? 1000000.0 : 0.0)
-                + float(routerRootCount * 512u);
-        results[0] = diagnosticBase + float(rootNodes[0]);
-        results[1] = diagnosticBase + float(rootNodes[1]);
+#ifdef ROOT_DEBUG_PROBE
+    if (sampleIndex == 0u) {
+        results[1024] = float(1000000u
+                + (fusedTerrainGrid ? 100000u : 0u)
+                + routerRootCount * 256u);
+        results[1025] = float(rootNodes[0]);
+        results[1026] = float(rootNodes[1]);
     }
+#endif
     for(uint marker=0u;marker<interpolationCount;marker++) {
         float markerValue=float(values[interpolatorMap[1u+marker]]);
         if(fusedTerrainGrid)

@@ -624,6 +624,14 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 long[] stageGpuNanos = GPU_TIMING_ENABLED ? readTerrainGpuTimestamps(stack) : null;
                 float[] corners = readSelectedRootResults(inFlightSamples, inFlightTerrainCornerRoots,
                         inFlightTerrainCornerRootIndexes);
+                if (Boolean.getBoolean("gpunoise.debugRootProbe")) {
+                    int probeOffset = 1024 * Float.BYTES;
+                    GpuNoise.LOGGER.info("GPU compact-root probe slot=" + System.identityHashCode(this)
+                            + ", selected=" + java.util.Arrays.toString(inFlightTerrainCornerRootIndexes)
+                            + ", shader=" + persistentResults.getFloat(probeOffset) + "/"
+                            + persistentResults.getFloat(probeOffset + Float.BYTES) + "/"
+                            + persistentResults.getFloat(probeOffset + 2 * Float.BYTES));
+                }
                 FloatBuffer blockValues = persistentMappings.get(interpolationOutput).duplicate()
                         .order(ByteOrder.nativeOrder()).asFloatBuffer();
                 blockValues.clear();
@@ -914,7 +922,10 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     // visibility dependency scoped to bytes actually written;
                     // the logical router root count is only used to evaluate
                     // the graph and is not the output stride in this path.
-                    .size((long) sampleCount * cornerRootIndexes.length * Float.BYTES);
+                    .size(Boolean.getBoolean("gpunoise.debugRootProbe")
+                            ? Math.max((long) sampleCount * cornerRootIndexes.length * Float.BYTES,
+                                    1027L * Float.BYTES)
+                            : (long) sampleCount * cornerRootIndexes.length * Float.BYTES);
             finalBarriers.get(1).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
                     .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(interpolationOutput.buffer)
                     .size((long) blockCount * outputRoots * Float.BYTES);
@@ -1896,6 +1907,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         try {
             Map<String, String> gridDefines = new java.util.HashMap<>(defines);
             gridDefines.put("GRID_INPUT", "1");
+        if (Boolean.getBoolean("gpunoise.debugRootProbe")) gridDefines.put("ROOT_DEBUG_PROBE", "1");
             nextGridShader = compileRuntimeShader(source, "terrain grid", gridDefines, graph, packed, false);
         } catch (Throwable failure) {
             vkDestroyShaderModule(device, nextGraphShader, null);

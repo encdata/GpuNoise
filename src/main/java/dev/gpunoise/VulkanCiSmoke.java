@@ -35,6 +35,7 @@ public final class VulkanCiSmoke {
     }
 
     public static void main(String[] args) throws Exception {
+        System.setProperty("gpunoise.debugRootProbe", "true");
         // Called by the CI server after NeoForge has initialized the registry
         // and mod-loading lifecycle. A standalone JavaExec cannot safely boot
         // these fixtures because NeoForge's LoadingModList is unavailable.
