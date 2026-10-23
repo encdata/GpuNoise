@@ -14,6 +14,10 @@ import net.minecraft.world.level.levelgen.DensityFunction;
 import net.minecraft.world.level.levelgen.DensityFunctions;
 import net.minecraft.world.level.levelgen.NoiseChunk;
 import net.minecraft.world.level.levelgen.OreVeinifier;
+import net.minecraft.world.level.levelgen.Beardifier;
+import net.minecraft.world.level.levelgen.structure.BoundingBox;
+import net.minecraft.world.level.levelgen.structure.TerrainAdjustment;
+import net.minecraft.world.level.levelgen.structure.pools.JigsawJunction;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQuery;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQueries;
 
@@ -65,6 +69,7 @@ public final class VulkanCiSmoke {
         System.out.println("Vulkan CI smoke: creating submission ring");
         VulkanSubmissionRing ring = createTwoSlotSmokeRing(selectedDevice);
         try (ring) {
+            verifyGpuBeardifier(ring);
             assertNumericFixture(ring, registeredTranslator, "registered custom density translator",
                     new float[]{-193.0f, -1.0f, 37.0f, 256.0f},
                     new float[]{-64.0f, 0.0f, 91.0f, 319.0f},
@@ -1419,6 +1424,41 @@ public final class VulkanCiSmoke {
 
         System.out.println("Vulkan CI smoke passed on " + device.name()
                 + ": coordinate and terrain grids passed; interpolation preserved axis-coded values across isotropic cells, anisotropic cells, shared terrain/material-root lattices, and non-associative Y-X-Z float rounding; aquifer pressure, four-center selection, vanilla/C2ME substance decisions, and OreVeinifier outputs matched Java references.");
+    }
+
+    private static void verifyGpuBeardifier(VulkanSubmissionRing ring) throws Exception {
+        List<Beardifier.Rigid> pieces = List.of(
+                new Beardifier.Rigid(new BoundingBox(-3, -4, -2, 2, 2, 3), TerrainAdjustment.BURY, 1),
+                new Beardifier.Rigid(new BoundingBox(-2, -2, -3, 3, 4, 2), TerrainAdjustment.BEARD_THIN, 0),
+                new Beardifier.Rigid(new BoundingBox(-4, -3, -1, 1, 3, 4), TerrainAdjustment.BEARD_BOX, 2),
+                new Beardifier.Rigid(new BoundingBox(-1, -4, -4, 4, 1, 1), TerrainAdjustment.ENCAPSULATE, 0));
+        List<JigsawJunction> junctions = List.of(
+                new JigsawJunction(1, 2, -1, 0,
+                        net.minecraft.world.level.levelgen.structure.pools.StructureTemplatePool.Projection.RIGID));
+        float[] kernel = BeardifierAccessor.gpunoise$kernel();
+        GpuBeardifierInputs inputs = new GpuBeardifierInputs(pieces, junctions, kernel);
+        float[] base = new float[256];
+        for (int i = 0; i < base.length; i++) base[i] = (i - 128) * 0.003125f;
+        ByteBuffer records = inputs.pack(-8, 0, -8, 1, base);
+        try {
+            float[] actual = ring.submitBeardifier(records, base.length).get(60, TimeUnit.SECONDS);
+            Beardifier reference = new Beardifier(
+                    new it.unimi.dsi.fastutil.objects.ObjectArrayList<>(pieces).iterator(),
+                    new it.unimi.dsi.fastutil.objects.ObjectArrayList<>(junctions).iterator());
+            for (int index = 0; index < base.length; index++) {
+                int x = -8 + (index & 15);
+                int z = -8 + (index >>> 4);
+                double expected = base[index] + reference.compute(
+                        new DensityFunction.SinglePointContext(x, 0, z));
+                if (Math.abs(actual[index] - expected) > GpuTerrainRuntime.GRAPH_PARITY_EPSILON) {
+                    throw new IllegalStateException("Vulkan Beardifier mismatch at (" + x + ",0," + z
+                            + "): expected=" + expected + ", got=" + actual[index]);
+                }
+            }
+            System.out.println("Vulkan CI smoke: Beardifier piece and junction parity completed");
+        } finally {
+            GpuTerrainInputBufferPool.release(records);
+        }
     }
 
     private static void verifyOreVeinShader(VulkanSubmissionRing ring) throws Exception {

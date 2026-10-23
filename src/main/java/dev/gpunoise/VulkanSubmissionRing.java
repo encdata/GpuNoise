@@ -1366,6 +1366,11 @@ final class VulkanSubmissionRing implements AutoCloseable {
         return future;
     }
 
+    CompletableFuture<float[]> submitBeardifier(ByteBuffer records, int count) {
+        ByteBuffer input = records.duplicate();
+        return submitBlocking("GPU Beardifier", slot -> slot.submitBeardifier(input, count));
+    }
+
     CompletableFuture<GpuAquiferPrefillResult> submitAquiferPrefill(
             ByteBuffer nearestRecords, int nearestCount, ByteBuffer statusRecords, int statusCount) {
         return submitAquiferPrefill(nearestRecords, nearestCount, statusRecords, statusCount, false);

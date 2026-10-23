@@ -11,9 +11,11 @@ import dev.gpunoise.GpuTerrainRoots;
 import dev.gpunoise.GpuTerrainProfiler;
 import dev.gpunoise.GpuTerrainDensityParity;
 import dev.gpunoise.GpuClimateFunction;
+import dev.gpunoise.GpuBeardifierInputs;
 import net.minecraft.world.level.levelgen.DensityFunction;
 import net.minecraft.world.level.levelgen.DensityFunctions;
 import net.minecraft.world.level.levelgen.NoiseChunk;
+import net.minecraft.world.level.levelgen.Beardifier;
 import net.minecraft.world.level.levelgen.NoiseRouter;
 import net.minecraft.world.level.levelgen.NoiseSettings;
 import net.minecraft.world.level.levelgen.Aquifer;
@@ -63,6 +65,7 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     @Unique private GpuChunkDensityCache gpunoise$cache;
     @Unique private boolean gpunoise$zeroBeardifier;
     @Unique private boolean gpunoise$gpuUseMarked;
+    @Unique private GpuBeardifierInputs gpunoise$beardifierInputs;
 
     @Inject(method = "<init>", at = @At("TAIL"))
     private void gpunoise$installGpuCache(CallbackInfo callback) {
@@ -71,6 +74,28 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
         // structure beardifier calculations.
         gpunoise$zeroBeardifier = beardifier.getClass().isEnum()
                 && beardifier.getClass().getName().endsWith("DensityFunctions$BeardifierMarker");
+        if (beardifier instanceof Beardifier structureBeardifier) {
+            try {
+                BeardifierAccessor access = (BeardifierAccessor) (Object) structureBeardifier;
+                var pieces = access.gpunoise$pieceIterator();
+                var junctions = access.gpunoise$junctionIterator();
+                pieces.back(Integer.MAX_VALUE);
+                junctions.back(Integer.MAX_VALUE);
+                java.util.ArrayList<Beardifier.Rigid> pieceSnapshot = new java.util.ArrayList<>();
+                java.util.ArrayList<net.minecraft.world.level.levelgen.structure.pools.JigsawJunction>
+                        junctionSnapshot = new java.util.ArrayList<>();
+                while (pieces.hasNext()) pieceSnapshot.add(pieces.next());
+                while (junctions.hasNext()) junctionSnapshot.add(junctions.next());
+                pieces.back(Integer.MAX_VALUE);
+                junctions.back(Integer.MAX_VALUE);
+                gpunoise$beardifierInputs = new GpuBeardifierInputs(
+                        pieceSnapshot, junctionSnapshot, BeardifierAccessor.gpunoise$kernel());
+            } catch (RuntimeException | LinkageError failure) {
+                gpunoise$beardifierInputs = null;
+                dev.gpunoise.GpuNoise.LOGGER.warn(
+                        "GPU Beardifier snapshot unavailable; structure density remains on the Java path.", failure);
+            }
+        }
         GpuChunkDensityCache cache = GpuTerrainRuntime.activeFillCache();
         if (cache != null && cache.matchesChunk(firstNoiseX << 2, firstNoiseZ << 2)) {
             gpunoise$cache = cache;
@@ -124,8 +149,19 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
 
     @Override
     public double gpunoise$withBeardifier(double cachedDensity, int x, int y, int z) {
-        if (gpunoise$zeroBeardifier) return cachedDensity;
+        if (gpunoise$hasZeroBeardifier()) return cachedDensity;
         return cachedDensity + beardifier.compute(new DensityFunction.SinglePointContext(x, y, z));
+    }
+
+    @Override
+    public GpuBeardifierInputs gpunoise$beardifierInputs() {
+        return gpunoise$beardifierInputs;
+    }
+
+    @Override
+    public boolean gpunoise$hasZeroBeardifier() {
+        return gpunoise$zeroBeardifier || gpunoise$beardifierInputs != null
+                && !gpunoise$beardifierInputs.hasContributions();
     }
 
     @Override

@@ -1,6 +1,7 @@
 package dev.gpunoise.mixin;
 
 import dev.gpunoise.GpuChunkDensityCache;
+import dev.gpunoise.GpuBeardifierInputs;
 import dev.gpunoise.GpuAquiferDecisionAccess;
 import dev.gpunoise.GpuNoiseChunkAccess;
 import dev.gpunoise.GpuTerrainRuntime;
@@ -300,6 +301,24 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         int decisionCapacity = Math.multiplyExact(height, 256);
         GpuAquiferDecisionTable decisions = new GpuAquiferDecisionTable(minX, minY, minZ, height);
         GpuChunkDensityCache.FinalDensityBlockView finalDensityBlockView = cache.finalDensityBlockView();
+        float[] gpuBeardifierDensities = null;
+        if (!noiseAccess.gpunoise$hasZeroBeardifier() && finalDensityBlockView != null) {
+            GpuBeardifierInputs beardifierInputs = noiseAccess.gpunoise$beardifierInputs();
+            if (beardifierInputs != null) {
+                java.nio.ByteBuffer records = beardifierInputs.pack(minX, minY, minZ, height,
+                        finalDensityBlockView);
+                try {
+                    gpuBeardifierDensities = GpuTerrainRuntime.submitBeardifier(records, decisionCapacity)
+                            .toCompletableFuture().join();
+                    finalDensityBlockView.recordReads(decisionCapacity);
+                    dev.gpunoise.GpuNoise.LOGGER.debug(
+                            "GPU Beardifier evaluated {} block-density samples from {} pieces and {} junctions",
+                            decisionCapacity, beardifierInputs.pieceCount(), beardifierInputs.junctionCount());
+                } finally {
+                    dev.gpunoise.GpuTerrainInputBufferPool.release(records);
+                }
+            }
+        }
         AquiferQueries queries = new AquiferQueries(decisionCapacity);
         GpuAquiferSubstance.BatchWriter substanceWriter =
                 new GpuAquiferSubstance.BatchWriter(decisionCapacity,
@@ -319,18 +338,34 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         boolean exactAquiferInputs = GpuAquiferRuntimeMode.exactAquiferInputsEnabled();
         int directGlobalFluidDecisions = 0;
         int positiveDensityDecisions = 0;
+        int beardifierParitySamples = 0;
+        int beardifierParityMismatches = 0;
+        String beardifierFirstMismatch = null;
 
         long inputScanStart = GpuTerrainProfiler.beginAquiferPhase();
         for (int y = minY; y < minY + height; y++) {
             for (int z = minZ; z < minZ + 16; z++) {
                 for (int x = minX; x < minX + 16; x++) {
                     int localX = x - minX, localY = y - minY, localZ = z - minZ;
+                    int index = (y - minY) * 256 + (z - minZ) * 16 + (x - minX);
                     double cachedDensity = finalDensityBlockView != null
                             ? finalDensityBlockView.valueAtLocalUnchecked(localX, localY, localZ)
                             : cache.finalDensity(x, y, z);
-                    double density = noiseAccess.gpunoise$withBeardifier(cachedDensity, x, y, z);
+                    double density = gpuBeardifierDensities != null
+                            ? gpuBeardifierDensities[index]
+                            : noiseAccess.gpunoise$withBeardifier(cachedDensity, x, y, z);
+                    if (gpuBeardifierDensities != null && gpunoise$verifyAquifer
+                            && GpuTerrainDensityParity.shouldCompare(x, z)) {
+                        double javaDensity = noiseAccess.gpunoise$withBeardifier(cachedDensity, x, y, z);
+                        beardifierParitySamples++;
+                        if (!Double.isFinite(javaDensity)
+                                || Math.abs(javaDensity - density) > GpuTerrainRuntime.GRAPH_PARITY_EPSILON) {
+                            beardifierParityMismatches++;
+                            if (beardifierFirstMismatch == null) beardifierFirstMismatch = "block=("
+                                    + x + "," + y + "," + z + "), java=" + javaDensity + ", gpu=" + density;
+                        }
+                    }
                     if (!Double.isFinite(density)) continue;
-                    int index = (y - minY) * 256 + (z - minZ) * 16 + (x - minX);
                     if (density > 0.0) {
                         if (GpuAquiferSubstance.nearDensityDecisionThreshold(density)) {
                             // The graph's float result may have a different
@@ -413,6 +448,12 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         }
         if (finalDensityBlockView != null) finalDensityBlockView.recordReads(decisionCapacity);
         GpuTerrainProfiler.recordAquiferPhase(GpuTerrainProfiler.AQUIFER_SCAN, inputScanStart);
+        if (gpuBeardifierDensities != null && gpunoise$verifyAquifer) {
+            dev.gpunoise.GpuNoise.LOGGER.info(
+                    "GPU Beardifier parity: samples={}, mismatches={}, firstMismatch={}",
+                    beardifierParitySamples, beardifierParityMismatches,
+                    beardifierFirstMismatch == null ? "none" : beardifierFirstMismatch);
+        }
 
         // C2ME OCL precomputes random-center FluidStatus values before resolving
         // decisions. C2ME statuses are evaluated in bulk on Vulkan; vanilla

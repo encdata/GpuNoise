@@ -596,6 +596,14 @@ public final class GpuTerrainRuntime {
         return ring.submitAquiferFluidStatus(records, queryCount);
     }
 
+    public static java.util.concurrent.CompletionStage<float[]> submitBeardifier(
+            java.nio.ByteBuffer records, int sampleCount) {
+        VulkanSubmissionRing ring = terrainRing;
+        if (ring == null) return java.util.concurrent.CompletableFuture.failedStage(
+                new IllegalStateException("GPU terrain graph provider is not installed"));
+        return ring.submitBeardifier(records, sampleCount);
+    }
+
     public static java.util.concurrent.CompletionStage<GpuAquiferPrefillResult> submitAquiferPrefill(
             java.nio.ByteBuffer nearestRecords, int nearestCount,
             java.nio.ByteBuffer statusRecords, int statusCount) {

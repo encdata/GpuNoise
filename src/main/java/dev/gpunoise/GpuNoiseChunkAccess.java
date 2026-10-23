@@ -11,5 +11,9 @@ public interface GpuNoiseChunkAccess {
 
     double gpunoise$withBeardifier(double cachedDensity, int x, int y, int z);
 
+    GpuBeardifierInputs gpunoise$beardifierInputs();
+
+    boolean gpunoise$hasZeroBeardifier();
+
     int gpunoise$preliminarySurfaceLevel(int x, int z);
 }

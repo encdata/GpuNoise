@@ -77,6 +77,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private final long aquiferNearestShader, aquiferNearestDescriptorLayout, aquiferNearestPipelineLayout,
             aquiferNearestPipeline, aquiferNearestDescriptorPool, aquiferNearestDescriptorSet;
     private final long aquiferSubstanceShader, aquiferSubstancePipelineLayout, aquiferSubstancePipeline;
+    private final long beardifierShader, beardifierPipeline;
     private final long oreVeinShader, oreVeinPipelineLayout, oreVeinPipeline;
     private final long aquiferFluidStatusShader, aquiferFluidStatusPipelineLayout, aquiferFluidStatusPipeline;
     private final long aquiferDecisionChainShader, aquiferDecisionChainPipelineLayout,
@@ -224,6 +225,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             aquiferSubstanceShader = loadShader(stack, "/assets/gpunoise/shaders/aquifer_substance.comp.spv", "aquifer substance shader");
             aquiferSubstancePipelineLayout = aquiferSubstancePipelineLayout(stack);
             aquiferSubstancePipeline = aquiferSubstancePipeline(stack);
+            beardifierShader = loadShader(stack, "/assets/gpunoise/shaders/beardifier.comp.spv", "GPU Beardifier shader");
+            beardifierPipeline = aquiferPipeline(beardifierShader, aquiferSubstancePipelineLayout,
+                    stack, "GPU Beardifier pipeline");
             oreVeinShader = loadShader(stack, "/assets/gpunoise/shaders/ore_vein.comp.spv", "ore vein shader");
             oreVeinPipelineLayout = oreVeinPipelineLayout(stack);
             oreVeinPipeline = aquiferPipeline(oreVeinShader, oreVeinPipelineLayout, stack, "ore vein pipeline");
@@ -314,6 +318,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             aquiferSubstanceShader = loadShader(stack, "/assets/gpunoise/shaders/aquifer_substance.comp.spv", "aquifer substance shader");
             aquiferSubstancePipelineLayout = aquiferSubstancePipelineLayout(stack);
             aquiferSubstancePipeline = aquiferSubstancePipeline(stack);
+            beardifierShader = loadShader(stack, "/assets/gpunoise/shaders/beardifier.comp.spv", "GPU Beardifier shader");
+            beardifierPipeline = aquiferPipeline(beardifierShader, aquiferSubstancePipelineLayout,
+                    stack, "GPU Beardifier pipeline");
             oreVeinShader = loadShader(stack, "/assets/gpunoise/shaders/ore_vein.comp.spv", "ore vein shader");
             oreVeinPipelineLayout = oreVeinPipelineLayout(stack);
             oreVeinPipeline = aquiferPipeline(oreVeinShader, oreVeinPipelineLayout, stack, "ore vein pipeline");
@@ -1395,6 +1402,46 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         }
     }
 
+    /** Adds structure Beardifier contributions to full block-density samples on Vulkan. */
+    synchronized float[] submitBeardifier(ByteBuffer records, int count) throws Exception {
+        if (hasInFlightWork()) throw new IllegalStateException("Vulkan slot is still in flight");
+        if (!GpuBeardifierInputs.isValidPacked(records, count))
+            throw new IllegalArgumentException("invalid GPU Beardifier input batch");
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            put(aquiferNearestInputs, records, stack);
+            check(vkResetCommandBuffer(commandBuffer, 0), "reset GPU Beardifier command buffer");
+            check(vkBeginCommandBuffer(commandBuffer, VkCommandBufferBeginInfo.calloc(stack).sType$Default()),
+                    "begin GPU Beardifier command buffer");
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, beardifierPipeline);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                    aquiferSubstancePipelineLayout, 0, stack.longs(aquiferNearestDescriptorSet), null);
+            ByteBuffer push = stack.malloc(4).order(ByteOrder.nativeOrder()).putInt(count).flip();
+            vkCmdPushConstants(commandBuffer, aquiferSubstancePipelineLayout,
+                    VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
+            vkCmdDispatch(commandBuffer, (count + 63) / 64, 1, 1);
+            VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
+                    .srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_HOST_READ_BIT)
+                    .buffer(aquiferNearestOutput.buffer).size((long) count * Integer.BYTES);
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_PIPELINE_STAGE_HOST_BIT, 0, null, barrier, null);
+            check(vkEndCommandBuffer(commandBuffer), "end GPU Beardifier command buffer");
+            synchronized (queueSubmitLock) {
+                check(vkQueueSubmit(queue, VkSubmitInfo.calloc(stack).sType$Default()
+                        .pCommandBuffers(stack.pointers(commandBuffer.address())), fence),
+                        "submit GPU Beardifier");
+            }
+            check(vkWaitForFences(device, fence, true, Long.MAX_VALUE), "wait GPU Beardifier");
+            check(vkResetFences(device, fence), "reset GPU Beardifier fence");
+            IntBuffer values = persistentMappings.get(aquiferNearestOutput)
+                    .duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
+            values.clear();
+            values.limit(count);
+            float[] output = new float[count];
+            for (int i = 0; i < count; i++) output[i] = Float.intBitsToFloat(values.get());
+            return output;
+        }
+    }
+
     private static boolean validAquiferStatusPayload(ByteBuffer records, int count) {
         if (records == null || count <= 0) return false;
         long bytes = records.remaining();
@@ -2200,6 +2247,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         vkDestroyDescriptorPool(device, aquiferNearestDescriptorPool, null);
         vkDestroyShaderModule(device, aquiferNearestShader, null);
         vkDestroyPipeline(device, aquiferSubstancePipeline, null);
+        vkDestroyPipeline(device, beardifierPipeline, null);
+        vkDestroyShaderModule(device, beardifierShader, null);
         vkDestroyPipelineLayout(device, aquiferSubstancePipelineLayout, null);
         vkDestroyShaderModule(device, aquiferSubstanceShader, null);
         vkDestroyPipeline(device, oreVeinPipeline, null);

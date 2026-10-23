@@ -1,0 +1,84 @@
+#version 450
+layout(local_size_x = 64) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Inputs { uint words[]; };
+layout(std430, set = 0, binding = 1) writeonly buffer Outputs { uint densities[]; };
+layout(push_constant) uniform Parameters { uint sampleCount; };
+
+const uint HEADER_WORDS = 13u;
+const uint PIECE_WORDS = 8u;
+const uint JUNCTION_WORDS = 3u;
+const uint SAMPLE_WORDS = 4u;
+const uint TABLE_VALUES = 24u * 24u * 24u;
+
+float magnitudeWeight(float x, float y, float z) {
+    float magnitude = sqrt(x * x + y * y + z * z);
+    return magnitude > 6.0 ? 0.0 : 1.0 - magnitude / 6.0;
+}
+
+float structureWeight(uint tableBase, int x, int y, int z, int yy) {
+    int i = x + 12;
+    int j = y + 12;
+    int k = z + 12;
+    if (i < 0 || i >= 24 || j < 0 || j >= 24 || k < 0 || k >= 24) return 0.0;
+    float d = float(yy) + 0.5;
+    float squared = float(x * x + z * z) + d * d;
+    float f = -d * inversesqrt(squared * 0.5) * 0.5;
+    uint index = uint(k * 24 * 24 + i * 24 + j);
+    return f * uintBitsToFloat(words[tableBase + index]);
+}
+
+void main() {
+    uint sample = gl_GlobalInvocationID.x;
+    if (sample >= sampleCount || sample >= words[0]) return;
+    uint pieceCount = words[1];
+    uint junctionCount = words[2];
+    int x = int(words[words[12] + sample * SAMPLE_WORDS]);
+    int y = int(words[words[12] + sample * SAMPLE_WORDS + 1u]);
+    int z = int(words[words[12] + sample * SAMPLE_WORDS + 2u]);
+    uint sampleBase = words[12];
+    uint pieceBase = words[9];
+    uint junctionBase = words[10];
+    uint tableBase = words[11];
+    float density = uintBitsToFloat(words[sampleBase + sample * SAMPLE_WORDS + 3u]);
+    float beard = 0.0;
+
+    if (x >= int(words[3]) && y >= int(words[4]) && z >= int(words[5])
+            && x <= int(words[6]) && y <= int(words[7]) && z <= int(words[8])) {
+        for (uint index = 0u; index < pieceCount; index++) {
+            uint base = pieceBase + index * PIECE_WORDS;
+            int minX = int(words[base]);
+            int minY = int(words[base + 1u]);
+            int minZ = int(words[base + 2u]);
+            int maxX = int(words[base + 3u]);
+            int maxY = int(words[base + 4u]);
+            int maxZ = int(words[base + 5u]);
+            int groundDelta = int(words[base + 6u]);
+            int adjustment = int(words[base + 7u]);
+            int dx = max(0, max(minX - x, x - maxX));
+            int dz = max(0, max(minZ - z, z - maxZ));
+            int groundY = minY + groundDelta;
+            int dy = y - groundY;
+            if (adjustment == 1) {
+                beard += magnitudeWeight(float(dx), float(dy) * 0.5, float(dz));
+            } else if (adjustment == 2) {
+                beard += structureWeight(tableBase, dx, dy, dz, dy) * 0.8;
+            } else if (adjustment == 3) {
+                int boxDy = max(0, max(groundY - y, y - maxY));
+                beard += structureWeight(tableBase, dx, boxDy, dz, dy) * 0.8;
+            } else if (adjustment == 4) {
+                int boxDy = max(0, max(minY - y, y - maxY));
+                beard += magnitudeWeight(float(dx) * 0.5, float(boxDy) * 0.5,
+                        float(dz) * 0.5) * 0.8;
+            }
+        }
+        for (uint index = 0u; index < junctionCount; index++) {
+            uint base = junctionBase + index * JUNCTION_WORDS;
+            int dx = x - int(words[base]);
+            int dy = y - int(words[base + 1u]);
+            int dz = z - int(words[base + 2u]);
+            beard += structureWeight(tableBase, dx, dy, dz, dy) * 0.4;
+        }
+    }
+    densities[sample] = floatBitsToUint(density + beard);
+}
