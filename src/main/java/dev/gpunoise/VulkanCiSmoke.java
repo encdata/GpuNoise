@@ -49,6 +49,7 @@ public final class VulkanCiSmoke {
         }
         verifyTerrainParityRules();
         verifyChunkPipelineCancellation();
+        verifyTerrainSurfaceRegionPlan();
         GpuDensityExpressionSmoke.verify();
         verifyTranslatorRegistry();
         verifyAquiferStatusRegionCache();
@@ -1748,6 +1749,54 @@ public final class VulkanCiSmoke {
             if (!expected.getMessage().startsWith("Ambiguous GPU density translators for ")) throw expected;
         }
         System.out.println("Vulkan CI smoke: custom density adapter inheritance and precedence passed");
+    }
+
+    private static void verifyTerrainSurfaceRegionPlan() {
+        GpuTerrainSurfaceRegion region = new GpuTerrainSurfaceRegion(
+                -7, 9, 4, 4, -64, 384, 4, 8);
+        if (region.gridStartChunkX() != -11 || region.gridStartChunkZ() != 5
+                || region.gridChunksX() != 12 || region.gridChunksZ() != 12
+                || region.chunkCount() != 144 || region.surfaceWidth() != 48
+                || region.surfaceDepth() != 48 || region.samplesPerChunk() != 1_225) {
+            throw new IllegalStateException("OCL surface region dimensions or four-chunk halo changed");
+        }
+        List<GpuTerrainSurfaceRegion.ChunkRange> ranges = region.ranges(
+                PersistentVulkanNormalNoiseEngine.CAPACITY, 256);
+        if (ranges.size() != 9 || ranges.get(0).chunkCount() != 16
+                || ranges.get(ranges.size() - 1).endChunkExclusive() != region.chunkCount()) {
+            throw new IllegalStateException("surface region dispatch ranges exceed compact GPU output capacity");
+        }
+        GpuTerrainSurfaceRegion.ChunkRange first = ranges.get(0);
+        ByteBuffer grids = region.gridMetadata(first).order(ByteOrder.nativeOrder());
+        if (grids.getInt(0) != -176 || grids.getInt(4) != -64 || grids.getInt(8) != 80
+                || grids.getInt(12) != 5 || grids.getInt(16) != 49
+                || grids.getInt(20) != 5 || grids.getInt(24) != 4 || grids.getInt(28) != 8) {
+            throw new IllegalStateException("surface region grid metadata changed origin or lattice dimensions");
+        }
+        ByteBuffer surfaceMetadata = region.surfaceMetadata(first).order(ByteOrder.nativeOrder());
+        if (surfaceMetadata.getInt(0) != 0 || surfaceMetadata.getInt(8) != 4
+                || surfaceMetadata.getInt(12) != 48 || surfaceMetadata.getInt(16) != 4
+                || surfaceMetadata.getInt(24) != 8 || surfaceMetadata.getInt(32) != -176
+                || surfaceMetadata.getInt(36) != -64 || surfaceMetadata.getInt(40) != 80
+                || surfaceMetadata.getInt(44) != 0) {
+            throw new IllegalStateException("surface shader metadata ABI changed");
+        }
+        int[] output = new int[region.surfaceValueCount()];
+        for (GpuTerrainSurfaceRegion.ChunkRange range : ranges) {
+            int[] values = new int[range.chunkCount() * GpuTerrainSurfaceRegion.SURFACE_COLUMNS_PER_CHUNK];
+            for (int chunk = 0; chunk < range.chunkCount(); chunk++) {
+                for (int column = 0; column < GpuTerrainSurfaceRegion.SURFACE_COLUMNS_PER_CHUNK; column++) {
+                    values[chunk * GpuTerrainSurfaceRegion.SURFACE_COLUMNS_PER_CHUNK + column] =
+                            (range.firstChunk() + chunk) * 16 + column;
+                }
+            }
+            region.stitch(range, values, output);
+        }
+        if (output[0] != 0 || output[47 * region.surfaceDepth() + 47] != 143 * 16 + 15
+                || output[4 * region.surfaceDepth() + 12] != 37 * 16) {
+            throw new IllegalStateException("surface region stitch changed chunk or quart-column ordering");
+        }
+        System.out.println("Vulkan CI smoke: expanded terrain surface region packing and stitching passed");
     }
 
     private static GpuDensityExpressionSmoke.VulkanBranchFixture createRegisteredTranslatorFixture() {
