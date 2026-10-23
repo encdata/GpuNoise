@@ -12,6 +12,7 @@ import dev.gpunoise.GpuTerrainProfiler;
 import dev.gpunoise.GpuTerrainDensityParity;
 import dev.gpunoise.GpuClimateFunction;
 import dev.gpunoise.GpuBeardifierInputs;
+import dev.gpunoise.GpuBeardifierOverlay;
 import net.minecraft.world.level.levelgen.DensityFunction;
 import net.minecraft.world.level.levelgen.DensityFunctions;
 import net.minecraft.world.level.levelgen.NoiseChunk;

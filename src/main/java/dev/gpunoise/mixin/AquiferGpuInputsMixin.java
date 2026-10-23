@@ -771,7 +771,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     @org.spongepowered.asm.mixin.Unique
     private int gpunoise$dispatchReadySubstanceRows(PendingDecisions pending,
                                                      GpuAquiferSubstance.BatchWriter writer,
-                                                     List<CompletableFuture<int[]>> batches,
+                                                     List<CompletableFuture<GpuAquiferRowsView>> batches,
                                                      int submittedRows) {
         if (pending.size() - submittedRows < gpunoise$substanceRowsPerDispatch) return submittedRows;
         for (java.nio.ByteBuffer records : writer.drain()) {
