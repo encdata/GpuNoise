@@ -204,6 +204,14 @@ public final class GpuTerrainDecisionWriter {
                 }
             }
         }
+        boolean profileDecisionUse = GpuTerrainProfiler.enabled();
+        long blockDecisionSamples = 0L;
+        long gpuDecisionHits = 0L;
+        long missingDecisionRows = 0L;
+        long missingDensityCache = 0L;
+        long parityBypasses = 0L;
+        long unavailableDensity = 0L;
+        long densityMismatches = 0L;
 
         noiseChunk.initializeForFirstCellX();
         for (int cellX = 0; cellX < cellsXZ; cellX++) {
@@ -227,6 +235,12 @@ public final class GpuTerrainDecisionWriter {
                                 int decisionIndex = (y - minDecisionY) * 256
                                         + (z - startZ) * 16 + (x - startX);
                                 int columnIndex = (localZ << 4) | localX;
+                                if (profileDecisionUse) {
+                                    blockDecisionSamples++;
+                                    if (densityCache == null) missingDensityCache++;
+                                    else if (!decisions.isValid(decisionIndex)) missingDecisionRows++;
+                                    else if (parityColumns != null && parityColumns[columnIndex]) parityBypasses++;
+                                }
                                 BlockState gpuState = null;
                                 boolean exactGpuDecision = false;
                                 // The table is tied to the exact density passed
@@ -260,7 +274,12 @@ public final class GpuTerrainDecisionWriter {
                                         if (decisions.matchesDensity(decisionIndex, density)) {
                                             gpuState = candidate;
                                             exactGpuDecision = true;
+                                            if (profileDecisionUse) gpuDecisionHits++;
+                                        } else if (profileDecisionUse) {
+                                            densityMismatches++;
                                         }
+                                    } else if (profileDecisionUse) {
+                                        unavailableDensity++;
                                     }
                                 }
                                 boolean gpuStateResolved = exactGpuDecision;
@@ -322,6 +341,9 @@ public final class GpuTerrainDecisionWriter {
         }
         noiseChunk.stopInterpolation();
         GpuTerrainProfiler.recordTerrainBlockPreparation(preparationStart);
+        GpuTerrainProfiler.recordTerrainDecisionUse(blockDecisionSamples, gpuDecisionHits,
+                missingDecisionRows, missingDensityCache, parityBypasses,
+                unavailableDensity, densityMismatches);
         return new PreparedChunk(chunk, minY, cellCountY * cellHeight, fillState,
                 blockPaletteIds, palette);
     }

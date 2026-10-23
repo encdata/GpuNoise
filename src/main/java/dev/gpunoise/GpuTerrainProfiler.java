@@ -76,6 +76,13 @@ public final class GpuTerrainProfiler {
     private static final LongAdder blockWriteSamples = new LongAdder();
     private static final LongAdder terrainBlockPreparationCalls = new LongAdder();
     private static final LongAdder terrainBlockPreparationSamples = new LongAdder();
+    private static final LongAdder terrainDecisionSamples = new LongAdder();
+    private static final LongAdder terrainGpuDecisionHits = new LongAdder();
+    private static final LongAdder terrainMissingDecisionRows = new LongAdder();
+    private static final LongAdder terrainMissingDensityCache = new LongAdder();
+    private static final LongAdder terrainParityBypasses = new LongAdder();
+    private static final LongAdder terrainUnavailableDensity = new LongAdder();
+    private static final LongAdder terrainDensityMismatches = new LongAdder();
     private static final LongAdder terrainCachePreparationCalls = new LongAdder();
     private static final LongAdder terrainCachePreparationNanos = new LongAdder();
     private static final LongAdder terrainCachePreparationSamples = new LongAdder();
@@ -307,6 +314,20 @@ public final class GpuTerrainProfiler {
                 terrainBlockPreparationSamples, start);
     }
 
+    /** Counts per-block aquifer decisions that avoid the Java NoiseChunk interpolation path. */
+    public static void recordTerrainDecisionUse(long samples, long gpuHits, long missingRows,
+                                                long missingCache, long parityBypasses,
+                                                long unavailableDensity, long densityMismatches) {
+        if (!ENABLED || samples <= 0L) return;
+        terrainDecisionSamples.add(samples);
+        terrainGpuDecisionHits.add(gpuHits);
+        terrainMissingDecisionRows.add(missingRows);
+        terrainMissingDensityCache.add(missingCache);
+        terrainParityBypasses.add(parityBypasses);
+        terrainUnavailableDensity.add(unavailableDensity);
+        terrainDensityMismatches.add(densityMismatches);
+    }
+
     private static void recordTimed(LongAdder calls, LongAdder nanos, LongAdder samples, long start) {
         if (!ENABLED) return;
         calls.increment();
@@ -354,6 +375,14 @@ public final class GpuTerrainProfiler {
                 terrainCachePreparationCalls.sum(), terrainCachePreparationSamples.sum(),
                 averageNanos(terrainCachePreparationNanos, terrainCachePreparationSamples),
                 maxConcurrentTerrainCachePreparations.get());
+        long decisionSamples = terrainDecisionSamples.sum();
+        GpuNoise.LOGGER.info("GPU terrain block-decision reuse: gpuApplied={}/{} ({}%), missingRows={}, missingDensityCache={}, parityBypasses={}, unavailableDensity={}, densityMismatches={}",
+                terrainGpuDecisionHits.sum(), decisionSamples,
+                String.format(java.util.Locale.ROOT, "%.2f",
+                        decisionSamples == 0L ? 0.0 : 100.0 * terrainGpuDecisionHits.sum() / decisionSamples),
+                terrainMissingDecisionRows.sum(), terrainMissingDensityCache.sum(),
+                terrainParityBypasses.sum(), terrainUnavailableDensity.sum(),
+                terrainDensityMismatches.sum());
         GpuNoise.LOGGER.info("GPU terrain aquifer status prefill: calls={}, centers={}, javaFallbacks={}, sampled={} avgNs={}",
                 aquiferStatusPrefillCalls.sum(), aquiferStatusPrefillCenters.sum(),
                 aquiferStatusPrefillJavaFallbacks.sum(), aquiferStatusPrefillSamples.sum(),
