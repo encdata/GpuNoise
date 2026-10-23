@@ -38,15 +38,15 @@ final class GpuTerrainAreaRegistry {
         if (graphIdentity == null) return null;
         int chunkMinX = Math.floorDiv(blockX, 16) * 16;
         int chunkMinZ = Math.floorDiv(blockZ, 16) * 16;
-        int[] candidateMinX = Math.floorMod(blockX, 16) == 0
-                ? new int[]{chunkMinX, chunkMinX - 16} : new int[]{chunkMinX};
-        int[] candidateMinZ = Math.floorMod(blockZ, 16) == 0
-                ? new int[]{chunkMinZ, chunkMinZ - 16} : new int[]{chunkMinZ};
+        int candidatesX = Math.floorMod(blockX, 16) == 0 ? 2 : 1;
+        int candidatesZ = Math.floorMod(blockZ, 16) == 0 ? 2 : 1;
         Lock lifecycle = CACHE_LIFECYCLE.readLock();
         lifecycle.lock();
         try {
-            for (int minX : candidateMinX) {
-                for (int minZ : candidateMinZ) {
+            for (int candidateX = 0; candidateX < candidatesX; candidateX++) {
+                int minX = chunkMinX - candidateX * 16;
+                for (int candidateZ = 0; candidateZ < candidatesZ; candidateZ++) {
+                    int minZ = chunkMinZ - candidateZ * 16;
                     GpuChunkDensityCache cache = CLAIMED.get(key(minX >> 4, minZ >> 4));
                     if (cache != null && cache.terrainGraphIdentity() == graphIdentity
                             && cache.containsSurfaceColumn(blockX, blockZ)) {
