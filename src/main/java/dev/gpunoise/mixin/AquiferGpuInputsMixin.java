@@ -302,6 +302,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         GpuAquiferDecisionTable decisions = new GpuAquiferDecisionTable(minX, minY, minZ, height);
         GpuChunkDensityCache.FinalDensityBlockView finalDensityBlockView = cache.finalDensityBlockView();
         float[] gpuBeardifierOverlays = null;
+        int beardifierParitySamples = 0;
+        int beardifierParityMismatches = 0;
+        String beardifierFirstMismatch = null;
         if (!noiseAccess.gpunoise$hasZeroBeardifier() && finalDensityBlockView != null) {
             GpuBeardifierInputs beardifierInputs = noiseAccess.gpunoise$beardifierInputs();
             if (beardifierInputs != null) {
@@ -309,8 +312,41 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 try {
                     gpuBeardifierOverlays = GpuTerrainRuntime.submitBeardifier(records, decisionCapacity)
                             .toCompletableFuture().join();
-                    noiseAccess.gpunoise$setGpuBeardifierOverlay(minX, minY, minZ, height,
-                            gpuBeardifierOverlays);
+                    if (gpunoise$verifyAquifer) {
+                        for (int y = 0; y < height; y++) {
+                            for (int z = 0; z < 16; z++) {
+                                for (int x = 0; x < 16; x++) {
+                                    int blockX = minX + x, blockY = minY + y, blockZ = minZ + z;
+                                    if (!GpuTerrainDensityParity.shouldCompare(blockX, blockZ)) continue;
+                                    double base = finalDensityBlockView.valueAtLocalUnchecked(x, y, z);
+                                    double javaDensity = noiseAccess.gpunoise$withBeardifier(
+                                            base, blockX, blockY, blockZ);
+                                    double gpuDensity = base + gpuBeardifierOverlays[
+                                            y * 256 + z * 16 + x];
+                                    beardifierParitySamples++;
+                                    if (!Double.isFinite(javaDensity)
+                                            || Math.abs(javaDensity - gpuDensity)
+                                            > GpuTerrainRuntime.GRAPH_PARITY_EPSILON) {
+                                        beardifierParityMismatches++;
+                                        if (beardifierFirstMismatch == null) {
+                                            beardifierFirstMismatch = "block=(" + blockX + "," + blockY + ","
+                                                    + blockZ + "), java=" + javaDensity + ", gpu=" + gpuDensity;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (beardifierParityMismatches == 0) {
+                        noiseAccess.gpunoise$setGpuBeardifierOverlay(minX, minY, minZ, height,
+                                gpuBeardifierOverlays);
+                    } else {
+                        dev.gpunoise.GpuNoise.LOGGER.warn(
+                                "GPU Beardifier parity failed; using Java structure density for this chunk: "
+                                        + "samples={}, mismatches={}, firstMismatch={}",
+                                beardifierParitySamples, beardifierParityMismatches, beardifierFirstMismatch);
+                        gpuBeardifierOverlays = null;
+                    }
                     dev.gpunoise.GpuNoise.LOGGER.debug(
                             "GPU Beardifier evaluated {} block-density samples from {} pieces and {} junctions",
                             decisionCapacity, beardifierInputs.pieceCount(), beardifierInputs.junctionCount());
@@ -338,9 +374,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         boolean exactAquiferInputs = GpuAquiferRuntimeMode.exactAquiferInputsEnabled();
         int directGlobalFluidDecisions = 0;
         int positiveDensityDecisions = 0;
-        int beardifierParitySamples = 0;
-        int beardifierParityMismatches = 0;
-        String beardifierFirstMismatch = null;
 
         long inputScanStart = GpuTerrainProfiler.beginAquiferPhase();
         for (int y = minY; y < minY + height; y++) {
@@ -354,17 +387,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     double density = gpuBeardifierOverlays != null
                             ? cachedDensity + gpuBeardifierOverlays[index]
                             : noiseAccess.gpunoise$withBeardifier(cachedDensity, x, y, z);
-                    if (gpuBeardifierOverlays != null && gpunoise$verifyAquifer
-                            && GpuTerrainDensityParity.shouldCompare(x, z)) {
-                        double javaDensity = noiseAccess.gpunoise$withBeardifier(cachedDensity, x, y, z);
-                        beardifierParitySamples++;
-                        if (!Double.isFinite(javaDensity)
-                                || Math.abs(javaDensity - density) > GpuTerrainRuntime.GRAPH_PARITY_EPSILON) {
-                            beardifierParityMismatches++;
-                            if (beardifierFirstMismatch == null) beardifierFirstMismatch = "block=("
-                                    + x + "," + y + "," + z + "), java=" + javaDensity + ", gpu=" + density;
-                        }
-                    }
                     if (!Double.isFinite(density)) continue;
                     if (density > 0.0) {
                         if (GpuAquiferSubstance.nearDensityDecisionThreshold(density)) {
@@ -448,7 +470,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         }
         if (finalDensityBlockView != null) finalDensityBlockView.recordReads(decisionCapacity);
         GpuTerrainProfiler.recordAquiferPhase(GpuTerrainProfiler.AQUIFER_SCAN, inputScanStart);
-        if (gpuBeardifierOverlays != null && gpunoise$verifyAquifer) {
+        if (gpunoise$verifyAquifer && !noiseAccess.gpunoise$hasZeroBeardifier()
+                && finalDensityBlockView != null
+                && noiseAccess.gpunoise$beardifierInputs() != null) {
             dev.gpunoise.GpuNoise.LOGGER.info(
                     "GPU Beardifier parity: samples={}, mismatches={}, firstMismatch={}",
                     beardifierParitySamples, beardifierParityMismatches,
