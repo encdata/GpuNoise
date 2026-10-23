@@ -13,7 +13,11 @@ layout(std430,set=0,binding=0) readonly buffer Coordinates { TerrainGrid grids[]
 #else
 layout(std430,set=0,binding=0) readonly buffer Coordinates { vec4 coordinates[]; };
 #endif
+#ifdef ROOT_DEBUG_PROBE
+layout(std430,set=0,binding=1) buffer Results { float results[]; };
+#else
 layout(std430,set=0,binding=1) writeonly buffer Results { float results[]; };
+#endif
 layout(std430,set=0,binding=2) readonly buffer Nodes { Node nodes[]; };
 layout(std430,set=0,binding=3) readonly buffer Permutations { uint permutation[]; };
 layout(std430,set=0,binding=4) readonly buffer Octaves { vec4 octaveData[]; };
@@ -652,6 +656,9 @@ void main(){
         results[1026] = float(rootNodes[1]);
         results[1027] = float(values[rootNodes[0]]);
         results[1028] = float(values[rootNodes[1]]);
+        memoryBarrierBuffer();
+        results[1029] = results[0];
+        results[1030] = results[1];
     }
 #endif
     for(uint marker=0u;marker<interpolationCount;marker++) {
