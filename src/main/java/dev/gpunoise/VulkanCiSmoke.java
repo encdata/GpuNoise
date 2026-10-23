@@ -130,7 +130,49 @@ public final class VulkanCiSmoke {
                 if (height != 320) throw new IllegalStateException(
                         "Four-by-four halo surface scan returned " + height + " instead of top boundary 320");
             }
-            System.out.println("Vulkan CI smoke: grid-only chunk and expanded-region surface dispatch passed");
+            List<GpuDensityGraph.Node> surfaceNodes = new ArrayList<>(GpuTerrainRoots.COUNT + 1);
+            int[] surfaceRootRegisters = new int[GpuTerrainRoots.COUNT];
+            for (int root = 0; root < GpuTerrainRoots.COUNT; root++) {
+                surfaceNodes.add(new GpuDensityGraph.Node("Constant", new int[0],
+                        new double[]{-1.0}, null, root));
+                surfaceRootRegisters[root] = root;
+            }
+            surfaceRootRegisters[GpuTerrainRoots.INITIAL_DENSITY] = GpuTerrainRoots.COUNT;
+            surfaceNodes.add(new GpuDensityGraph.Node("Y", new int[0], new double[0],
+                    null, GpuTerrainRoots.COUNT));
+            GpuDensityGraph crossingSurfaceGraph = new GpuDensityGraph(surfaceNodes,
+                    surfaceRootRegisters, List.of(), List.of(), List.of(), List.of(),
+                    GpuTerrainRoots.COUNT + 1);
+            java.util.Arrays.fill(regionSurface, Integer.MIN_VALUE);
+            for (GpuTerrainSurfaceRegion.ChunkRange range : surfaceRanges) {
+                GpuTerrainBatchResult result = ring.submitGraphGridSurfaceHeights(crossingSurfaceGraph,
+                        surfaceRegion.gridMetadata(range), range.chunkCount(),
+                        surfaceRegion.samplesPerChunk(), surfaceRegion.surfaceMetadata(range),
+                        new int[]{GpuTerrainRoots.INITIAL_DENSITY}).get(60, TimeUnit.SECONDS);
+                surfaceRegion.stitch(range, result.surfaceHeights(), regionSurface);
+            }
+            for (int height : regionSurface) {
+                if (height != 8) throw new IllegalStateException(
+                        "Expanded GPU surface scan disagreed on the Y=0 density crossing: " + height);
+            }
+            List<GpuDensityGraph.Node> thresholdNodes = new ArrayList<>(GpuTerrainRoots.COUNT);
+            int[] thresholdRoots = new int[GpuTerrainRoots.COUNT];
+            for (int root = 0; root < GpuTerrainRoots.COUNT; root++) {
+                thresholdNodes.add(new GpuDensityGraph.Node("Constant", new int[0],
+                        new double[]{root == GpuTerrainRoots.INITIAL_DENSITY ? 0.390625 : -1.0},
+                        null, root));
+                thresholdRoots[root] = root;
+            }
+            GpuDensityGraph thresholdSurfaceGraph = new GpuDensityGraph(thresholdNodes,
+                    thresholdRoots, List.of(), List.of(), List.of(), List.of(), GpuTerrainRoots.COUNT);
+            GpuTerrainBatchResult thresholdSurface = ring.submitGraphGridSurfaceHeights(
+                    thresholdSurfaceGraph, surfaceGrid, 1, 50, surfaceMetadata,
+                    new int[]{GpuTerrainRoots.INITIAL_DENSITY}).get(60, TimeUnit.SECONDS);
+            for (int height : thresholdSurface.surfaceHeights()) {
+                if (height != Integer.MIN_VALUE) throw new IllegalStateException(
+                        "Near-threshold GPU surface result should request Java parity scan, got " + height);
+            }
+            System.out.println("Vulkan CI smoke: constant, crossing, and threshold surface scans passed");
             int[] selectedRootIndexes = {GpuTerrainRoots.RIDGES, GpuTerrainRoots.FINAL_DENSITY,
                     GpuTerrainRoots.EROSION};
             float[] selectedRootResults = ring.submitGraphRoots(multiRootGraph, x, y, z, selectedRootIndexes)
