@@ -1799,7 +1799,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private void mapPersistentBuffers(MemoryStack stack) {
         NativeBuffer[] buffers = {coordinates, results, permutations, octaves, samplerMetadata,
                 graphCoordinates, graphNodes, graphSplinePoints, graphBlendedMetadata, graphRoots,
-                interpolatorMap, interpolationMetadata, interpolationOutput, aquiferPressureInputs,
+                interpolatorMap, interpolationMetadata, interpolationOutput, terrainSurfaceOutput,
+                aquiferPressureInputs,
                 aquiferNearestInputs, aquiferNearestOutput, biomeTreeBuffer};
         for (NativeBuffer buffer : buffers) {
             if (buffer.hostVisible) {
