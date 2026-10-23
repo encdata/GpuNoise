@@ -98,20 +98,25 @@ final class GpuTerrainBatchScheduler implements AutoCloseable {
     }
 
     private void dispatch(List<Pending> batch) {
+        batch.removeIf(item -> item.future.isDone());
+        if (batch.isEmpty()) return;
         Pending first = batch.get(0);
         int samplesPerChunk = first.request.samplesPerChunk();
         int outputSamplesPerChunk = first.request.outputSamplesPerChunk();
         long seed = first.request.worldSeed();
         int totalChunks = 0;
+        List<Pending> compatible = new ArrayList<>(batch.size());
         for (Pending item : batch) {
             if (item.request.worldSeed() != seed || item.request.samplesPerChunk() != samplesPerChunk
                     || item.request.outputSamplesPerChunk() != outputSamplesPerChunk) {
                 item.future.completeExceptionally(new IllegalArgumentException("cannot combine different seed/sample layouts"));
             } else {
                 totalChunks += item.request.chunks().size();
+                compatible.add(item);
             }
         }
         if (totalChunks == 0) return;
+        batch = compatible;
 
         List<TerrainNoiseApi.Chunk> chunks = new ArrayList<>(totalChunks);
         int[] x = new int[totalChunks * samplesPerChunk];
@@ -119,7 +124,6 @@ final class GpuTerrainBatchScheduler implements AutoCloseable {
         int[] z = new int[x.length];
         int chunkOffset = 0;
         for (Pending item : batch) {
-            if (item.future.isDone()) continue;
             chunks.addAll(item.request.chunks());
             int sampleOffset = chunkOffset * samplesPerChunk;
             System.arraycopy(item.request.sampleXRaw(), 0, x, sampleOffset, item.request.sampleXRaw().length);
@@ -136,29 +140,16 @@ final class GpuTerrainBatchScheduler implements AutoCloseable {
                 }
             int offset = 0;
             for (Pending item : batch) {
-                if (item.future.isDone()) continue;
                 int count = item.request.chunks().size() * outputSamplesPerChunk;
-                item.future.complete(slice(result, offset, count, item.request));
+                if (!item.future.isDone()) {
+                    item.future.complete(result.slice(item.request, offset, count));
+                }
                 offset += count;
             }
             });
         } catch (Throwable failure) {
             for (Pending item : batch) if (!item.future.isDone()) item.future.completeExceptionally(failure);
         }
-    }
-
-    private static TerrainNoiseApi.Result slice(TerrainNoiseApi.Result source, int offset, int count, TerrainNoiseApi.Request request) {
-        return TerrainNoiseApi.Result.owned(request,
-                slice(source.terrainDensityAtArray(), offset, count), slice(source.caveDensityRaw(), offset, count),
-                slice(source.aquiferPressureRaw(), offset, count), slice(source.continentalnessRaw(), offset, count),
-                slice(source.erosionRaw(), offset, count), slice(source.weirdnessRaw(), offset, count),
-                slice(source.temperatureRaw(), offset, count), slice(source.humidityRaw(), offset, count));
-    }
-
-    private static float[] slice(float[] values, int offset, int count) {
-        float[] result = new float[count];
-        System.arraycopy(values, offset, result, 0, count);
-        return result;
     }
 
     private record Pending(TerrainNoiseApi.Request request, CompletableFuture<TerrainNoiseApi.Result> future) {}

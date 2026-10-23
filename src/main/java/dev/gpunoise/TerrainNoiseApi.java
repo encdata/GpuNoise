@@ -104,6 +104,8 @@ public final class TerrainNoiseApi {
         private final float[] weirdness;
         private final float[] temperature;
         private final float[] humidity;
+        private final int offset;
+        private final int length;
 
         public Result(Request request, float[] terrainDensity, float[] caveDensity,
                       float[] aquiferPressure, float[] continentalness, float[] erosion,
@@ -118,6 +120,8 @@ public final class TerrainNoiseApi {
             this.weirdness = copy("weirdness", weirdness, count);
             this.temperature = copy("temperature", temperature, count);
             this.humidity = copy("humidity", humidity, count);
+            this.offset = 0;
+            this.length = count;
         }
 
         static Result owned(Request request, float[] terrainDensity, float[] caveDensity,
@@ -140,6 +144,32 @@ public final class TerrainNoiseApi {
             this.weirdness = copy ? copy("weirdness", weirdness, count) : owned("weirdness", weirdness, count);
             this.temperature = copy ? copy("temperature", temperature, count) : owned("temperature", temperature, count);
             this.humidity = copy ? copy("humidity", humidity, count) : owned("humidity", humidity, count);
+            this.offset = 0;
+            this.length = count;
+        }
+
+        private Result(Request request, Result source, int offset, int length) {
+            this.request = Objects.requireNonNull(request, "request");
+            if (offset < 0 || length < 0 || offset > source.length - length
+                    || length != Math.multiplyExact(request.chunks().size(), request.outputSamplesPerChunk())) {
+                throw new IllegalArgumentException("invalid terrain result view");
+            }
+            this.terrainDensity = source.terrainDensity;
+            this.caveDensity = source.caveDensity;
+            this.aquiferPressure = source.aquiferPressure;
+            this.continentalness = source.continentalness;
+            this.erosion = source.erosion;
+            this.weirdness = source.weirdness;
+            this.temperature = source.temperature;
+            this.humidity = source.humidity;
+            this.offset = source.offset + offset;
+            this.length = length;
+        }
+
+        Result slice(Request request, int relativeOffset, int count) {
+            if (relativeOffset < 0 || count < 0 || relativeOffset > length - count)
+                throw new IndexOutOfBoundsException("terrain result slice outside batch");
+            return new Result(request, this, relativeOffset, count);
         }
 
         private static float[] owned(String name, float[] values, int expected) {
@@ -155,22 +185,22 @@ public final class TerrainNoiseApi {
         }
 
         public Request request() { return request; }
-        public float[] terrainDensity() { return terrainDensity.clone(); }
-        float terrainDensityAt(int index) { return terrainDensity[index]; }
-        float[] terrainDensityAtArray() { return terrainDensity; }
-        public float[] caveDensity() { return caveDensity.clone(); }
-        public float[] aquiferPressure() { return aquiferPressure.clone(); }
-        public float[] continentalness() { return continentalness.clone(); }
-        public float[] erosion() { return erosion.clone(); }
-        public float[] weirdness() { return weirdness.clone(); }
-        public float[] temperature() { return temperature.clone(); }
-        public float[] humidity() { return humidity.clone(); }
-        float[] caveDensityRaw() { return caveDensity; }
-        float[] aquiferPressureRaw() { return aquiferPressure; }
-        float[] continentalnessRaw() { return continentalness; }
-        float[] erosionRaw() { return erosion; }
-        float[] weirdnessRaw() { return weirdness; }
-        float[] temperatureRaw() { return temperature; }
-        float[] humidityRaw() { return humidity; }
+        public float[] terrainDensity() { return copyRange(terrainDensity); }
+        float terrainDensityAt(int index) { return terrainDensity[offset + checkedIndex(index)]; }
+        public float[] caveDensity() { return copyRange(caveDensity); }
+        public float[] aquiferPressure() { return copyRange(aquiferPressure); }
+        public float[] continentalness() { return copyRange(continentalness); }
+        public float[] erosion() { return copyRange(erosion); }
+        public float[] weirdness() { return copyRange(weirdness); }
+        public float[] temperature() { return copyRange(temperature); }
+        public float[] humidity() { return copyRange(humidity); }
+        private int checkedIndex(int index) {
+            if (index < 0 || index >= length) throw new IndexOutOfBoundsException(index);
+            return index;
+        }
+
+        private float[] copyRange(float[] values) {
+            return Arrays.copyOfRange(values, offset, offset + length);
+        }
     }
 }
