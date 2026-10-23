@@ -12,7 +12,7 @@ public final class GpuBeardifierInputs {
     public static final int HEADER_WORDS = 13;
     public static final int PIECE_WORDS = 8;
     public static final int JUNCTION_WORDS = 3;
-    public static final int SAMPLE_WORDS = 4;
+    public static final int SAMPLE_WORDS = 3;
     public static final int KERNEL_VALUES = 24 * 24 * 24;
     public static final int MAX_SAMPLES = PersistentVulkanNormalNoiseEngine.CAPACITY;
 
@@ -106,27 +106,10 @@ public final class GpuBeardifierInputs {
                 && words.getInt(base + 12 * Integer.BYTES) == sampleBase;
     }
 
-    /** Packs base densities and positions followed by bounded structure inputs for one Vulkan dispatch. */
-    public ByteBuffer pack(int minX, int minY, int minZ, int height,
-                           GpuChunkDensityCache.FinalDensityBlockView densities) {
-        if (densities == null) throw new IllegalArgumentException("final density block view is required");
+    /** Packs block coordinates followed by bounded structure inputs for one Vulkan dispatch. */
+    public ByteBuffer pack(int minX, int minY, int minZ, int height) {
         int sampleCount = Math.multiplyExact(height, 256);
-        float[] baseDensities = new float[sampleCount];
-        int index = 0;
-        for (int y = 0; y < height; y++) {
-            for (int z = 0; z < 16; z++) {
-                for (int x = 0; x < 16; x++) {
-                    baseDensities[index++] = (float) densities.valueAtLocalUnchecked(x, y, z);
-                }
-            }
-        }
-        return pack(minX, minY, minZ, height, baseDensities);
-    }
-
-    public ByteBuffer pack(int minX, int minY, int minZ, int height, float[] baseDensities) {
-        int sampleCount = Math.multiplyExact(height, 256);
-        if (height <= 0 || sampleCount > MAX_SAMPLES || baseDensities == null
-                || baseDensities.length != sampleCount)
+        if (height <= 0 || sampleCount > MAX_SAMPLES)
             throw new IllegalArgumentException("invalid Beardifier density volume");
         int pieceBase = HEADER_WORDS;
         int junctionBase = Math.addExact(pieceBase, pieces.length);
@@ -141,12 +124,10 @@ public final class GpuBeardifierInputs {
         for (int word : pieces) packed.putInt(word);
         for (int word : junctions) packed.putInt(word);
         for (float value : kernel) packed.putFloat(value);
-        int index = 0;
         for (int y = 0; y < height; y++) {
             for (int z = 0; z < 16; z++) {
                 for (int x = 0; x < 16; x++) {
-                    packed.putInt(minX + x).putInt(minY + y).putInt(minZ + z)
-                            .putFloat(baseDensities[index++]);
+                    packed.putInt(minX + x).putInt(minY + y).putInt(minZ + z);
                 }
             }
         }

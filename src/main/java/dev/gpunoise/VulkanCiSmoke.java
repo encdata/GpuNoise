@@ -1428,6 +1428,7 @@ public final class VulkanCiSmoke {
 
     private static void verifyGpuBeardifier(VulkanSubmissionRing ring) throws Exception {
         List<Beardifier.Rigid> pieces = List.of(
+                new Beardifier.Rigid(new BoundingBox(-5, -3, -5, 5, 3, 5), TerrainAdjustment.NONE, 0),
                 new Beardifier.Rigid(new BoundingBox(-3, -4, -2, 2, 2, 3), TerrainAdjustment.BURY, 1),
                 new Beardifier.Rigid(new BoundingBox(-2, -2, -3, 3, 4, 2), TerrainAdjustment.BEARD_THIN, 0),
                 new Beardifier.Rigid(new BoundingBox(-4, -3, -1, 1, 3, 4), TerrainAdjustment.BEARD_BOX, 2),
@@ -1437,18 +1438,17 @@ public final class VulkanCiSmoke {
                         net.minecraft.world.level.levelgen.structure.pools.StructureTemplatePool.Projection.RIGID));
         float[] kernel = BeardifierAccessor.gpunoise$kernel();
         GpuBeardifierInputs inputs = new GpuBeardifierInputs(pieces, junctions, kernel);
-        float[] base = new float[256];
-        for (int i = 0; i < base.length; i++) base[i] = (i - 128) * 0.003125f;
-        ByteBuffer records = inputs.pack(-8, 0, -8, 1, base);
+        int sampleCount = 256;
+        ByteBuffer records = inputs.pack(-8, 0, -8, 1);
         try {
-            float[] actual = ring.submitBeardifier(records, base.length).get(60, TimeUnit.SECONDS);
+            float[] actual = ring.submitBeardifier(records, sampleCount).get(60, TimeUnit.SECONDS);
             Beardifier reference = new Beardifier(
                     new it.unimi.dsi.fastutil.objects.ObjectArrayList<>(pieces).iterator(),
                     new it.unimi.dsi.fastutil.objects.ObjectArrayList<>(junctions).iterator());
-            for (int index = 0; index < base.length; index++) {
+            for (int index = 0; index < sampleCount; index++) {
                 int x = -8 + (index & 15);
                 int z = -8 + (index >>> 4);
-                double expected = base[index] + reference.compute(
+                double expected = reference.compute(
                         new DensityFunction.SinglePointContext(x, 0, z));
                 if (Math.abs(actual[index] - expected) > GpuTerrainRuntime.GRAPH_PARITY_EPSILON) {
                     throw new IllegalStateException("Vulkan Beardifier mismatch at (" + x + ",0," + z
