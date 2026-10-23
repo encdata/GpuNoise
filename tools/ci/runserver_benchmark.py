@@ -460,6 +460,10 @@ def run_worldgen_check(mode: str, downloaded_mods: Path, force_cpu: bool,
             if ("GPU aquifer inputs use Vulkan cache roots; parity verifier compares GPU math with the Java "
                     "double-precision decision reference" not in run_log):
                 raise RuntimeError("GPU aquifer decisions did not use the Vulkan terrain roots required for the C2ME path")
+            if (not c2me_aquifer_rewrite
+                    and "GPU aquifer fluid-status shader enabled for vanilla NoiseBasedAquifer" not in run_log):
+                raise RuntimeError(
+                    "Vanilla NoiseBasedAquifer statuses did not run through the Vulkan status shader")
             density_differentials = re.findall(
                 r"GPU terrain density differential: chunks=(\d+), lastChunk=\((-?\d+),(-?\d+)\), "
                 r"samples=(\d+), exactMismatches=(\d+), signMismatches=(\d+), "
