@@ -15,7 +15,8 @@ public interface GpuNoiseChunkAccess {
 
     boolean gpunoise$hasZeroBeardifier();
 
-    void gpunoise$setGpuBeardifierOverlay(int minX, int minY, int minZ, int height, float[] values);
+    void gpunoise$setGpuBeardifierOverlay(int minX, int minY, int minZ, int height,
+                                          GpuBeardifierOverlay values);
 
     int gpunoise$preliminarySurfaceLevel(int x, int z);
 }

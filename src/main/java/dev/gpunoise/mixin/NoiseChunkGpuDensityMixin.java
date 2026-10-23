@@ -68,7 +68,7 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     @Unique private GpuBeardifierInputs gpunoise$beardifierInputs;
     @Unique private int gpunoise$beardifierMinX, gpunoise$beardifierMinY, gpunoise$beardifierMinZ,
             gpunoise$beardifierHeight;
-    @Unique private volatile float[] gpunoise$beardifierOverlay;
+    @Unique private volatile GpuBeardifierOverlay gpunoise$beardifierOverlay;
 
     @Inject(method = "<init>", at = @At("TAIL"))
     private void gpunoise$installGpuCache(CallbackInfo callback) {
@@ -153,13 +153,13 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     @Override
     public double gpunoise$withBeardifier(double cachedDensity, int x, int y, int z) {
         if (gpunoise$hasZeroBeardifier()) return cachedDensity;
-        float[] overlay = gpunoise$beardifierOverlay;
+        GpuBeardifierOverlay overlay = gpunoise$beardifierOverlay;
         int localX = x - gpunoise$beardifierMinX;
         int localY = y - gpunoise$beardifierMinY;
         int localZ = z - gpunoise$beardifierMinZ;
         if (overlay != null && localX >= 0 && localX < 16 && localY >= 0
                 && localY < gpunoise$beardifierHeight && localZ >= 0 && localZ < 16) {
-            return cachedDensity + overlay[localY * 256 + localZ * 16 + localX];
+            return cachedDensity + overlay.get(localY * 256 + localZ * 16 + localX);
         }
         return cachedDensity + beardifier.compute(new DensityFunction.SinglePointContext(x, y, z));
     }
@@ -176,8 +176,9 @@ abstract class NoiseChunkGpuDensityMixin implements GpuNoiseChunkAccess {
     }
 
     @Override
-    public void gpunoise$setGpuBeardifierOverlay(int minX, int minY, int minZ, int height, float[] values) {
-        if (height <= 0 || values == null || values.length != Math.multiplyExact(height, 256))
+    public void gpunoise$setGpuBeardifierOverlay(int minX, int minY, int minZ, int height,
+                                                  GpuBeardifierOverlay values) {
+        if (height <= 0 || values == null || values.length() != Math.multiplyExact(height, 256))
             throw new IllegalArgumentException("invalid GPU Beardifier overlay");
         gpunoise$beardifierMinX = minX;
         gpunoise$beardifierMinY = minY;

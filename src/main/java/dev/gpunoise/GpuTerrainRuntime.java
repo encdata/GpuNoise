@@ -596,7 +596,7 @@ public final class GpuTerrainRuntime {
         return ring.submitAquiferFluidStatus(records, queryCount);
     }
 
-    public static java.util.concurrent.CompletionStage<float[]> submitBeardifier(
+    public static java.util.concurrent.CompletionStage<GpuBeardifierOverlay> submitBeardifier(
             java.nio.ByteBuffer records, int sampleCount) {
         VulkanSubmissionRing ring = terrainRing;
         if (ring == null) return java.util.concurrent.CompletableFuture.failedStage(

@@ -735,7 +735,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
             for (BeardifierRequest request : requests) {
                 int end = Math.addExact(offset, request.count);
                 completeOnDispatchWorker(request.future,
-                        java.util.Arrays.copyOfRange(result, offset, end), null);
+                        new GpuBeardifierOverlay(result, offset, request.count), null);
                 offset = end;
             }
         } catch (Throwable failure) {
@@ -1425,8 +1425,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
         return future;
     }
 
-    CompletableFuture<float[]> submitBeardifier(ByteBuffer records, int count) {
-        CompletableFuture<float[]> future = new CompletableFuture<>();
+    CompletableFuture<GpuBeardifierOverlay> submitBeardifier(ByteBuffer records, int count) {
+        CompletableFuture<GpuBeardifierOverlay> future = new CompletableFuture<>();
         if (!GpuBeardifierInputs.isValidPacked(records, count)) {
             future.completeExceptionally(new IllegalArgumentException("invalid GPU Beardifier chunk payload"));
             return future;
@@ -1695,7 +1695,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                          boolean decisionChain,
                                          CompletableFuture<GpuAquiferPrefillResult> future, long enqueuedNanos)
             implements DispatchRequest {}
-    private record BeardifierRequest(ByteBuffer records, int count, CompletableFuture<float[]> future,
+    private record BeardifierRequest(ByteBuffer records, int count, CompletableFuture<GpuBeardifierOverlay> future,
                                      long enqueuedNanos) implements DispatchRequest {}
     private record OreVeinRequest(ByteBuffer records, int count,
                                   CompletableFuture<GpuOreVeinBatchResult> future,

@@ -302,7 +302,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         int decisionCapacity = Math.multiplyExact(height, 256);
         GpuAquiferDecisionTable decisions = new GpuAquiferDecisionTable(minX, minY, minZ, height);
         GpuChunkDensityCache.FinalDensityBlockView finalDensityBlockView = cache.finalDensityBlockView();
-        float[] gpuBeardifierOverlays = null;
+        dev.gpunoise.GpuBeardifierOverlay gpuBeardifierOverlays = null;
         int beardifierParitySamples = 0;
         int beardifierParityMismatches = 0;
         String beardifierFirstMismatch = null;
@@ -322,8 +322,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                     double base = finalDensityBlockView.valueAtLocalUnchecked(x, y, z);
                                     double javaDensity = noiseAccess.gpunoise$withBeardifier(
                                             base, blockX, blockY, blockZ);
-                                    double gpuDensity = base + gpuBeardifierOverlays[
-                                            y * 256 + z * 16 + x];
+                                    double gpuDensity = base + gpuBeardifierOverlays.get(
+                                            y * 256 + z * 16 + x);
                                     beardifierParitySamples++;
                                     if (!Double.isFinite(javaDensity)
                                             || Math.abs(javaDensity - gpuDensity)
@@ -386,7 +386,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                             ? finalDensityBlockView.valueAtLocalUnchecked(localX, localY, localZ)
                             : cache.finalDensity(x, y, z);
                     double density = gpuBeardifierOverlays != null
-                            ? cachedDensity + gpuBeardifierOverlays[index]
+                            ? cachedDensity + gpuBeardifierOverlays.get(index)
                             : noiseAccess.gpunoise$withBeardifier(cachedDensity, x, y, z);
                     if (!Double.isFinite(density)) continue;
                     if (density > 0.0) {
