@@ -30,8 +30,8 @@ float structureWeight(uint tableBase, int x, int y, int z, int yy) {
 }
 
 void main() {
-    uint sample = gl_GlobalInvocationID.x;
-    if (sample >= sampleCount || sample >= words[0] || words[2] != BATCH_MAGIC) return;
+    uint sampleIndex = gl_GlobalInvocationID.x;
+    if (sampleIndex >= sampleCount || sampleIndex >= words[0] || words[2] != BATCH_MAGIC) return;
     uint groupCount = words[1];
     uint groupBase = words[3];
     uint chunkBase = 0u;
@@ -41,9 +41,9 @@ void main() {
         uint descriptor = groupBase + group * BATCH_GROUP_WORDS;
         uint firstSample = words[descriptor];
         uint samplesInGroup = words[descriptor + 1u];
-        if (sample >= firstSample && sample - firstSample < samplesInGroup) {
+        if (sampleIndex >= firstSample && sampleIndex - firstSample < samplesInGroup) {
             chunkBase = words[descriptor + 2u];
-            localSample = sample - firstSample;
+            localSample = sampleIndex - firstSample;
             foundGroup = true;
             break;
         }
@@ -99,5 +99,5 @@ void main() {
             beard += structureWeight(tableBase, dx, dy, dz, dy) * 0.4;
         }
     }
-    densities[sample] = floatBitsToUint(beard);
+    densities[sampleIndex] = floatBitsToUint(beard);
 }
