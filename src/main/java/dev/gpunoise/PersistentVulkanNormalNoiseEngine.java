@@ -634,7 +634,11 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                             + persistentResults.getFloat(probeOffset + 3 * Float.BYTES) + "/"
                             + persistentResults.getFloat(probeOffset + 4 * Float.BYTES) + "/"
                             + persistentResults.getFloat(probeOffset + 5 * Float.BYTES) + "/"
-                            + persistentResults.getFloat(probeOffset + 6 * Float.BYTES));
+                            + persistentResults.getFloat(probeOffset + 6 * Float.BYTES)
+                            + ", hostRaw=" + persistentResults.getFloat(0) + "/"
+                            + persistentResults.getFloat(Float.BYTES)
+                            + ", copied=" + corners[0] + "/"
+                            + (corners.length > 1 ? corners[1] : Float.NaN));
                 }
                 FloatBuffer blockValues = persistentMappings.get(interpolationOutput).duplicate()
                         .order(ByteOrder.nativeOrder()).asFloatBuffer();
