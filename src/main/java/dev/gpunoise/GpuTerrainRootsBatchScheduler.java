@@ -473,14 +473,14 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
         private final AtomicLongArray buckets = new AtomicLongArray(5);
 
         void record(int chunks) {
-            int bucket = chunks < 16 ? 0 : chunks < 32 ? 1 : chunks < 64 ? 2 : chunks < 96 ? 3 : 4;
+            int bucket = chunks <= 1 ? 0 : chunks <= 3 ? 1 : chunks <= 7 ? 2 : chunks <= 15 ? 3 : 4;
             buckets.incrementAndGet(bucket);
         }
 
         String describe() {
-            return "lt16:" + buckets.get(0) + ",16to31:" + buckets.get(1)
-                    + ",32to63:" + buckets.get(2) + ",64to95:" + buckets.get(3)
-                    + ",96plus:" + buckets.get(4);
+            return "1:" + buckets.get(0) + ",2to3:" + buckets.get(1)
+                    + ",4to7:" + buckets.get(2) + ",8to15:" + buckets.get(3)
+                    + ",16:" + buckets.get(4);
         }
     }
 
