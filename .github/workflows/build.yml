@@ -16,9 +16,9 @@ on:
         default: '8'
         required: true
       terrain_batch_target_chunks:
-        description: Desired chunks in each compatible GPU dispatch
+        description: Desired chunks in each 4 by 4 GPU dispatch
         type: string
-        default: '96'
+        default: '16'
         required: true
       terrain_batch_region_radius:
         description: Number of 10 by 10 chunk regions searched in each direction
@@ -166,7 +166,7 @@ jobs:
           GPUNOISE_CHUNKY_RADIUS_BLOCKS: ${{ inputs.chunky_radius_blocks || '250' }}
           GPUNOISE_SERVER_START_TIMEOUT: '1800'
           GPUNOISE_TERRAIN_BATCH_WINDOW_MS: ${{ inputs.terrain_batch_window_ms || '8' }}
-          GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS: ${{ inputs.terrain_batch_target_chunks || '96' }}
+          GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS: ${{ inputs.terrain_batch_target_chunks || '16' }}
           GPUNOISE_TERRAIN_BATCH_REGION_RADIUS: ${{ inputs.terrain_batch_region_radius || '2' }}
           GPUNOISE_CI_FULL_BLOCK_OUTPUT: true
           GPUNOISE_CI_VERIFY_AQUIFER: true

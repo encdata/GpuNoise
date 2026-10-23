@@ -61,9 +61,9 @@ WORLDGEN_CHECK_REPETITIONS = 1
 BATCH_WINDOW_MS = int(os.environ.get("GPUNOISE_TERRAIN_BATCH_WINDOW_MS", "8"))
 if not 1 <= BATCH_WINDOW_MS <= 250:
     raise ValueError("GPUNOISE_TERRAIN_BATCH_WINDOW_MS must be between 1 and 250")
-BATCH_TARGET_CHUNKS = int(os.environ.get("GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS", "96"))
-if not 1 <= BATCH_TARGET_CHUNKS <= 100:
-    raise ValueError("GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS must be between 1 and 100")
+BATCH_TARGET_CHUNKS = int(os.environ.get("GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS", "16"))
+if not 1 <= BATCH_TARGET_CHUNKS <= 16:
+    raise ValueError("GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS must be between 1 and the 4x4 area limit of 16")
 BATCH_REGION_RADIUS = int(os.environ.get("GPUNOISE_TERRAIN_BATCH_REGION_RADIUS", "2"))
 if not 1 <= BATCH_REGION_RADIUS <= 4:
     raise ValueError("GPUNOISE_TERRAIN_BATCH_REGION_RADIUS must be between 1 and 4")
