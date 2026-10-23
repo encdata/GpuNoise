@@ -1202,6 +1202,23 @@ public final class VulkanCiSmoke {
                     || fluidStatusResults[2 * GpuAquiferFluidStatus.OUTPUT_INTS + 3] != 10) {
                 throw new IllegalStateException("fluid-status shader did not preserve exact custom/default/lava state IDs");
             }
+            int[] expectedFallbackReasons = {
+                    GpuAquiferFluidStatus.FLAG_FALLBACK_THRESHOLD,
+                    GpuAquiferFluidStatus.FLAG_FALLBACK_ROOT_INPUT,
+                    GpuAquiferFluidStatus.FLAG_FALLBACK_SURFACE_INPUT,
+                    GpuAquiferFluidStatus.FLAG_FALLBACK_SPREAD_BOUNDARY
+            };
+            for (int index = 0; index < expectedFallbackReasons.length; index++) {
+                int row = 3 + index;
+                int actualFlags = fluidStatusResults[row * GpuAquiferFluidStatus.OUTPUT_INTS + 2];
+                if ((actualFlags & (GpuAquiferFluidStatus.FLAG_CPU_FALLBACK
+                        | expectedFallbackReasons[index]))
+                        != (GpuAquiferFluidStatus.FLAG_CPU_FALLBACK | expectedFallbackReasons[index])) {
+                    throw new IllegalStateException("fluid-status fallback reason was lost at row " + row
+                            + ": expected=" + expectedFallbackReasons[index] + ", actual=" + actualFlags);
+                }
+            }
+            System.out.println("Vulkan CI smoke: aquifer status fallback reasons match the Java reference");
             int[][] oneNearestQuery = {{0, 0, 0}};
             int[][] oneNearestCenters = new int[GpuAquiferNearestThree.CANDIDATES][3];
             for (int center = 0; center < oneNearestCenters.length; center++) {
@@ -2075,8 +2092,22 @@ public final class VulkanCiSmoke {
         GpuAquiferFluidStatus.Input uncertainDeepDarkBoundary = new GpuAquiferFluidStatus.Input(
                 0, 63, GpuAquiferFluidStatus.WATER, 0.0f, 0.0f, 0.0f, -0.225f, 0.0f,
                 drySurface.clone(), dryLevels.clone(), dryKinds.clone());
+        GpuAquiferFluidStatus.Input nonFiniteRoot = new GpuAquiferFluidStatus.Input(
+                0, 63, GpuAquiferFluidStatus.WATER, 0, 10,
+                Float.NaN, 0.0f, 0.0f, 0.0f, 0.0f,
+                drySurface.clone(), dryLevels.clone(), dryKinds.clone());
+        float[] invalidSurface = drySurface.clone();
+        invalidSurface[5] = Float.NaN;
+        GpuAquiferFluidStatus.Input nonFiniteSurface = new GpuAquiferFluidStatus.Input(
+                0, 63, GpuAquiferFluidStatus.WATER, 0, 10,
+                0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                invalidSurface, dryLevels.clone(), dryKinds.clone());
+        GpuAquiferFluidStatus.Input spreadBoundary = new GpuAquiferFluidStatus.Input(
+                0, 63, GpuAquiferFluidStatus.WATER, 0, 10,
+                0.7f, 0.3f, 0.0f, 0.0f, 0.0f,
+                highSurface.clone(), centerLevels.clone(), centerKinds.clone(), centerStateIds.clone());
         return new GpuAquiferFluidStatus.Input[]{neighborStatus, spreadLevel, lavaOverride,
-                uncertainDeepDarkBoundary};
+                uncertainDeepDarkBoundary, nonFiniteRoot, nonFiniteSurface, spreadBoundary};
     }
 
     private static void assertAnisotropicInterpolationResults(float[] values) {

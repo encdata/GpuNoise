@@ -1050,6 +1050,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         || source < 0 || source > GpuAquiferFluidStatus.SURFACE_SAMPLES) {
                     status = gpunoise$getAquiferStatus(key);
                     javaFallbacks++;
+                    GpuTerrainProfiler.recordAquiferStatusFallback(flags);
                 } else if (source == 0) {
                     BlockState fluidType = Block.stateById(fluidStateId);
                     if (fluidType == null) {

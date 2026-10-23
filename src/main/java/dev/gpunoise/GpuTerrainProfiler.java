@@ -46,6 +46,10 @@ public final class GpuTerrainProfiler {
     private static final LongAdder aquiferStatusPrefillJavaRows = new LongAdder();
     private static final LongAdder aquiferStatusPrefillCachedRows = new LongAdder();
     private static final LongAdder aquiferStatusPrefillJavaFallbacks = new LongAdder();
+    private static final LongAdder aquiferStatusFallbackRootInputs = new LongAdder();
+    private static final LongAdder aquiferStatusFallbackSurfaceInputs = new LongAdder();
+    private static final LongAdder aquiferStatusFallbackThresholds = new LongAdder();
+    private static final LongAdder aquiferStatusFallbackSpreadBoundaries = new LongAdder();
     private static final LongAdder aquiferNearestDispatches = new LongAdder();
     private static final LongAdder aquiferNearestRows = new LongAdder();
     private static final LongAdder aquiferNearestCoalescedDispatches = new LongAdder();
@@ -280,6 +284,19 @@ public final class GpuTerrainProfiler {
         }
     }
 
+    /** Tracks conservative aquifer fallback reasons for parity and input-coverage diagnostics. */
+    public static void recordAquiferStatusFallback(int flags) {
+        if (!ENABLED) return;
+        if ((flags & GpuAquiferFluidStatus.FLAG_FALLBACK_ROOT_INPUT) != 0)
+            aquiferStatusFallbackRootInputs.increment();
+        if ((flags & GpuAquiferFluidStatus.FLAG_FALLBACK_SURFACE_INPUT) != 0)
+            aquiferStatusFallbackSurfaceInputs.increment();
+        if ((flags & GpuAquiferFluidStatus.FLAG_FALLBACK_THRESHOLD) != 0)
+            aquiferStatusFallbackThresholds.increment();
+        if ((flags & GpuAquiferFluidStatus.FLAG_FALLBACK_SPREAD_BOUNDARY) != 0)
+            aquiferStatusFallbackSpreadBoundaries.increment();
+    }
+
     /** Tracks aquifer kernel batch shape for tuning without CPS measurements. */
     public static void recordAquiferNearestBatch(int rows) {
         if (!ENABLED || rows <= 0) return;
@@ -414,11 +431,13 @@ public final class GpuTerrainProfiler {
                 terrainMissingDecisionRows.sum(), terrainMissingDensityCache.sum(),
                 terrainParityBypasses.sum(), terrainUnavailableDensity.sum(),
                 terrainDensityMismatches.sum());
-        GpuNoise.LOGGER.info("GPU terrain aquifer status prefill: calls={}, centers={}, shaderRows={}, javaRows={}, cachedRows={}, javaFallbacks={}, sampled={} avgNs={}",
+        GpuNoise.LOGGER.info("GPU terrain aquifer status prefill: calls={}, centers={}, shaderRows={}, javaRows={}, cachedRows={}, javaFallbacks={}, fallbackRootInputs={}, fallbackSurfaceInputs={}, fallbackThresholds={}, fallbackSpreadBoundaries={}, sampled={} avgNs={}",
                 aquiferStatusPrefillCalls.sum(), aquiferStatusPrefillCenters.sum(),
                 aquiferStatusPrefillShaderRows.sum(), aquiferStatusPrefillJavaRows.sum(),
                 aquiferStatusPrefillCachedRows.sum(),
-                aquiferStatusPrefillJavaFallbacks.sum(), aquiferStatusPrefillSamples.sum(),
+                aquiferStatusPrefillJavaFallbacks.sum(), aquiferStatusFallbackRootInputs.sum(),
+                aquiferStatusFallbackSurfaceInputs.sum(), aquiferStatusFallbackThresholds.sum(),
+                aquiferStatusFallbackSpreadBoundaries.sum(), aquiferStatusPrefillSamples.sum(),
                 averageNanos(aquiferStatusPrefillNanos, aquiferStatusPrefillSamples));
         GpuNoise.LOGGER.info("GPU terrain aquifer batches: nearestDispatches={}, nearestRows={}, avgNearestRows={}, nearestCoalescedDispatches={}, nearestCoalescedRequests={}, substanceDispatches={}, substanceRows={}, avgSubstanceRows={}, substanceCoalescedDispatches={}, substanceCoalescedRequests={}",
                 aquiferNearestDispatches.sum(), aquiferNearestRows.sum(),

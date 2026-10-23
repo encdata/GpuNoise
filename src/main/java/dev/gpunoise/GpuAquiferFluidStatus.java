@@ -30,6 +30,10 @@ public final class GpuAquiferFluidStatus {
     public static final int OTHER_FLUID = 3;
     public static final int FLAG_CPU_FALLBACK = 1;
     public static final int FLAG_LAVA_OVERRIDE = 2;
+    public static final int FLAG_FALLBACK_ROOT_INPUT = 1 << 2;
+    public static final int FLAG_FALLBACK_SURFACE_INPUT = 1 << 3;
+    public static final int FLAG_FALLBACK_THRESHOLD = 1 << 4;
+    public static final int FLAG_FALLBACK_SPREAD_BOUNDARY = 1 << 5;
     public static final int LAVA_DISABLED_LEVEL = -32512;
     static final float DECISION_EPSILON = 5.0e-3f;
 
@@ -221,17 +225,19 @@ public final class GpuAquiferFluidStatus {
     public static int[] evaluate(Input input) {
         if (input.precomputed) return result(input.precomputedLevel, 0, 0,
                 input.precomputedStateId, input.precomputedKind);
-        if (!finite(input)) return result(0, 0, FLAG_CPU_FALLBACK, 0, OTHER_FLUID);
+        if (!finite(input)) return fallback(FLAG_FALLBACK_ROOT_INPUT);
         if (Math.abs(input.erosion + 0.225f) <= DECISION_EPSILON
                 || Math.abs(input.depth - 0.9f) <= DECISION_EPSILON
                 || Math.abs(Math.abs(input.lava) - 0.3f) <= DECISION_EPSILON)
-            return result(0, 0, FLAG_CPU_FALLBACK, 0, OTHER_FLUID);
+            return fallback(FLAG_FALLBACK_THRESHOLD);
 
         int surfaceEstimate = Integer.MAX_VALUE;
         int maxY = input.y + 12;
         int minY = input.y - 12;
         boolean centerHasFluid = false;
         for (int neighbor = 0; neighbor < SURFACE_SAMPLES; neighbor++) {
+            if (!Float.isFinite(input.surfaceHeights[neighbor]))
+                return fallback(FLAG_FALLBACK_SURFACE_INPUT);
             int surface = (int) Math.floor(input.surfaceHeights[neighbor]);
             int o = surface + 8;
             boolean center = neighbor == 0;
@@ -263,7 +269,7 @@ public final class GpuAquiferFluidStatus {
         }
         if (Math.abs(density) <= DECISION_EPSILON
                 || Math.abs(levelDensity) <= DECISION_EPSILON)
-            return result(0, 0, FLAG_CPU_FALLBACK, 0, OTHER_FLUID);
+            return fallback(FLAG_FALLBACK_THRESHOLD);
 
         int fluidLevel;
         if (levelDensity > 0.0f) {
@@ -272,7 +278,7 @@ public final class GpuAquiferFluidStatus {
             double scaledSpread = input.spread * 10.0;
             double multipleBoundary = scaledSpread / 3.0;
             if (Math.abs(multipleBoundary - Math.rint(multipleBoundary)) <= DECISION_EPSILON)
-                return result(0, 0, FLAG_CPU_FALLBACK, 0, OTHER_FLUID);
+                return fallback(FLAG_FALLBACK_SPREAD_BOUNDARY);
             int base = Math.floorDiv(input.y, 40) * 40 + 20;
             int spreadOffset = (int) Math.floor(multipleBoundary) * 3;
             fluidLevel = Math.min(surfaceEstimate, base + spreadOffset);
@@ -287,6 +293,10 @@ public final class GpuAquiferFluidStatus {
         return result(fluidLevel, 0, 0, input.defaultStateId, input.defaultKind);
     }
 
+    private static int[] fallback(int reason) {
+        return result(0, 0, FLAG_CPU_FALLBACK | reason, 0, OTHER_FLUID);
+    }
+
     private static boolean finite(Input input) {
         if (input.surfaceHeights == null || input.surfaceHeights.length != SURFACE_SAMPLES
                 || input.globalLevels == null || input.globalLevels.length != GLOBAL_LEVEL_SAMPLES
@@ -295,7 +305,6 @@ public final class GpuAquiferFluidStatus {
                 || !Float.isFinite(input.floodedness) || !Float.isFinite(input.spread)
                 || !Float.isFinite(input.lava) || !Float.isFinite(input.erosion)
                 || !Float.isFinite(input.depth)) return false;
-        for (float value : input.surfaceHeights) if (!Float.isFinite(value)) return false;
         return true;
     }
 

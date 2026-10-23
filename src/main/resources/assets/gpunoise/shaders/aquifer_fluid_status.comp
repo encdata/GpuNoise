@@ -37,6 +37,10 @@ const uint AIR = 0u;
 const uint LAVA = 2u;
 const uint FLAG_CPU_FALLBACK = 1u;
 const uint FLAG_LAVA_OVERRIDE = 2u;
+const uint FLAG_FALLBACK_ROOT_INPUT = 1u << 2u;
+const uint FLAG_FALLBACK_SURFACE_INPUT = 1u << 3u;
+const uint FLAG_FALLBACK_THRESHOLD = 1u << 4u;
+const uint FLAG_FALLBACK_SPREAD_BOUNDARY = 1u << 5u;
 const int LAVA_DISABLED_LEVEL = -32512;
 const float EPSILON = 5.0e-3;
 
@@ -53,7 +57,9 @@ void emit(uint row, int level, int source, uint flags, int stateId, uint kind) {
     values[base + 4u] = int(kind);
 }
 
-void fallback(uint row) { emit(row, 0, 0, FLAG_CPU_FALLBACK, 0, 3u); }
+void fallback(uint row, uint reason) {
+    emit(row, 0, 0, FLAG_CPU_FALLBACK | reason, 0, 3u);
+}
 
 InputRecord loadRecord(uint row) {
     InputRecord r;
@@ -104,12 +110,12 @@ void main() {
             || isnan(r.lava) || isinf(r.lava)
             || isnan(r.erosion) || isinf(r.erosion)
             || isnan(r.depth) || isinf(r.depth)) {
-        fallback(row);
+        fallback(row, FLAG_FALLBACK_ROOT_INPUT);
         return;
     }
     if (abs(r.erosion + 0.225) <= EPSILON || abs(r.depth - 0.9) <= EPSILON
             || abs(abs(r.lava) - 0.3) <= EPSILON) {
-        fallback(row);
+        fallback(row, FLAG_FALLBACK_THRESHOLD);
         return;
     }
 
@@ -120,7 +126,7 @@ void main() {
     for (int neighbor = 0; neighbor < 13; neighbor++) {
         float height = r.surfaceHeights[neighbor];
         if (isnan(height) || isinf(height)) {
-            fallback(row);
+            fallback(row, FLAG_FALLBACK_SURFACE_INPUT);
             return;
         }
         int surface = int(floor(height));
@@ -157,7 +163,7 @@ void main() {
         levelDensity = floodedness + 0.3 + (fade - 1.0) * 1.1;
     }
     if (abs(density) <= EPSILON || abs(levelDensity) <= EPSILON) {
-        fallback(row);
+        fallback(row, FLAG_FALLBACK_THRESHOLD);
         return;
     }
 
@@ -168,7 +174,7 @@ void main() {
         float scaledSpread = r.spread * 10.0;
         float spreadIndex = scaledSpread / 3.0;
         if (abs(spreadIndex - roundEven(spreadIndex)) <= EPSILON) {
-            fallback(row);
+            fallback(row, FLAG_FALLBACK_SPREAD_BOUNDARY);
             return;
         }
         int base = (r.y / 40) * 40 + 20;
