@@ -40,12 +40,12 @@ void main() {
     int surface = 2147483647;
 
     for (uint cellY = cellsY; ; --cellY) {
-        uint sample = cornerOffset + (cellY * gridX + cellX) * gridZ + cellZ;
-        if (sample >= chunkCount * samplesPerChunk) {
+        uint sampleIndex = cornerOffset + (cellY * gridX + cellX) * gridZ + cellZ;
+        if (sampleIndex >= chunkCount * samplesPerChunk) {
             heights[columnIndex] = int(0x80000000u);
             return;
         }
-        float density = values[sample * rootStride + initialDensityRoot];
+        float density = values[sampleIndex * rootStride + initialDensityRoot];
         if (isnan(density) || isinf(density) || abs(density - threshold) <= parityEpsilon) {
             heights[columnIndex] = int(0x80000000u);
             return;
