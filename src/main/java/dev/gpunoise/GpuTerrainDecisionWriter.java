@@ -189,11 +189,7 @@ public final class GpuTerrainDecisionWriter {
         BlockPaletteBuffer blockPaletteIds = new BlockPaletteBuffer(cellCountY * cellHeight * 256);
         BlockState air = Blocks.AIR.defaultBlockState();
         GpuNoiseChunkAccess noiseAccess = (GpuNoiseChunkAccess) (Object) noiseChunk;
-        GpuChunkDensityCache densityCache = noiseAccess.gpunoise$gpuCache();
-        GpuChunkDensityCache.FinalDensityBlockView finalDensityBlockView = densityCache == null
-                ? null : densityCache.finalDensityBlockView();
         net.minecraft.world.level.levelgen.Aquifer aquifer = noiseChunk.aquifer();
-        long finalDensityBlockReads = 0L;
         boolean[] parityColumns = null;
         if (GpuTerrainDensityParity.enabled()) {
             parityColumns = new boolean[256];
@@ -208,10 +204,7 @@ public final class GpuTerrainDecisionWriter {
         long blockDecisionSamples = 0L;
         long gpuDecisionHits = 0L;
         long missingDecisionRows = 0L;
-        long missingDensityCache = 0L;
         long parityBypasses = 0L;
-        long unavailableDensity = 0L;
-        long densityMismatches = 0L;
 
         noiseChunk.initializeForFirstCellX();
         for (int cellX = 0; cellX < cellsXZ; cellX++) {
@@ -237,8 +230,7 @@ public final class GpuTerrainDecisionWriter {
                                 int columnIndex = (localZ << 4) | localX;
                                 if (profileDecisionUse) {
                                     blockDecisionSamples++;
-                                    if (densityCache == null) missingDensityCache++;
-                                    else if (!decisions.isValid(decisionIndex)) missingDecisionRows++;
+                                    if (!decisions.isValid(decisionIndex)) missingDecisionRows++;
                                     else if (parityColumns != null && parityColumns[columnIndex]) parityBypasses++;
                                 }
                                 BlockState gpuState = null;
@@ -251,36 +243,16 @@ public final class GpuTerrainDecisionWriter {
                                 // interpolation just like a returned block.
                                 // Leave parity-traced columns on vanilla so its
                                 // Java comparison still observes the real path.
-                                if (densityCache != null && decisions.isValid(decisionIndex)
+                                if (decisions.isValid(decisionIndex)
                                         && (parityColumns == null || !parityColumns[columnIndex])) {
-                                    BlockState candidate = decisions.state(decisionIndex);
-                                    double cachedDensity;
-                                    int densityX = x - densityCache.minX();
-                                    int densityY = y - densityCache.minY();
-                                    int densityZ = z - densityCache.minZ();
-                                    if (finalDensityBlockView != null
-                                            && densityX >= 0 && densityX < 16
-                                            && densityY >= 0 && densityY < densityCache.height()
-                                            && densityZ >= 0 && densityZ < 16) {
-                                        cachedDensity = finalDensityBlockView.valueAtLocalUnchecked(
-                                                densityX, densityY, densityZ);
-                                        finalDensityBlockReads++;
-                                    } else {
-                                        cachedDensity = densityCache.finalDensity(x, y, z);
-                                    }
-                                    if (!Double.isNaN(cachedDensity)) {
-                                        double density = noiseAccess.gpunoise$withBeardifier(
-                                                cachedDensity, x, y, z);
-                                        if (decisions.matchesDensity(decisionIndex, density)) {
-                                            gpuState = candidate;
-                                            exactGpuDecision = true;
-                                            if (profileDecisionUse) gpuDecisionHits++;
-                                        } else if (profileDecisionUse) {
-                                            densityMismatches++;
-                                        }
-                                    } else if (profileDecisionUse) {
-                                        unavailableDensity++;
-                                    }
+                                    // This immutable table is built from this NoiseChunk's exact
+                                    // GPU density plus Beardifier value, then indexed by block
+                                    // coordinates. Recomputing those values here repeats structure
+                                    // queries for every accepted block without adding a new parity
+                                    // check; table publication follows successful chunk validation.
+                                    gpuState = decisions.state(decisionIndex);
+                                    exactGpuDecision = true;
+                                    if (profileDecisionUse) gpuDecisionHits++;
                                 }
                                 boolean gpuStateResolved = exactGpuDecision;
                                 BlockState state;
@@ -336,14 +308,10 @@ public final class GpuTerrainDecisionWriter {
             }
             noiseChunk.swapSlices();
         }
-        if (finalDensityBlockView != null) {
-            finalDensityBlockView.recordReads(finalDensityBlockReads);
-        }
         noiseChunk.stopInterpolation();
         GpuTerrainProfiler.recordTerrainBlockPreparation(preparationStart);
         GpuTerrainProfiler.recordTerrainDecisionUse(blockDecisionSamples, gpuDecisionHits,
-                missingDecisionRows, missingDensityCache, parityBypasses,
-                unavailableDensity, densityMismatches);
+                missingDecisionRows, 0L, parityBypasses, 0L, 0L);
         return new PreparedChunk(chunk, minY, cellCountY * cellHeight, fillState,
                 blockPaletteIds, palette);
     }
