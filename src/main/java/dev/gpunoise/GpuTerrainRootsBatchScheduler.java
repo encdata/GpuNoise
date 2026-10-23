@@ -38,11 +38,12 @@ final class GpuTerrainRootsBatchScheduler implements AutoCloseable {
     private static final long REQUEST_TIMEOUT_SECONDS = Math.max(1L,
             Math.min(600L, Long.getLong("gpunoise.terrainRequestTimeoutSeconds", 120L)));
     private static final int MAX_INPUT = PersistentVulkanNormalNoiseEngine.CAPACITY;
-    // Give C2ME enough time to enqueue the rest of the aligned area. The
-    // deadline is still bounded, so an incomplete area is dispatched without
-    // waiting indefinitely for neighbors that may never arrive.
+    // Briefly coalesce nearby chunk grids, then release a partial area instead
+    // of spending tens of milliseconds waiting for neighbors that may arrive
+    // later or never be requested. Keep the window configurable for devices
+    // whose worldgen scheduler benefits from a longer collection interval.
     private static final long BATCH_WINDOW_NANOS = TimeUnit.MILLISECONDS.toNanos(
-            Math.max(1L, Math.min(250L, Long.getLong("gpunoise.terrainBatchWindowMs", 50L))));
+            Math.max(1L, Math.min(250L, Long.getLong("gpunoise.terrainBatchWindowMs", 8L))));
 
     private static int configuredRegionSize() {
         long configured = Long.getLong("gpunoise.terrainRegionBatchSize", 4L);
