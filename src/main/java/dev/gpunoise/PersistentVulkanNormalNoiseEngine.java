@@ -1405,7 +1405,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     /** Adds structure Beardifier contributions to full block-density samples on Vulkan. */
     synchronized float[] submitBeardifier(ByteBuffer records, int count) throws Exception {
         if (hasInFlightWork()) throw new IllegalStateException("Vulkan slot is still in flight");
-        if (!GpuBeardifierInputs.isValidPacked(records, count))
+        if (!GpuBeardifierInputs.isValidBatch(records, count))
             throw new IllegalArgumentException("invalid GPU Beardifier input batch");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             put(aquiferNearestInputs, records, stack);

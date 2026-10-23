@@ -18,6 +18,7 @@ import net.minecraft.world.level.levelgen.Beardifier;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.levelgen.structure.TerrainAdjustment;
 import net.minecraft.world.level.levelgen.structure.pools.JigsawJunction;
+import dev.gpunoise.mixin.BeardifierAccessor;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQuery;
 import dev.gpunoise.GpuAquiferDecisionData.AquiferQueries;
 
@@ -1445,8 +1446,10 @@ public final class VulkanCiSmoke {
         GpuBeardifierInputs inputs = new GpuBeardifierInputs(pieces, junctions, kernel);
         int sampleCount = 256;
         ByteBuffer records = inputs.pack(-8, 0, -8, 1);
+        ByteBuffer secondRecords = inputs.pack(8, 0, 8, 1);
         try {
-            float[] actual = ring.submitBeardifier(records, sampleCount).get(60, TimeUnit.SECONDS);
+            float[] actual = ring.submitBeardifierBatch(List.of(records, secondRecords),
+                    new int[]{sampleCount, sampleCount}).get(60, TimeUnit.SECONDS);
             Beardifier reference = new Beardifier(
                     new it.unimi.dsi.fastutil.objects.ObjectArrayList<>(pieces).iterator(),
                     new it.unimi.dsi.fastutil.objects.ObjectArrayList<>(junctions).iterator());
@@ -1456,10 +1459,18 @@ public final class VulkanCiSmoke {
                 int z = -8 + (index >>> 4);
                 double expected = reference.compute(
                         new DensityFunction.SinglePointContext(x, 0, z));
+                int secondX = 8 + (index & 15);
+                int secondZ = 8 + (index >>> 4);
+                double secondExpected = reference.compute(
+                        new DensityFunction.SinglePointContext(secondX, 0, secondZ));
                 nonzeroReference |= Math.abs(expected) > 1.0e-5;
-                if (Math.abs(actual[index] - expected) > GpuTerrainRuntime.GRAPH_PARITY_EPSILON) {
+                if (Math.abs(actual[index] - expected) > GpuTerrainRuntime.GRAPH_PARITY_EPSILON
+                        || Math.abs(actual[sampleCount + index] - secondExpected)
+                        > GpuTerrainRuntime.GRAPH_PARITY_EPSILON) {
                     throw new IllegalStateException("Vulkan Beardifier " + label + " mismatch at ("
-                            + x + ",0," + z + "): expected=" + expected + ", got=" + actual[index]);
+                            + x + ",0," + z + "): expected=" + expected + ", got=" + actual[index]
+                            + "; second group at (" + secondX + ",0," + secondZ + "): expected="
+                            + secondExpected + ", got=" + actual[sampleCount + index]);
                 }
             }
             if (!pieces.isEmpty() && pieces.getFirst().terrainAdjustment() != TerrainAdjustment.NONE
@@ -1471,6 +1482,7 @@ public final class VulkanCiSmoke {
             }
         } finally {
             GpuTerrainInputBufferPool.release(records);
+            GpuTerrainInputBufferPool.release(secondRecords);
         }
     }
 

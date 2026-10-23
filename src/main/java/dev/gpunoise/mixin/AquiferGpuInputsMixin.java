@@ -5,6 +5,7 @@ import dev.gpunoise.GpuBeardifierInputs;
 import dev.gpunoise.GpuAquiferDecisionAccess;
 import dev.gpunoise.GpuNoiseChunkAccess;
 import dev.gpunoise.GpuTerrainRuntime;
+import dev.gpunoise.GpuTerrainDensityParity;
 import dev.gpunoise.GpuTerrainRoots;
 import dev.gpunoise.GpuAquiferCoordinatePlanner;
 import dev.gpunoise.GpuAquiferNearestThree;

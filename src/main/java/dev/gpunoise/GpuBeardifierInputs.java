@@ -4,6 +4,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.List;
 import net.minecraft.world.level.levelgen.Beardifier;
+import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.levelgen.structure.TerrainAdjustment;
 import net.minecraft.world.level.levelgen.structure.pools.JigsawJunction;
 
@@ -15,14 +16,18 @@ public final class GpuBeardifierInputs {
     public static final int SAMPLE_WORDS = 3;
     public static final int KERNEL_VALUES = 24 * 24 * 24;
     public static final int MAX_SAMPLES = PersistentVulkanNormalNoiseEngine.CAPACITY;
+    public static final int MAX_BATCH_CHUNKS = 16;
+    public static final int BATCH_MAGIC = 0x42445244;
+    private static final int BATCH_HEADER_WORDS = 4;
+    private static final int BATCH_GROUP_WORDS = 4;
 
     private final int[] pieces;
     private final int[] junctions;
     private final float[] kernel;
     private final int[] affectedBounds;
 
-    GpuBeardifierInputs(List<Beardifier.Rigid> sourcePieces, List<JigsawJunction> sourceJunctions,
-                        float[] structureKernel) {
+    public GpuBeardifierInputs(List<Beardifier.Rigid> sourcePieces, List<JigsawJunction> sourceJunctions,
+                               float[] structureKernel) {
         if (structureKernel == null || structureKernel.length != KERNEL_VALUES)
             throw new IllegalArgumentException("incomplete Beardifier inputs");
         this.pieces = new int[Math.multiplyExact(sourcePieces.size(), PIECE_WORDS)];
@@ -104,6 +109,75 @@ public final class GpuBeardifierInputs {
                 && words.getInt(base + 10 * Integer.BYTES) == junctionBase
                 && words.getInt(base + 11 * Integer.BYTES) == kernelBase
                 && words.getInt(base + 12 * Integer.BYTES) == sampleBase;
+    }
+
+    /** Wraps independent chunk payloads so one dispatch can evaluate up to a 4x4 region. */
+    static ByteBuffer packBatch(List<ByteBuffer> chunks, int[] sampleCounts) {
+        if (chunks == null || sampleCounts == null || chunks.isEmpty()
+                || chunks.size() != sampleCounts.length || chunks.size() > MAX_BATCH_CHUNKS)
+            throw new IllegalArgumentException("invalid GPU Beardifier chunk batch");
+        int totalSamples = 0;
+        long totalBytes = (long) (BATCH_HEADER_WORDS + chunks.size() * BATCH_GROUP_WORDS) * Integer.BYTES;
+        for (int i = 0; i < chunks.size(); i++) {
+            ByteBuffer chunk = chunks.get(i);
+            int samples = sampleCounts[i];
+            if (!isValidPacked(chunk, samples))
+                throw new IllegalArgumentException("invalid chunk payload in GPU Beardifier batch");
+            totalSamples = Math.addExact(totalSamples, samples);
+            totalBytes += chunk.remaining();
+        }
+        if (totalSamples > MAX_SAMPLES || totalBytes > Integer.MAX_VALUE)
+            throw new IllegalArgumentException("GPU Beardifier batch exceeds input capacity");
+
+        ByteBuffer batch = GpuTerrainInputBufferPool.acquire((int) totalBytes).order(ByteOrder.nativeOrder());
+        batch.putInt(totalSamples).putInt(chunks.size()).putInt(BATCH_MAGIC)
+                .putInt(BATCH_HEADER_WORDS);
+        int payloadWordOffset = BATCH_HEADER_WORDS + chunks.size() * BATCH_GROUP_WORDS;
+        int sampleStart = 0;
+        for (int i = 0; i < chunks.size(); i++) {
+            ByteBuffer chunk = chunks.get(i).duplicate();
+            int payloadWords = chunk.remaining() / Integer.BYTES;
+            batch.putInt(sampleStart).putInt(sampleCounts[i]).putInt(payloadWordOffset).putInt(payloadWords);
+            sampleStart += sampleCounts[i];
+            payloadWordOffset += payloadWords;
+        }
+        for (ByteBuffer chunk : chunks) batch.put(chunk.duplicate());
+        return batch.flip();
+    }
+
+    static boolean isValidBatch(ByteBuffer records, int totalSamples) {
+        if (records == null || totalSamples <= 0 || totalSamples > MAX_SAMPLES
+                || records.remaining() < (long) BATCH_HEADER_WORDS * Integer.BYTES) return false;
+        ByteBuffer words = records.duplicate().order(ByteOrder.nativeOrder());
+        int base = words.position();
+        int groupCount = words.getInt(base + Integer.BYTES);
+        if (words.getInt(base) != totalSamples || words.getInt(base + 2 * Integer.BYTES) != BATCH_MAGIC
+                || groupCount <= 0 || groupCount > MAX_BATCH_CHUNKS
+                || words.getInt(base + 3 * Integer.BYTES) != BATCH_HEADER_WORDS) return false;
+        long expectedPayloadWord = BATCH_HEADER_WORDS + (long) groupCount * BATCH_GROUP_WORDS;
+        int expectedSample = 0;
+        for (int group = 0; group < groupCount; group++) {
+            int descriptor = base + (BATCH_HEADER_WORDS + group * BATCH_GROUP_WORDS) * Integer.BYTES;
+            int sampleStart = words.getInt(descriptor);
+            int samples = words.getInt(descriptor + Integer.BYTES);
+            int payloadWord = words.getInt(descriptor + 2 * Integer.BYTES);
+            int payloadWords = words.getInt(descriptor + 3 * Integer.BYTES);
+            long payloadEnd = (long) payloadWord + payloadWords;
+            long payloadByteOffset = (long) payloadWord * Integer.BYTES;
+            long payloadByteLength = (long) payloadWords * Integer.BYTES;
+            if (sampleStart != expectedSample || samples <= 0 || payloadWord != expectedPayloadWord
+                    || payloadEnd * Integer.BYTES > records.remaining()) return false;
+            ByteBuffer chunk = records.duplicate().order(ByteOrder.nativeOrder());
+            int start = Math.toIntExact(payloadByteOffset);
+            int end = Math.toIntExact(payloadByteOffset + payloadByteLength);
+            chunk.position(base + start).limit(base + end);
+            chunk = chunk.slice().order(ByteOrder.nativeOrder());
+            if (!isValidPacked(chunk, samples)) return false;
+            expectedSample = Math.addExact(expectedSample, samples);
+            expectedPayloadWord = payloadEnd;
+        }
+        return expectedSample == totalSamples
+                && expectedPayloadWord * Integer.BYTES == records.remaining();
     }
 
     /** Packs block coordinates followed by bounded structure inputs for one Vulkan dispatch. */

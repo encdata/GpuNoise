@@ -5,7 +5,8 @@ layout(std430, set = 0, binding = 0) readonly buffer Inputs { uint words[]; };
 layout(std430, set = 0, binding = 1) writeonly buffer Outputs { uint densities[]; };
 layout(push_constant) uniform Parameters { uint sampleCount; };
 
-const uint HEADER_WORDS = 13u;
+const uint BATCH_GROUP_WORDS = 4u;
+const uint BATCH_MAGIC = 0x42445244u;
 const uint PIECE_WORDS = 8u;
 const uint JUNCTION_WORDS = 3u;
 const uint SAMPLE_WORDS = 3u;
@@ -30,20 +31,39 @@ float structureWeight(uint tableBase, int x, int y, int z, int yy) {
 
 void main() {
     uint sample = gl_GlobalInvocationID.x;
-    if (sample >= sampleCount || sample >= words[0]) return;
-    uint pieceCount = words[1];
-    uint junctionCount = words[2];
-    uint sampleBase = words[12];
-    int x = int(words[sampleBase + sample * SAMPLE_WORDS]);
-    int y = int(words[sampleBase + sample * SAMPLE_WORDS + 1u]);
-    int z = int(words[sampleBase + sample * SAMPLE_WORDS + 2u]);
-    uint pieceBase = words[9];
-    uint junctionBase = words[10];
-    uint tableBase = words[11];
+    if (sample >= sampleCount || sample >= words[0] || words[2] != BATCH_MAGIC) return;
+    uint groupCount = words[1];
+    uint groupBase = words[3];
+    uint chunkBase = 0u;
+    uint localSample = 0u;
+    bool foundGroup = false;
+    for (uint group = 0u; group < groupCount; group++) {
+        uint descriptor = groupBase + group * BATCH_GROUP_WORDS;
+        uint firstSample = words[descriptor];
+        uint samplesInGroup = words[descriptor + 1u];
+        if (sample >= firstSample && sample - firstSample < samplesInGroup) {
+            chunkBase = words[descriptor + 2u];
+            localSample = sample - firstSample;
+            foundGroup = true;
+            break;
+        }
+    }
+    if (!foundGroup) return;
+    if (words[chunkBase] <= localSample) return;
+    uint pieceCount = words[chunkBase + 1u];
+    uint junctionCount = words[chunkBase + 2u];
+    uint sampleBase = chunkBase + words[chunkBase + 12u];
+    int x = int(words[sampleBase + localSample * SAMPLE_WORDS]);
+    int y = int(words[sampleBase + localSample * SAMPLE_WORDS + 1u]);
+    int z = int(words[sampleBase + localSample * SAMPLE_WORDS + 2u]);
+    uint pieceBase = chunkBase + words[chunkBase + 9u];
+    uint junctionBase = chunkBase + words[chunkBase + 10u];
+    uint tableBase = chunkBase + words[chunkBase + 11u];
     float beard = 0.0;
 
-    if (x >= int(words[3]) && y >= int(words[4]) && z >= int(words[5])
-            && x <= int(words[6]) && y <= int(words[7]) && z <= int(words[8])) {
+    if (x >= int(words[chunkBase + 3u]) && y >= int(words[chunkBase + 4u])
+            && z >= int(words[chunkBase + 5u]) && x <= int(words[chunkBase + 6u])
+            && y <= int(words[chunkBase + 7u]) && z <= int(words[chunkBase + 8u])) {
         for (uint index = 0u; index < pieceCount; index++) {
             uint base = pieceBase + index * PIECE_WORDS;
             int minX = int(words[base]);
