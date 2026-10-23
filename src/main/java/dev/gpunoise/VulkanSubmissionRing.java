@@ -1175,7 +1175,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
             try {
                 slot.submitAquiferSubstanceAsync(first.records, first.count).whenComplete((rows, failure) -> {
                     if (failure == null) GpuTerrainProfiler.recordAquiferSubstanceBatch(first.count);
-                    completeOnDispatchWorker(first.future, rows, failure);
+                    completeOnDispatchWorker(first.future, rows == null ? null
+                            : GpuAquiferRowsView.whole(rows, GpuAquiferSubstance.OUTPUT_INTS), failure);
                 });
             } catch (Throwable failure) {
                 first.future.completeExceptionally(new IllegalStateException(
@@ -1213,10 +1214,9 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 GpuTerrainProfiler.recordAquiferSubstanceCoalesced(requests.size());
                 int offset = 0;
                 for (AquiferSubstanceRequest request : requests) {
-                    int end = offset + request.count;
-                    int[] chunkRows = java.util.Arrays.copyOfRange(rows, offset, end);
-                    completeOnDispatchWorker(request.future, chunkRows, null);
-                    offset = end;
+                    completeOnDispatchWorker(request.future, new GpuAquiferRowsView(rows, offset,
+                            request.count, GpuAquiferSubstance.OUTPUT_INTS), null);
+                    offset += request.count;
                 }
             });
         } catch (Throwable failure) {
@@ -1389,8 +1389,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
         return future;
     }
 
-    CompletableFuture<int[]> submitAquiferSubstance(ByteBuffer records, int count) {
-        CompletableFuture<int[]> future = new CompletableFuture<>();
+    CompletableFuture<GpuAquiferRowsView> submitAquiferSubstance(ByteBuffer records, int count) {
+        CompletableFuture<GpuAquiferRowsView> future = new CompletableFuture<>();
         enqueue(pendingAquiferSubstance,
                 () -> new AquiferSubstanceRequest(records.duplicate(), count, future, System.nanoTime()),
                 future, "aquifer substance");
@@ -1686,7 +1686,8 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                       long enqueuedNanos) implements DispatchRequest {}
     private record AquiferNearestRequest(ByteBuffer records, int count, CompletableFuture<int[]> future,
                                         long enqueuedNanos) implements DispatchRequest {}
-    private record AquiferSubstanceRequest(ByteBuffer records, int count, CompletableFuture<int[]> future,
+    private record AquiferSubstanceRequest(ByteBuffer records, int count,
+                                          CompletableFuture<GpuAquiferRowsView> future,
                                            long enqueuedNanos) implements DispatchRequest {}
     private record AquiferFluidStatusRequest(ByteBuffer records, int count, CompletableFuture<int[]> future,
                                              long enqueuedNanos) implements DispatchRequest {}

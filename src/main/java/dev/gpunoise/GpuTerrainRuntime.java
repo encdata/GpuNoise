@@ -572,7 +572,7 @@ public final class GpuTerrainRuntime {
         return ring.submitAquiferNearestThree(records, queryCount);
     }
 
-    public static java.util.concurrent.CompletionStage<int[]> submitAquiferSubstance(
+    public static java.util.concurrent.CompletionStage<GpuAquiferRowsView> submitAquiferSubstance(
             java.nio.ByteBuffer records, int queryCount) {
         VulkanSubmissionRing ring = terrainRing;
         if (ring == null) return java.util.concurrent.CompletableFuture.failedStage(

@@ -360,7 +360,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         GpuAquiferSubstance.BatchWriter substanceWriter =
                 new GpuAquiferSubstance.BatchWriter(decisionCapacity,
                         Math.min(decisionCapacity, gpunoise$substanceRowsPerDispatch));
-        List<CompletableFuture<int[]>> substanceBatches = new ArrayList<>();
+        List<CompletableFuture<GpuAquiferRowsView>> substanceBatches = new ArrayList<>();
         PendingDecisions pending = new PendingDecisions(decisionCapacity, gpunoise$verifyAquifer);
         int submittedSubstanceRows = 0;
         NeighborhoodCache neighborhoods = new NeighborhoodCache(Math.max(16, (height + 11) / 12 * 4));
@@ -627,12 +627,11 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         int decisionReferenceMismatches = 0;
         String substanceFirstMismatch = null;
         long tableResolveStart = GpuTerrainProfiler.beginAquiferPhase();
-        for (CompletableFuture<int[]> batch : substanceBatches) {
-            int[] outputs = batch.join();
-            for (int row = 0; row < outputs.length / GpuAquiferSubstance.OUTPUT_INTS; row++) {
+        for (CompletableFuture<GpuAquiferRowsView> batch : substanceBatches) {
+            GpuAquiferRowsView outputs = batch.join();
+            for (int row = 0; row < outputs.rows(); row++) {
                 int query = outputOffset++;
-                int outputBase = row * GpuAquiferSubstance.OUTPUT_INTS;
-                int packedOutput = outputs[outputBase];
+                int packedOutput = outputs.get(row, 0);
                 if (!GpuAquiferSubstance.isValidPackedOutput(packedOutput)) continue;
                 int action = GpuAquiferSubstance.outputAction(packedOutput);
                 if (action == GpuAquiferSubstance.CPU_FALLBACK) continue;
@@ -794,9 +793,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     }
 
     @org.spongepowered.asm.mixin.Unique
-    private static CompletableFuture<int[]> gpunoise$submitSubstanceBatch(
+    private static CompletableFuture<GpuAquiferRowsView> gpunoise$submitSubstanceBatch(
             java.nio.ByteBuffer records, int count) {
-        CompletableFuture<int[]> future = GpuTerrainRuntime.submitAquiferSubstance(records, count)
+        CompletableFuture<GpuAquiferRowsView> future = GpuTerrainRuntime.submitAquiferSubstance(records, count)
                 .toCompletableFuture();
         future.whenComplete((rows, failure) -> {
             GpuTerrainInputBufferPool.release(records);

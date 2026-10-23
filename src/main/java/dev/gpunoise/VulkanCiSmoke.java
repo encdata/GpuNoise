@@ -1285,8 +1285,8 @@ public final class VulkanCiSmoke {
                     packedChunkSubstance.records(), chunkBatch.length);
             int[] nearest = nearestFuture.get(60, TimeUnit.SECONDS);
             int[] chunkNearestResults = chunkNearestFuture.get(60, TimeUnit.SECONDS);
-            int[] substanceResults = substanceFuture.get(60, TimeUnit.SECONDS);
-            int[] chunkSubstanceResults = chunkSubstanceFuture.get(60, TimeUnit.SECONDS);
+            GpuAquiferRowsView substanceResults = substanceFuture.get(60, TimeUnit.SECONDS);
+            GpuAquiferRowsView chunkSubstanceResults = chunkSubstanceFuture.get(60, TimeUnit.SECONDS);
             assertConstantResults("queued terrain grid", queuedGrid.get(60, TimeUnit.SECONDS), 8);
             System.out.println("Vulkan CI smoke: four-center aquifer selection completed");
             int[] expectedChunkNearest = GpuAquiferNearestThree.select(queries[0], centers[0]);
@@ -1314,12 +1314,11 @@ public final class VulkanCiSmoke {
                 }
             }
             System.out.println("Vulkan CI smoke: aquifer substance decisions completed");
-            if (chunkSubstanceResults.length != chunkBatchSize * GpuAquiferSubstance.OUTPUT_INTS) {
+            if (chunkSubstanceResults.rows() != chunkBatchSize) {
                 throw new IllegalStateException("Chunk-sized aquifer batch returned a truncated output");
             }
             for (int i = 0; i < chunkBatchSize; i++) {
-                int base = i * GpuAquiferSubstance.OUTPUT_INTS;
-                if (chunkSubstanceResults[base] != GpuAquiferSubstance.packGpuOutput(
+                if (chunkSubstanceResults.get(i, 0) != GpuAquiferSubstance.packGpuOutput(
                         GpuAquiferSubstance.RETURN_DEFAULT, 0, false)) {
                     throw new IllegalStateException("Chunk-sized aquifer decision mismatch at row " + i);
                 }
@@ -1331,7 +1330,7 @@ public final class VulkanCiSmoke {
                         ? packedSubstanceCases.slotForStateId(expected[1]) : 0;
                 int expectedPacked = GpuAquiferSubstance.packGpuOutput(
                         expected[0], Math.max(0, expectedSlot), expected[2] != 0);
-                int actualPacked = substanceResults[i * GpuAquiferSubstance.OUTPUT_INTS];
+                int actualPacked = substanceResults.get(i, 0);
                 if (!GpuAquiferSubstance.isValidPackedOutput(actualPacked)
                         || actualPacked != expectedPacked) {
                     throw new IllegalStateException("Aquifer substance mismatch at case " + i
@@ -1346,7 +1345,7 @@ public final class VulkanCiSmoke {
                 throw new IllegalStateException("Vanilla second/third pressure contribution lost its nearest-similarity weight");
             }
             if (weightedThirdPressureIndex < 0
-                    || substanceResults[weightedThirdPressureIndex * GpuAquiferSubstance.OUTPUT_INTS]
+                    || substanceResults.get(weightedThirdPressureIndex, 0)
                     != GpuAquiferSubstance.packGpuOutput(GpuAquiferSubstance.RETURN_STATE,
                             packedSubstanceCases.slotForStateId(417), true)) {
                 throw new IllegalStateException("Packed aquifer output lost the weighted second/third pressure decision");
@@ -1362,18 +1361,18 @@ public final class VulkanCiSmoke {
             }
             GpuAquiferSubstance.PackedBatch overflowPaletteBatch =
                     GpuAquiferSubstance.packBatch(paletteOverflowCases);
-            int[] overflowPaletteResults = ring.submitAquiferSubstance(
+            GpuAquiferRowsView overflowPaletteResults = ring.submitAquiferSubstance(
                     overflowPaletteBatch.records(), paletteOverflowCases.length)
                     .get(60, TimeUnit.SECONDS);
             for (int row = 0; row < 256; row++) {
-                int actual = overflowPaletteResults[row];
+                int actual = overflowPaletteResults.get(row, 0);
                 if (GpuAquiferSubstance.outputAction(actual) != GpuAquiferSubstance.RETURN_STATE
                         || overflowPaletteBatch.stateIdForSlot(
                                 GpuAquiferSubstance.outputStateId(actual)) != row + 1) {
                     throw new IllegalStateException("Aquifer byte palette changed state mapping at row " + row);
                 }
             }
-            if (GpuAquiferSubstance.outputAction(overflowPaletteResults[256])
+            if (GpuAquiferSubstance.outputAction(overflowPaletteResults.get(256, 0))
                     != GpuAquiferSubstance.CPU_FALLBACK) {
                 throw new IllegalStateException("Aquifer palette overflow did not mark only the unmapped row for CPU fallback");
             }
@@ -1399,11 +1398,15 @@ public final class VulkanCiSmoke {
                     packedCoalescedChunkB.records(), coalescedChunkB.length);
             CompletableFuture.allOf(coalescedChunkFutureA, coalescedChunkFutureB)
                     .get(60, TimeUnit.SECONDS);
-            for (int value : coalescedChunkFutureA.join()) {
-                if (GpuAquiferSubstance.outputAction(value) != GpuAquiferSubstance.RETURN_DEFAULT)
+            GpuAquiferRowsView coalescedRowsA = coalescedChunkFutureA.join();
+            for (int row = 0; row < coalescedRowsA.rows(); row++) {
+                if (GpuAquiferSubstance.outputAction(coalescedRowsA.get(row, 0))
+                        != GpuAquiferSubstance.RETURN_DEFAULT)
                     throw new IllegalStateException("First coalesced aquifer chunk lost its row ordering");
             }
-            for (int value : coalescedChunkFutureB.join()) {
+            GpuAquiferRowsView coalescedRowsB = coalescedChunkFutureB.join();
+            for (int row = 0; row < coalescedRowsB.rows(); row++) {
+                int value = coalescedRowsB.get(row, 0);
                 if (GpuAquiferSubstance.outputAction(value) != GpuAquiferSubstance.RETURN_STATE
                         || packedCoalescedChunkB.stateIdForSlot(
                                 GpuAquiferSubstance.outputStateId(value)) != 917) {
