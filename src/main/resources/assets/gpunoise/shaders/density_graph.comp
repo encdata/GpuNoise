@@ -650,6 +650,8 @@ void main(){
                 + routerRootCount * 256u);
         results[1025] = float(rootNodes[0]);
         results[1026] = float(rootNodes[1]);
+        results[1027] = float(values[rootNodes[0]]);
+        results[1028] = float(values[rootNodes[1]]);
     }
 #endif
     for(uint marker=0u;marker<interpolationCount;marker++) {

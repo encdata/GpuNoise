@@ -630,7 +630,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                             + ", selected=" + java.util.Arrays.toString(inFlightTerrainCornerRootIndexes)
                             + ", shader=" + persistentResults.getFloat(probeOffset) + "/"
                             + persistentResults.getFloat(probeOffset + Float.BYTES) + "/"
-                            + persistentResults.getFloat(probeOffset + 2 * Float.BYTES));
+                            + persistentResults.getFloat(probeOffset + 2 * Float.BYTES) + "/"
+                            + persistentResults.getFloat(probeOffset + 3 * Float.BYTES) + "/"
+                            + persistentResults.getFloat(probeOffset + 4 * Float.BYTES));
                 }
                 FloatBuffer blockValues = persistentMappings.get(interpolationOutput).duplicate()
                         .order(ByteOrder.nativeOrder()).asFloatBuffer();
@@ -924,7 +926,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     // the graph and is not the output stride in this path.
                     .size(Boolean.getBoolean("gpunoise.debugRootProbe")
                             ? Math.max((long) sampleCount * cornerRootIndexes.length * Float.BYTES,
-                                    1027L * Float.BYTES)
+                                    1029L * Float.BYTES)
                             : (long) sampleCount * cornerRootIndexes.length * Float.BYTES);
             finalBarriers.get(1).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
                     .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(interpolationOutput.buffer)
