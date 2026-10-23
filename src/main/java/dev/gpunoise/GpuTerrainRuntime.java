@@ -1122,15 +1122,14 @@ public final class GpuTerrainRuntime {
                 GpuTerrainBatchResult deviceResult = deviceTerrainResults.get(deviceIndex);
                 if (deviceResult.blocks().isEmpty()) continue;
                 blockVerifiedDeviceCount++;
-                GpuTerrainBlockResult.RootView initialDensity = deviceResult.blocks()
-                        .rootView(GpuTerrainRoots.INITIAL_DENSITY);
-                if (initialDensity != null) {
+                if (graph.supportsRouterRoot(GpuTerrainRoots.INITIAL_DENSITY)
+                        && settings.getCellWidth() == 4) {
                     int[] surfaceHeights = deviceResult.surfaceHeights();
                     if (surfaceHeights == null) {
                         throw new IllegalStateException(
                                 "GPU omitted surface heights for an initial-density block output");
                     }
-                    verifyTerrainSurfaceHeights(initialDensity, surfaceHeights, settings);
+                    verifyTerrainSurfaceHeights(deviceResult.corners(), surfaceHeights, grid);
                 }
                 verifiedBlockRoots &= verifyTerrainBlockOutputs(graph, cpu, deviceResult.blocks(), settings);
                 verifiedInterpolatedRoots &= findInterpolatedBlockOutputRoots(graph, deviceResult.blocks());
@@ -1161,28 +1160,31 @@ public final class GpuTerrainRuntime {
         }
     }
 
-    private static void verifyTerrainSurfaceHeights(GpuTerrainBlockResult.RootView initialDensity,
-                                                     int[] actual, NoiseSettings settings) {
-        if (actual.length != 256) {
+    private static void verifyTerrainSurfaceHeights(GpuTerrainRootsResult corners,
+                                                     int[] actual, GpuTerrainGrid grid) {
+        if (actual.length != 16) {
             throw new IllegalStateException("GPU terrain surface-height output has " + actual.length
-                    + " columns; expected 256");
+                    + " columns; expected 16 quart-grid columns");
         }
-        for (int z = 0; z < 16; z++) {
-            for (int x = 0; x < 16; x++) {
-                int expected = settings.minY();
-                for (int y = settings.height() - 1; y >= 0; y--) {
-                    double density = initialDensity.valueAtUnchecked(x, y, z);
+        for (int quartZ = 0; quartZ < 4; quartZ++) {
+            for (int quartX = 0; quartX < 4; quartX++) {
+                int x = quartX * 4;
+                int z = quartZ * 4;
+                int expected = Integer.MAX_VALUE;
+                for (int cellY = grid.gridY() - 1; cellY >= 0; cellY--) {
+                    int sample = (cellY * grid.gridX() + quartX) * grid.gridZ() + quartZ;
+                    double density = corners.valueAt(sample, GpuTerrainRoots.INITIAL_DENSITY);
                     if (!Double.isFinite(density)
                             || Math.abs(density - 0.390625) <= GRAPH_PARITY_EPSILON) {
                         expected = Integer.MIN_VALUE;
                         break;
                     }
                     if (density > 0.390625) {
-                        expected = settings.minY() + y + 1;
+                        expected = grid.minY() + cellY * grid.cellHeight();
                         break;
                     }
                 }
-                int found = actual[(z << 4) | x];
+                int found = actual[(quartZ << 2) | quartX];
                 if (found != expected) {
                     throw new IllegalStateException("GPU terrain surface-height mismatch at column "
                             + x + "," + z + ": expected " + expected + ", got " + found);

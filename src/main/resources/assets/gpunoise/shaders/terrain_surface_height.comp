@@ -1,14 +1,15 @@
 #version 450
 layout(local_size_x = 64) in;
 
-layout(std430, set = 0, binding = 0) readonly buffer BlockRoots { float values[]; };
-// One result per chunk column, in chunk-major Z/X order. INT_MIN requests the
+layout(std430, set = 0, binding = 0) readonly buffer GridRoots { float values[]; };
+// One result per 4-block quart column, in chunk-major Z/X order. Minecraft's
+// NoiseChunk snaps preliminary surface coordinates to this same grid. INT_MIN requests the
 // existing Java scan when a value is non-finite or too close to its threshold.
 layout(std430, set = 0, binding = 1) writeonly buffer SurfaceHeights { int heights[]; };
 layout(std430, set = 0, binding = 2) readonly buffer ChunkMetadata { uint metadata[]; };
 layout(push_constant) uniform Parameters {
     uint chunkCount;
-    uint blocksPerChunk;
+    uint samplesPerChunk;
     uint rootStride;
     uint initialDensityRoot;
     float threshold;
@@ -19,27 +20,41 @@ layout(push_constant) uniform Parameters {
 
 void main() {
     uint columnIndex = gl_GlobalInvocationID.x;
-    if (columnIndex >= chunkCount * 256u) return;
+    if (columnIndex >= chunkCount * 16u) return;
 
-    uint chunk = columnIndex / 256u;
-    uint column = columnIndex % 256u;
+    uint chunk = columnIndex / 16u;
+    uint quartColumn = columnIndex % 16u;
+    uint cellX = quartColumn % 4u;
+    uint cellZ = quartColumn / 4u;
     uint metadataBase = chunk * 12u;
     int minY = int(metadata[metadataBase + 9u]);
-    uint blocksY = blocksPerChunk / 256u;
-    uint blockBase = chunk * blocksPerChunk;
-    int surface = minY;
+    uint cornerOffset = metadata[metadataBase + 0u];
+    uint cellsX = metadata[metadataBase + 2u];
+    uint cellsY = metadata[metadataBase + 3u];
+    uint cellsZ = metadata[metadataBase + 4u];
+    uint cellHeight = metadata[metadataBase + 6u];
+    uint gridX = cellsX + 1u;
+    uint gridZ = cellsZ + 1u;
+    // NoiseChunk samples the raw graph on cell-height boundaries, starting at
+    // the top boundary and including the minimum-Y boundary.
+    int surface = 2147483647;
 
-    for (uint y = blocksY; y > 0u; --y) {
-        uint block = blockBase + (y - 1u) * 256u + column;
-        float density = values[block * rootStride + initialDensityRoot];
+    for (uint cellY = cellsY; ; --cellY) {
+        uint sample = cornerOffset + (cellY * gridX + cellX) * gridZ + cellZ;
+        if (sample >= chunkCount * samplesPerChunk) {
+            heights[columnIndex] = int(0x80000000u);
+            return;
+        }
+        float density = values[sample * rootStride + initialDensityRoot];
         if (isnan(density) || isinf(density) || abs(density - threshold) <= parityEpsilon) {
             heights[columnIndex] = int(0x80000000u);
             return;
         }
         if (density > threshold) {
-            surface = minY + int(y);
+            surface = minY + int(cellY * cellHeight);
             break;
         }
+        if (cellY == 0u) break;
     }
     heights[columnIndex] = surface;
 }

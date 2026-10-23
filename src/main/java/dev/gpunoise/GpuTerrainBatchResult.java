@@ -29,7 +29,7 @@ final class GpuTerrainBatchResult {
             int firstChunk = blockOffset / blocksPerChunk;
             int chunkCount = blockCount / blocksPerChunk;
             chunkSurfaceHeights = java.util.Arrays.copyOfRange(surfaceHeights,
-                    firstChunk * 256, (firstChunk + chunkCount) * 256);
+                    firstChunk * 16, (firstChunk + chunkCount) * 16);
         }
         return new GpuTerrainBatchResult(corners.slice(cornerOffset, cornerCount),
                 blocks.slice(blockOffset, blockCount), chunkSurfaceHeights);
