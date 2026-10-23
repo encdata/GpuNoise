@@ -30,10 +30,9 @@ permissions:
   contents: read
 
 concurrency:
-  # Preserve each revision's full parity matrix without making an older run
-  # on the same branch hold the newest build and five profile checks hostage.
-  group: gpunoise-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
-  cancel-in-progress: false
+  # Keep the newest correctness matrix for each branch or pull request.
+  group: gpunoise-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
