@@ -23,6 +23,7 @@ import dev.gpunoise.GpuAquiferDecisionData.PendingDecisions;
 import dev.gpunoise.GpuAquiferDecisionTable;
 import dev.gpunoise.GpuWorldgenDependency;
 import dev.gpunoise.GpuTerrainProfiler;
+import dev.gpunoise.GpuTerrainSurfaceRegionCache;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.Block;
@@ -1132,6 +1133,25 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             return reference;
         }
         if (!(noiseChunk instanceof GpuNoiseChunkAccess access)) return Float.NaN;
+        int expandedSurface = GpuTerrainSurfaceRegionCache.get(graphIdentity, blockX, blockZ);
+        if (expandedSurface != Integer.MIN_VALUE) {
+            if (gpunoise$verifyAquifer) {
+                int reference = access.gpunoise$preliminarySurfaceLevel(blockX, blockZ);
+                if (expandedSurface != reference) {
+                    GpuTerrainSurfaceRegionCache.disable(graphIdentity);
+                    if (GpuAquiferStatusRegionCache.disableSurface(graphIdentity, globalFluidPicker)) {
+                        dev.gpunoise.GpuNoise.LOGGER.warn(
+                                "Expanded GPU aquifer surface region failed parity at ({}, {}); disabling it for this terrain graph and fluid picker. GPU={}, Java={}",
+                                blockX, blockZ, expandedSurface, reference);
+                    }
+                    return reference;
+                }
+            }
+            GpuAquiferStatusRegionCache.putSurface(
+                    graphIdentity, globalFluidPicker, blockX, blockZ, expandedSurface);
+            GpuTerrainProfiler.recordAquiferRegionSurfaceCache(true);
+            return expandedSurface;
+        }
         if (!GpuAquiferStatusRegionCache.isSurfaceDisabled(graphIdentity, globalFluidPicker)) {
             GpuChunkDensityCache terrain = GpuTerrainRuntime.terrainCacheForSurface(
                     blockX, blockZ, graphIdentity);

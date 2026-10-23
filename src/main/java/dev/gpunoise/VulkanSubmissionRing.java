@@ -570,7 +570,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                     slot.submitGraphGridInterpolated(value.graph, value.gridMetadata,
                                     value.chunkCount, value.samplesPerChunk, value.outputMetadata,
                                     value.blocksPerChunk, value.outputRootIndexes,
-                                    value.cornerRootIndexes)
+                                    value.cornerRootIndexes, value.surfaceOnly)
                             .whenComplete((result, failure) -> completeOnDispatchWorker(value.future, result, failure));
                 }
                 case BLOCKING -> runBlockingReserved((BlockingRequest<?>) request, slot);
@@ -1535,7 +1535,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 copyMetadata ? snapshot(gridMetadata) : gridMetadata, chunkCount,
                 samplesPerChunk, copyMetadata ? snapshot(outputMetadata) : outputMetadata,
                 blocksPerChunk, outputRootIndexes.clone(),
-                allRouterRoots(graph), future,
+                allRouterRoots(graph), future, false,
                 System.nanoTime()),
                 future, "full terrain grid");
         return future;
@@ -1550,7 +1550,18 @@ final class VulkanSubmissionRing implements AutoCloseable {
                 copyMetadata ? snapshot(gridMetadata) : gridMetadata, chunkCount,
                 samplesPerChunk, copyMetadata ? snapshot(outputMetadata) : outputMetadata,
                 blocksPerChunk, outputRootIndexes.clone(), cornerRootIndexes.clone(), future,
-                System.nanoTime()), future, "full terrain grid");
+                false, System.nanoTime()), future, "full terrain grid");
+        return future;
+    }
+
+    CompletableFuture<GpuTerrainBatchResult> submitGraphGridSurfaceHeights(
+            GpuDensityGraph graph, ByteBuffer gridMetadata, int chunkCount, int samplesPerChunk,
+            ByteBuffer surfaceMetadata, int[] cornerRootIndexes) {
+        CompletableFuture<GpuTerrainBatchResult> future = new CompletableFuture<>();
+        enqueue(pendingTerrainGrids, () -> new TerrainGridRequest(graph,
+                snapshot(gridMetadata), chunkCount, samplesPerChunk, snapshot(surfaceMetadata),
+                0, new int[0], cornerRootIndexes.clone(), future, true, System.nanoTime()),
+                future, "expanded terrain surface grid");
         return future;
     }
 
@@ -1683,6 +1694,7 @@ final class VulkanSubmissionRing implements AutoCloseable {
                                       int samplesPerChunk, ByteBuffer outputMetadata, int blocksPerChunk,
                                       int[] outputRootIndexes, int[] cornerRootIndexes,
                                       CompletableFuture<GpuTerrainBatchResult> future,
+                                      boolean surfaceOnly,
                                       long enqueuedNanos) implements DispatchRequest {}
     private record AquiferNearestRequest(ByteBuffer records, int count, CompletableFuture<int[]> future,
                                         long enqueuedNanos) implements DispatchRequest {}

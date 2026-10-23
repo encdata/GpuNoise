@@ -42,7 +42,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private static final int MAX_INTERPOLATORS = 16;
     /** NoiseChunk snaps preliminary surface coordinates to its 4x4 quart grid. */
     private static final int SURFACE_COLUMNS_PER_CHUNK = 4 * 4;
-    private static final int MAX_TERRAIN_SURFACE_COLUMNS = 16 * SURFACE_COLUMNS_PER_CHUNK;
+    static final int MAX_TERRAIN_SURFACE_COLUMNS = 4096;
+    private static final int MAX_TERRAIN_SURFACE_CHUNKS = MAX_TERRAIN_SURFACE_COLUMNS
+            / SURFACE_COLUMNS_PER_CHUNK;
     static final int TERRAIN_CORNER_MARKER_FLOATS = CAPACITY * MAX_INTERPOLATORS;
     private static final int MAX_GRAPH_OUTPUTS = 32;
     /** Keep common parity/production root masks warm without retaining unbounded pipelines. */
@@ -134,7 +136,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private int inFlightTerrainBlockCount;
     private int inFlightTerrainOutputRoots;
     private int inFlightTerrainBlocksPerChunk;
+    private int inFlightTerrainChunkCount;
     private boolean inFlightTerrainHasSurfaceHeights;
+    private boolean inFlightTerrainSurfaceOnly;
     private int inFlightTerrainCornerRoots;
     private int[] inFlightTerrainCornerRootIndexes;
     private int[] inFlightTerrainRootIndexes;
@@ -195,7 +199,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
             terrainCornerMarkers = deviceLocalBuffer((long) TERRAIN_CORNER_MARKER_FLOATS * Float.BYTES, stack);
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
-            interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack);
+            interpolationMetadata = buffer((long) MAX_TERRAIN_SURFACE_CHUNKS
+                    * GpuInterpolationBatch.METADATA_BYTES, stack);
             interpolationOutput = buffer((long) INTERPOLATION_OUTPUT_FLOATS * Float.BYTES, stack);
             terrainSurfaceOutput = hostVisibleBuffer((long) MAX_TERRAIN_SURFACE_COLUMNS * Integer.BYTES, stack);
             aquiferPressureInputs = hostVisibleBuffer((long) CAPACITY * GpuAquiferPressure.RECORD_BYTES, stack);
@@ -295,7 +300,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
             terrainCornerMarkers = deviceLocalBuffer((long) TERRAIN_CORNER_MARKER_FLOATS * Float.BYTES, stack);
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
-            interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack);
+            interpolationMetadata = buffer((long) MAX_TERRAIN_SURFACE_CHUNKS
+                    * GpuInterpolationBatch.METADATA_BYTES, stack);
             interpolationOutput = buffer((long) INTERPOLATION_OUTPUT_FLOATS * Float.BYTES, stack);
             terrainSurfaceOutput = hostVisibleBuffer((long) MAX_TERRAIN_SURFACE_COLUMNS * Integer.BYTES, stack);
             aquiferPressureInputs = hostVisibleBuffer((long) CAPACITY * GpuAquiferPressure.RECORD_BYTES, stack);
@@ -659,18 +665,24 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             } else if (terrainFuture != null) {
                 long[] stageGpuNanos = GPU_TIMING_ENABLED
                         ? readTerrainGpuTimestamps(stack, inFlightTerrainHasSurfaceHeights) : null;
-                float[] corners = readSelectedRootResults(inFlightSamples, inFlightTerrainCornerRoots,
-                        inFlightTerrainCornerRootIndexes);
-                FloatBuffer blockValues = persistentMappings.get(interpolationOutput).duplicate()
-                        .order(ByteOrder.nativeOrder()).asFloatBuffer();
-                blockValues.clear();
-                blockValues.limit(inFlightTerrainBlockCount * inFlightTerrainOutputRoots);
-                float[] blocks = new float[inFlightTerrainBlockCount * inFlightTerrainOutputRoots];
-                blockValues.get(blocks);
+                float[] corners = inFlightTerrainSurfaceOnly
+                        ? new float[0]
+                        : readSelectedRootResults(inFlightSamples, inFlightTerrainCornerRoots,
+                                inFlightTerrainCornerRootIndexes);
+                float[] blocks;
+                if (inFlightTerrainSurfaceOnly) {
+                    blocks = new float[0];
+                } else {
+                    FloatBuffer blockValues = persistentMappings.get(interpolationOutput).duplicate()
+                            .order(ByteOrder.nativeOrder()).asFloatBuffer();
+                    blockValues.clear();
+                    blockValues.limit(inFlightTerrainBlockCount * inFlightTerrainOutputRoots);
+                    blocks = new float[inFlightTerrainBlockCount * inFlightTerrainOutputRoots];
+                    blockValues.get(blocks);
+                }
                 int[] surfaceHeights = null;
                 if (inFlightTerrainHasSurfaceHeights) {
-                    int chunkCount = inFlightTerrainBlockCount / inFlightTerrainBlocksPerChunk;
-                    int surfaceCount = Math.multiplyExact(chunkCount, SURFACE_COLUMNS_PER_CHUNK);
+                    int surfaceCount = Math.multiplyExact(inFlightTerrainChunkCount, SURFACE_COLUMNS_PER_CHUNK);
                     IntBuffer surfaceValues = persistentMappings.get(terrainSurfaceOutput)
                             .duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
                     surfaceValues.clear().limit(surfaceCount);
@@ -684,12 +696,18 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                         new GpuTerrainRootsResult(corners, 0, corners.length,
                                 inFlightTerrainCornerRoots, inFlightTerrainCornerRootIndexes.length,
                                 0, inFlightTerrainCornerRootIndexes),
-                        new GpuTerrainBlockResult(blocks, 0, inFlightTerrainBlockCount,
-                                inFlightTerrainRootIndexes, 16, inFlightTerrainBlocksPerChunk / 256, 16),
+                        inFlightTerrainSurfaceOnly
+                                ? new GpuTerrainBlockResult(blocks, 0, 0,
+                                        new int[]{GpuTerrainRoots.INITIAL_DENSITY}, 16, 0, 16)
+                                : new GpuTerrainBlockResult(blocks, 0, inFlightTerrainBlockCount,
+                                        inFlightTerrainRootIndexes, 16,
+                                        inFlightTerrainBlocksPerChunk / 256, 16),
                         surfaceHeights);
                 check(vkResetFences(device, fence), "reset async terrain fence");
                 inFlightTerrain = null;
                 inFlightTerrainHasSurfaceHeights = false;
+                inFlightTerrainSurfaceOnly = false;
+                inFlightTerrainChunkCount = 0;
                 terrainFuture.complete(result);
             } else {
                 long gpuCommandNanos = GPU_TIMING_ENABLED ? readGpuTimestamp(stack) : -1L;
@@ -704,6 +722,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             inFlightGraphRoots = null;
             inFlightTerrain = null;
             inFlightTerrainHasSurfaceHeights = false;
+            inFlightTerrainSurfaceOnly = false;
+            inFlightTerrainChunkCount = 0;
             inFlightAquiferPrefill = null;
             inFlightAquiferRows = null;
             inFlightAquiferRowStage = null;
@@ -862,8 +882,24 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                                                                                          int blocksPerChunk,
                                                                                          int[] outputRootIndexes,
                                                                                          int[] cornerRootIndexes) throws Exception {
+        return submitGraphGridInterpolated(graph, gridMetadata, chunkCount, samplesPerChunk,
+                outputMetadata, blocksPerChunk, outputRootIndexes, cornerRootIndexes, false);
+    }
+
+    /** Evaluates admitted density grid roots and emits only compact surface heights. */
+    synchronized CompletableFuture<GpuTerrainBatchResult> submitGraphGridSurfaceHeights(
+            GpuDensityGraph graph, ByteBuffer gridMetadata, int chunkCount, int samplesPerChunk,
+            ByteBuffer surfaceMetadata, int[] cornerRootIndexes) throws Exception {
+        return submitGraphGridInterpolated(graph, gridMetadata, chunkCount, samplesPerChunk,
+                surfaceMetadata, 0, new int[0], cornerRootIndexes, true);
+    }
+
+    synchronized CompletableFuture<GpuTerrainBatchResult> submitGraphGridInterpolated(
+            GpuDensityGraph graph, ByteBuffer gridMetadata, int chunkCount, int samplesPerChunk,
+            ByteBuffer outputMetadata, int blocksPerChunk, int[] outputRootIndexes,
+            int[] cornerRootIndexes, boolean surfaceOnly) throws Exception {
         if (hasInFlightWork()) throw new IllegalStateException("Vulkan slot is still in flight");
-        if (chunkCount <= 0 || samplesPerChunk <= 0 || blocksPerChunk <= 0
+        if (chunkCount <= 0 || samplesPerChunk <= 0 || (!surfaceOnly && blocksPerChunk <= 0)
                 || (long) chunkCount * samplesPerChunk > CAPACITY
                 || gridMetadata.remaining() < chunkCount * 32L
                 || outputMetadata.remaining() < chunkCount * GpuInterpolationBatch.METADATA_BYTES)
@@ -872,7 +908,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         GpuDensityGraphBuffer.Packed packed = packedGraph(graph, outputRootIndexes);
         int rootCount = graph.routerRootCount();
         int outputRoots = outputRootIndexes.length;
-        if (outputRoots == 0) throw new IllegalArgumentException("grid interpolation needs at least one block output root");
+        if (!surfaceOnly && outputRoots == 0)
+            throw new IllegalArgumentException("grid interpolation needs at least one block output root");
         int[] allBlockRootRegisters = packed.blockRootRegisters();
         int[] blockRootRegisters = new int[outputRoots];
         for (int i = 0; i < outputRoots; i++) {
@@ -885,11 +922,15 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         int cornerStride = rootCount + markerCount;
         validateRootIndexes(cornerRootIndexes, rootCount, "corner");
         ByteBuffer terrainMetadata = outputMetadata.duplicate().order(ByteOrder.nativeOrder());
-        GpuInterpolationBatch.setTerrainLayout(terrainMetadata, chunkCount, cornerStride, blocksPerChunk);
-        GpuInterpolationBatch.validateForDispatch(terrainMetadata, chunkCount,
-                samplesPerChunk, blocksPerChunk);
+        if (!surfaceOnly) {
+            GpuInterpolationBatch.setTerrainLayout(terrainMetadata, chunkCount, cornerStride, blocksPerChunk);
+            GpuInterpolationBatch.validateForDispatch(terrainMetadata, chunkCount,
+                    samplesPerChunk, blocksPerChunk);
+        } else {
+            validateSurfaceMetadata(terrainMetadata, chunkCount, samplesPerChunk);
+        }
         int sampleCount = Math.multiplyExact(chunkCount, samplesPerChunk);
-        int blockCount = Math.multiplyExact(chunkCount, blocksPerChunk);
+        int blockCount = surfaceOnly ? 0 : Math.multiplyExact(chunkCount, blocksPerChunk);
         int initialDensityOutput = -1;
         for (int output = 0; output < cornerRootIndexes.length; output++) {
             if (cornerRootIndexes[output] == GpuTerrainRoots.INITIAL_DENSITY) {
@@ -900,6 +941,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         boolean computeSurfaceHeights = initialDensityOutput >= 0
                 && terrainMetadata.getInt(5 * Integer.BYTES) == 4
                 && chunkCount * SURFACE_COLUMNS_PER_CHUNK <= MAX_TERRAIN_SURFACE_COLUMNS;
+        if (surfaceOnly && !computeSurfaceHeights) {
+            throw new IllegalArgumentException("surface-only dispatch requires the initial-density root and quart grid");
+        }
         if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16 || outputRoots > rootCount
                 || markerCount > MAX_INTERPOLATORS || graph.registerCount() > 256
                 || (long) sampleCount * rootCount * Float.BYTES > results.size
@@ -908,11 +952,12 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             throw new IllegalArgumentException("grid interpolation batch exceeds GPU capacity");
         long preparationStarted = GPU_TIMING_ENABLED ? System.nanoTime() : 0L;
         long metadataUploadBytes = (long) chunkCount * (32L + GpuInterpolationBatch.METADATA_BYTES);
-        long cornerReadbackBytes = (long) sampleCount * cornerRootIndexes.length * Float.BYTES;
+        long cornerReadbackBytes = surfaceOnly ? 0L
+                : (long) sampleCount * cornerRootIndexes.length * Float.BYTES;
         long blockReadbackBytes = (long) blockCount * outputRoots * Float.BYTES;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ensureGraphVariant(graph, stack);
-            ensureBlockGraphVariant(graph, packed, stack);
+            if (!surfaceOnly) ensureBlockGraphVariant(graph, packed, stack);
             ByteBuffer grids = gridMetadata.duplicate().order(ByteOrder.nativeOrder());
             grids.limit(grids.position() + chunkCount * 32);
             put(graphCoordinates, grids, stack);
@@ -958,17 +1003,23 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, null, graphBarrier, null);
             }
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, blockGraphPipeline);
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipelineLayout, 0,
-                    stack.longs(graphDescriptorSet), null);
-            ByteBuffer blockPush = stack.malloc(16).order(ByteOrder.nativeOrder())
-                    .putInt(blockCount).putInt(packed.blockNodeCount())
-                    .putInt((packed.blockNodeOffset() << 5) | outputRoots)
-                    .putInt(0x8000_0000 | markerCount).flip();
-            vkCmdPushConstants(commandBuffer, graphPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, blockPush);
-            writeGpuTimestamp(2, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-            vkCmdDispatch(commandBuffer, (blockCount + 63) / 64, 1, 1);
-            writeGpuTimestamp(3, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            if (surfaceOnly) {
+                // Keep every timestamp slot defined for the shared terrain profiler.
+                writeGpuTimestamp(2, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+                writeGpuTimestamp(3, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            } else {
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, blockGraphPipeline);
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipelineLayout, 0,
+                        stack.longs(graphDescriptorSet), null);
+                ByteBuffer blockPush = stack.malloc(16).order(ByteOrder.nativeOrder())
+                        .putInt(blockCount).putInt(packed.blockNodeCount())
+                        .putInt((packed.blockNodeOffset() << 5) | outputRoots)
+                        .putInt(0x8000_0000 | markerCount).flip();
+                vkCmdPushConstants(commandBuffer, graphPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, blockPush);
+                writeGpuTimestamp(2, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+                vkCmdDispatch(commandBuffer, (blockCount + 63) / 64, 1, 1);
+                writeGpuTimestamp(3, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            }
             if (computeSurfaceHeights) {
                 VkBufferMemoryBarrier.Buffer surfaceInputBarrier = VkBufferMemoryBarrier.calloc(1, stack)
                         .sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
@@ -992,22 +1043,24 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 writeGpuTimestamp(5, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             }
             VkBufferMemoryBarrier.Buffer finalBarriers = VkBufferMemoryBarrier.calloc(
-                    computeSurfaceHeights ? 3 : 2, stack);
-            finalBarriers.get(0).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
-                    .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(results.buffer)
-                    // The fused shader writes only the parity-admitted corner
-                    // roots at a compact per-sample stride. Keep the host
-                    // visibility dependency scoped to bytes actually written;
-                    // the logical router root count is only used to evaluate
-                    // the graph and is not the output stride in this path.
-                    .size((long) sampleCount * cornerRootIndexes.length * Float.BYTES);
-            finalBarriers.get(1).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
-                    .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(interpolationOutput.buffer)
-                    .size((long) blockCount * outputRoots * Float.BYTES);
-            if (computeSurfaceHeights) {
-                finalBarriers.get(2).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
+                    surfaceOnly ? 1 : computeSurfaceHeights ? 3 : 2, stack);
+            if (surfaceOnly) {
+                finalBarriers.get(0).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
                         .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(terrainSurfaceOutput.buffer)
                         .size((long) chunkCount * SURFACE_COLUMNS_PER_CHUNK * Integer.BYTES);
+            } else {
+                finalBarriers.get(0).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(results.buffer)
+                        // Keep host visibility scoped to the compact corner roots.
+                        .size((long) sampleCount * cornerRootIndexes.length * Float.BYTES);
+                finalBarriers.get(1).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(interpolationOutput.buffer)
+                        .size((long) blockCount * outputRoots * Float.BYTES);
+                if (computeSurfaceHeights) {
+                    finalBarriers.get(2).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
+                            .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(terrainSurfaceOutput.buffer)
+                            .size((long) chunkCount * SURFACE_COLUMNS_PER_CHUNK * Integer.BYTES);
+                }
             }
             vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
                     0, null, finalBarriers, null);
@@ -1024,7 +1077,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             inFlightTerrainBlockCount = blockCount;
             inFlightTerrainOutputRoots = outputRoots;
             inFlightTerrainBlocksPerChunk = blocksPerChunk;
+            inFlightTerrainChunkCount = chunkCount;
             inFlightTerrainHasSurfaceHeights = computeSurfaceHeights;
+            inFlightTerrainSurfaceOnly = surfaceOnly;
             inFlightTerrainCornerRoots = rootCount;
             inFlightTerrainCornerRootIndexes = cornerRootIndexes.clone();
             inFlightTerrainRootIndexes = outputRootIndexes.clone();
@@ -1034,9 +1089,29 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             totalTerrainBlockReadbackBytes += blockReadbackBytes;
             totalTerrainSurfaceReadbackBytes += computeSurfaceHeights
                     ? (long) chunkCount * SURFACE_COLUMNS_PER_CHUNK * Integer.BYTES : 0L;
-            totalTerrainComputeDispatches += computeSurfaceHeights ? 3L : 2L;
+            totalTerrainComputeDispatches += surfaceOnly ? 2L : computeSurfaceHeights ? 3L : 2L;
             inFlightTerrain = new CompletableFuture<>();
             return inFlightTerrain;
+        }
+    }
+
+    private static void validateSurfaceMetadata(ByteBuffer metadata, int chunkCount,
+                                                int samplesPerChunk) {
+        if (metadata.remaining() < (long) chunkCount * GpuInterpolationBatch.METADATA_BYTES) {
+            throw new IllegalArgumentException("surface metadata is shorter than its chunk batch");
+        }
+        ByteBuffer records = metadata.duplicate().order(metadata.order());
+        int first = records.position();
+        for (int chunk = 0; chunk < chunkCount; chunk++) {
+            int base = Math.addExact(first,
+                    Math.multiplyExact(chunk, GpuInterpolationBatch.METADATA_BYTES));
+            if (records.getInt(base) != Math.multiplyExact(chunk, samplesPerChunk)
+                    || records.getInt(base + 2 * Integer.BYTES) != 4
+                    || records.getInt(base + 4 * Integer.BYTES) != 4
+                    || records.getInt(base + 5 * Integer.BYTES) != 4
+                    || records.getInt(base + 7 * Integer.BYTES) != 1) {
+                throw new IllegalArgumentException("invalid compact surface metadata for chunk " + chunk);
+            }
         }
     }
 

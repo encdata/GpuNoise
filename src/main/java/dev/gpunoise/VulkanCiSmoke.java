@@ -94,6 +94,26 @@ public final class VulkanCiSmoke {
             }
             GpuDensityGraph multiRootGraph = new GpuDensityGraph(distinctRootNodes,
                     distinctRootRegisters, List.of(), List.of(), List.of(), List.of(), GpuTerrainRoots.COUNT);
+            ByteBuffer surfaceGrid = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder());
+            surfaceGrid.putInt(0).putInt(-64).putInt(0).putInt(5).putInt(2)
+                    .putInt(5).putInt(4).putInt(8).flip();
+            ByteBuffer surfaceMetadata = ByteBuffer.allocateDirect(GpuInterpolationBatch.METADATA_BYTES)
+                    .order(ByteOrder.nativeOrder());
+            GpuInterpolationBatch.write(surfaceMetadata, 0, 0, 0,
+                    4, 1, 4, 4, 8, 0, -64, 0, 1, 0);
+            surfaceMetadata.position(0).limit(surfaceMetadata.capacity());
+            GpuTerrainBatchResult surfaceOnly = ring.submitGraphGridSurfaceHeights(multiRootGraph,
+                    surfaceGrid, 1, 50, surfaceMetadata,
+                    new int[]{GpuTerrainRoots.INITIAL_DENSITY}).get(60, TimeUnit.SECONDS);
+            if (surfaceOnly.surfaceHeights() == null || surfaceOnly.surfaceHeights().length != 16
+                    || surfaceOnly.blocks().sampleCount() != 0 || surfaceOnly.corners().sampleCount() != 0) {
+                throw new IllegalStateException("Surface-only GPU dispatch returned non-compact outputs");
+            }
+            for (int height : surfaceOnly.surfaceHeights()) {
+                if (height != -56) throw new IllegalStateException(
+                        "Surface-only GPU dispatch returned " + height + " instead of top cell boundary -56");
+            }
+            System.out.println("Vulkan CI smoke: grid-only initial-density surface dispatch passed");
             int[] selectedRootIndexes = {GpuTerrainRoots.RIDGES, GpuTerrainRoots.FINAL_DENSITY,
                     GpuTerrainRoots.EROSION};
             float[] selectedRootResults = ring.submitGraphRoots(multiRootGraph, x, y, z, selectedRootIndexes)
@@ -1762,7 +1782,7 @@ public final class VulkanCiSmoke {
         }
         List<GpuTerrainSurfaceRegion.ChunkRange> ranges = region.ranges(
                 PersistentVulkanNormalNoiseEngine.CAPACITY, 256);
-        if (ranges.size() != 9 || ranges.get(0).chunkCount() != 16
+        if (ranges.size() != 1 || ranges.get(0).chunkCount() != 144
                 || ranges.get(ranges.size() - 1).endChunkExclusive() != region.chunkCount()) {
             throw new IllegalStateException("surface region dispatch ranges exceed compact GPU output capacity");
         }

@@ -283,6 +283,7 @@ public final class GpuTerrainRuntime {
         int minX = chunk.getPos().getMinBlockX();
         int minZ = chunk.getPos().getMinBlockZ();
         net.minecraft.world.level.levelgen.PositionalRandomFactory oreRandom = randomState.oreRandom();
+        prefetchTerrainSurfaceRegion(chunk.getPos().x, chunk.getPos().z, settings);
         GpuChunkDensityCache.prefetch5x5ForChunk(minX, minZ, settings);
         GpuChunkDensityCache cache = GpuTerrainAreaRegistry.claim(minX, minZ,
                 () -> GpuChunkDensityCache.create(minX, minZ, settings));
@@ -314,6 +315,7 @@ public final class GpuTerrainRuntime {
         }
         int minX = chunk.getPos().getMinBlockX();
         int minZ = chunk.getPos().getMinBlockZ();
+        prefetchTerrainSurfaceRegion(chunk.getPos().x, chunk.getPos().z, settings);
         GpuChunkDensityCache.prefetch5x5ForChunk(minX, minZ, settings);
         GpuChunkDensityCache cache = GpuTerrainAreaRegistry.claim(minX, minZ,
                 () -> GpuChunkDensityCache.create(minX, minZ, settings));
@@ -522,6 +524,7 @@ public final class GpuTerrainRuntime {
         if (terrainRouter != router) {
             GpuTerrainAreaRegistry.clear();
             GpuAquiferStatusRegionCache.clear();
+            GpuTerrainSurfaceRegionCache.clear();
         }
         if (terrainScheduler != null) terrainScheduler.close();
         if (terrainProvider != null) terrainProvider.close();
@@ -654,6 +657,47 @@ public final class GpuTerrainRuntime {
             java.nio.ByteBuffer outputMetadata, int blocksPerChunk) {
         return submitTerrainGridInterpolated(gridMetadata, chunkCount, samplesPerChunk,
                 outputMetadata, blocksPerChunk, false);
+    }
+
+    static java.util.concurrent.CompletionStage<int[]> submitTerrainSurfaceRegion(
+            GpuTerrainSurfaceRegion region) {
+        VulkanSubmissionRing ring = terrainRing;
+        GpuDensityGraph graph = terrainGraph;
+        if (ring == null || graph == null || region == null
+                || !graph.supportsRouterRoot(GpuTerrainRoots.INITIAL_DENSITY)) {
+            return java.util.concurrent.CompletableFuture.failedStage(
+                    new IllegalStateException("GPU initial-density surface graph is unavailable"));
+        }
+        java.util.List<GpuTerrainSurfaceRegion.ChunkRange> ranges = region.ranges(
+                PersistentVulkanNormalNoiseEngine.CAPACITY,
+                PersistentVulkanNormalNoiseEngine.MAX_TERRAIN_SURFACE_COLUMNS);
+        int[] heights = new int[region.surfaceValueCount()];
+        java.util.concurrent.CompletableFuture<?>[] submissions = new java.util.concurrent.CompletableFuture<?>[ranges.size()];
+        int[] initialDensityRoot = {GpuTerrainRoots.INITIAL_DENSITY};
+        for (int i = 0; i < ranges.size(); i++) {
+            GpuTerrainSurfaceRegion.ChunkRange range = ranges.get(i);
+            submissions[i] = ring.submitGraphGridSurfaceHeights(graph,
+                    region.gridMetadata(range), range.chunkCount(), region.samplesPerChunk(),
+                    region.surfaceMetadata(range), initialDensityRoot)
+                    .thenAccept(result -> region.stitch(range, result.surfaceHeights(), heights));
+        }
+        return java.util.concurrent.CompletableFuture.allOf(submissions).thenApply(ignored -> heights);
+    }
+
+    private static void prefetchTerrainSurfaceRegion(int chunkX, int chunkZ, NoiseSettings settings) {
+        GpuDensityGraph graph = terrainGraph;
+        NoiseRouter router = terrainRouter;
+        if (graph == null || router == null || settings == null
+                || !graph.supportsRouterRoot(GpuTerrainRoots.INITIAL_DENSITY)) return;
+        int startX = Math.floorDiv(chunkX, 4) * 4;
+        int startZ = Math.floorDiv(chunkZ, 4) * 4;
+        try {
+            GpuTerrainSurfaceRegion region = new GpuTerrainSurfaceRegion(startX, startZ, 4, 4,
+                    settings.minY(), settings.height(), settings.getCellWidth(), settings.getCellHeight());
+            GpuTerrainSurfaceRegionCache.prefetch(router, region);
+        } catch (IllegalArgumentException | ArithmeticException failure) {
+            // Unusual custom dimensions continue through the existing surface path.
+        }
     }
 
     /** Batch scheduler owns both pooled metadata buffers until this stage completes. */
@@ -1460,6 +1504,7 @@ public final class GpuTerrainRuntime {
         samplers.clear();
         GpuTerrainAreaRegistry.clear();
         GpuAquiferStatusRegionCache.clear();
+        GpuTerrainSurfaceRegionCache.clear();
         if (terrainScheduler != null) terrainScheduler.close();
         if (chunkFillCoordinator != null) chunkFillCoordinator.close();
         if (fusedChunkScheduler != null) fusedChunkScheduler.close();
