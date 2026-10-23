@@ -37,11 +37,18 @@ void main() {
     uint chunkBase = 0u;
     uint localSample = 0u;
     bool foundGroup = false;
-    for (uint group = 0u; group < groupCount; group++) {
+    uint low = 0u;
+    uint high = groupCount;
+    while (low < high) {
+        uint group = low + ((high - low) >> 1u);
         uint descriptor = groupBase + group * BATCH_GROUP_WORDS;
         uint firstSample = words[descriptor];
         uint samplesInGroup = words[descriptor + 1u];
-        if (sampleIndex >= firstSample && sampleIndex - firstSample < samplesInGroup) {
+        if (sampleIndex < firstSample) {
+            high = group;
+        } else if (sampleIndex - firstSample >= samplesInGroup) {
+            low = group + 1u;
+        } else {
             chunkBase = words[descriptor + 2u];
             localSample = sampleIndex - firstSample;
             foundGroup = true;
