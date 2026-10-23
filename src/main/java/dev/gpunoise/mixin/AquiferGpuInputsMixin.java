@@ -60,6 +60,12 @@ import java.util.Objects;
 // before its aquifer mixin so both transformations can coexist.
 @Mixin(value = Aquifer.NoiseBasedAquifer.class, priority = 1200)
 abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, GpuAquiferDecisionAccess {
+    @org.spongepowered.asm.mixin.Unique
+    private static final int[] gpunoise$surfaceOffsetX = {0, -2, -1, 0, 1, -3, -2, -1, 1, -2, -1, 0, 1};
+
+    @org.spongepowered.asm.mixin.Unique
+    private static final int[] gpunoise$surfaceOffsetZ = {0, -1, -1, -1, -1, 0, 0, 0, 0, 1, 1, 1, 1};
+
     @Shadow @Final private NoiseChunk noiseChunk;
     @Shadow @Final protected DensityFunction barrierNoise;
     @Shadow @Final private DensityFunction fluidLevelFloodednessNoise;
@@ -852,10 +858,6 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                                                        boolean decisionChain) {
         long prefillStart = GpuTerrainProfiler.beginPhase();
         int javaFallbacks = 0;
-        int[][] offsets = {
-                {0, 0}, {-2, -1}, {-1, -1}, {0, -1}, {1, -1}, {-3, 0},
-                {-2, 0}, {-1, 0}, {1, 0}, {-2, 1}, {-1, 1}, {0, 1}, {1, 1}
-        };
         int expectedCenters = Math.min(GpuAquiferFluidStatus.MAX_PREFILL_CENTERS,
                 Math.max(16, queries.size() / 32));
         Set<Long> seenCenters = new HashSet<>(expectedCenters);
@@ -955,9 +957,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         fluidLevelSampler, cache, centerY);
                 BlockState defaultFluidType =
                         ((AquiferFluidStatusAccessor) (Object) defaultStatus).gpunoise$fluidType();
-                for (int sample = 0; sample < offsets.length; sample++) {
-                    int surfaceX = Math.floorDiv(centerX + (offsets[sample][0] << 4), 4) * 4;
-                    int surfaceZ = Math.floorDiv(centerZ + (offsets[sample][1] << 4), 4) * 4;
+                for (int sample = 0; sample < gpunoise$surfaceOffsetX.length; sample++) {
+                    int surfaceX = Math.floorDiv(centerX + (gpunoise$surfaceOffsetX[sample] << 4), 4) * 4;
+                    int surfaceZ = Math.floorDiv(centerZ + (gpunoise$surfaceOffsetZ[sample] << 4), 4) * 4;
                     surfaces[sample] = gpunoise$sharedSurfaceLevel(
                             graphIdentity, surfaceX, surfaceZ);
                     int surfaceY = (int) Math.floor(surfaces[sample]) + 8;
