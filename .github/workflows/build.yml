@@ -13,7 +13,7 @@ on:
       terrain_batch_window_ms:
         description: Maximum terrain batch collection window in milliseconds
         type: string
-        default: '50'
+        default: '8'
         required: true
       terrain_batch_target_chunks:
         description: Desired chunks in each compatible GPU dispatch
@@ -165,7 +165,7 @@ jobs:
         env:
           GPUNOISE_CHUNKY_RADIUS_BLOCKS: ${{ inputs.chunky_radius_blocks || '250' }}
           GPUNOISE_SERVER_START_TIMEOUT: '1800'
-          GPUNOISE_TERRAIN_BATCH_WINDOW_MS: ${{ inputs.terrain_batch_window_ms || '50' }}
+          GPUNOISE_TERRAIN_BATCH_WINDOW_MS: ${{ inputs.terrain_batch_window_ms || '8' }}
           GPUNOISE_TERRAIN_BATCH_TARGET_CHUNKS: ${{ inputs.terrain_batch_target_chunks || '96' }}
           GPUNOISE_TERRAIN_BATCH_REGION_RADIUS: ${{ inputs.terrain_batch_region_radius || '2' }}
           GPUNOISE_CI_FULL_BLOCK_OUTPUT: true

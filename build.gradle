@@ -103,7 +103,7 @@ runs {
                 System.getProperty('gpunoise.experimentalInterpolatedBlockOutput', 'false')
         systemProperty 'gpunoise.profileTerrain', System.getProperty('gpunoise.profileTerrain', 'false')
         systemProperty 'gpunoise.disableChunkWriter', System.getProperty('gpunoise.disableChunkWriter', 'false')
-        systemProperty 'gpunoise.terrainBatchWindowMs', System.getProperty('gpunoise.terrainBatchWindowMs', '20')
+        systemProperty 'gpunoise.terrainBatchWindowMs', System.getProperty('gpunoise.terrainBatchWindowMs', '8')
         systemProperty 'gpunoise.terrainBatchTargetChunks', System.getProperty('gpunoise.terrainBatchTargetChunks', '64')
         systemProperty 'gpunoise.terrainBatchRegionRadius', System.getProperty('gpunoise.terrainBatchRegionRadius', '2')
         systemProperty 'gpunoise.verifyAquiferGpu', System.getProperty('gpunoise.verifyAquiferGpu', 'false')
