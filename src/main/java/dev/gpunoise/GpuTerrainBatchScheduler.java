@@ -116,9 +116,8 @@ final class GpuTerrainBatchScheduler implements AutoCloseable {
             }
         }
         if (totalChunks == 0) return;
-        // Capture a stable dispatch snapshot for the asynchronous completion
-        // callback. `batch` itself is replaced after filtering incompatible
-        // requests, so it is not effectively final.
+        // Keep the callback's request set immutable while dispatch completes
+        // asynchronously; filtering above has already completed.
         List<Pending> dispatchBatch = List.copyOf(compatible);
 
         List<TerrainNoiseApi.Chunk> chunks = new ArrayList<>(totalChunks);

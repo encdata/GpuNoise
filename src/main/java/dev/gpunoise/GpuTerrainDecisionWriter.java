@@ -358,54 +358,59 @@ public final class GpuTerrainDecisionWriter {
                     }
                 }
 
-                // Match C2ME-OCL's region-major Y/Z/X traversal, retaining
-                // only this section layer while visiting its block rows.
+                // Keep one section layer acquired at a time, but visit only
+                // tiles that actually have output. Partial batches are common
+                // while C2ME's neighboring region work is still arriving; a
+                // full-region scan here would multiply the writer's block
+                // traversal by up to sixteen for a single submitted chunk.
                 for (int y = sectionStartY; y < sectionEndY; y++) {
                     int yOffset = y - minY;
-                    for (int z = 0; z < 64; z++) {
-                        int tileZ = z >>> 4;
-                        int localZ = z & 15;
-                        int worldZ = regionOrigin.getMinBlockZ() + z;
-                        for (int x = 0; x < 64; x++) {
-                            int tileX = x >>> 4;
+                    for (int tileZ = 0; tileZ < 4; tileZ++) {
+                        int chunkZ = regionOrigin.getMinBlockZ() + (tileZ << 4);
+                        for (int tileX = 0; tileX < 4; tileX++) {
                             int tile = (tileZ << 2) | tileX;
                             PreparedChunk output = byTile[tile];
                             if (output == null) continue;
-                            int localX = x & 15;
-                            int blockIndex = (yOffset << 8) | (localZ << 4) | localX;
-                            int paletteId = output.blockPaletteIds().stateId(blockIndex);
-                            if (paletteId == 0) continue;
-
-                            BlockState state = output.palette().state(paletteId);
                             LevelChunkSection section = sections[tile];
-                            if (sectionDirectWrites[tile]) {
-                                int[] paletteMap = sectionPaletteIds[tile];
-                                int sectionPaletteId = paletteMap[paletteId];
-                                if (sectionPaletteId < 0) {
-                                    sectionPaletteId = ((GpuLevelChunkSectionAccess) (Object) section)
-                                            .gpunoise$resolveGpuPaletteId(state);
-                                    if (sectionPaletteId == -2) {
-                                        // Palette growth can remap every old ID; drop this section's
-                                        // cache and resolve the just-added state against the new data.
-                                        java.util.Arrays.fill(paletteMap, -1);
-                                        sectionPaletteId = ((GpuLevelChunkSectionAccess) (Object) section)
-                                                .gpunoise$resolveGpuPaletteId(state);
+                            int chunkX = regionOrigin.getMinBlockX() + (tileX << 4);
+                            for (int localZ = 0; localZ < 16; localZ++) {
+                                int worldZ = chunkZ + localZ;
+                                for (int localX = 0; localX < 16; localX++) {
+                                    int blockIndex = (yOffset << 8) | (localZ << 4) | localX;
+                                    int paletteId = output.blockPaletteIds().stateId(blockIndex);
+                                    if (paletteId == 0) continue;
+
+                                    BlockState state = output.palette().state(paletteId);
+                                    if (sectionDirectWrites[tile]) {
+                                        int[] paletteMap = sectionPaletteIds[tile];
+                                        int sectionPaletteId = paletteMap[paletteId];
+                                        if (sectionPaletteId < 0) {
+                                            sectionPaletteId = ((GpuLevelChunkSectionAccess) (Object) section)
+                                                    .gpunoise$resolveGpuPaletteId(state);
+                                            if (sectionPaletteId == -2) {
+                                                // Palette growth can remap every old ID; drop this section's
+                                                // cache and resolve the just-added state against the new data.
+                                                java.util.Arrays.fill(paletteMap, -1);
+                                                sectionPaletteId = ((GpuLevelChunkSectionAccess) (Object) section)
+                                                        .gpunoise$resolveGpuPaletteId(state);
+                                            }
+                                            if (sectionPaletteId >= 0) paletteMap[paletteId] = sectionPaletteId;
+                                            else sectionDirectWrites[tile] = false;
+                                        }
+                                        if (sectionDirectWrites[tile]) {
+                                            ((GpuLevelChunkSectionAccess) (Object) section)
+                                                    .gpunoise$writeGpuBlockOwned(
+                                                            ((y & 15) << 8) | (localZ << 4) | localX,
+                                                            state, sectionPaletteId);
+                                        } else {
+                                            section.setBlockState(localX, y & 15, localZ, state, false);
+                                        }
+                                    } else section.setBlockState(localX, y & 15, localZ, state, false);
+                                    if (output.blockPaletteIds().needsFluidPostProcessing(blockIndex)) {
+                                        mutable.set(chunkX + localX, y, worldZ);
+                                        output.chunk().markPosForPostprocessing(mutable);
                                     }
-                                    if (sectionPaletteId >= 0) paletteMap[paletteId] = sectionPaletteId;
-                                    else sectionDirectWrites[tile] = false;
                                 }
-                                if (sectionDirectWrites[tile]) {
-                                    ((GpuLevelChunkSectionAccess) (Object) section)
-                                            .gpunoise$writeGpuBlockOwned(
-                                                    ((y & 15) << 8) | (localZ << 4) | localX,
-                                                    state, sectionPaletteId);
-                                } else {
-                                    section.setBlockState(localX, y & 15, localZ, state, false);
-                                }
-                            } else section.setBlockState(localX, y & 15, localZ, state, false);
-                            if (output.blockPaletteIds().needsFluidPostProcessing(blockIndex)) {
-                                mutable.set(regionOrigin.getMinBlockX() + x, y, worldZ);
-                                output.chunk().markPosForPostprocessing(mutable);
                             }
                         }
                     }
