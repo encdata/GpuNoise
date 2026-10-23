@@ -61,6 +61,35 @@ public final class GpuTerrainRuntime {
     private static volatile int verifiedTerrainBlockRootMask;
     /** Marker-dependent roots included only by the explicit runtime-parity probe. */
     private static volatile int interpolatedTerrainBlockRootMask;
+
+    /**
+     * Direct packed section writes require both the container accessor and
+     * its current data-record accessors. If a loader or another mixin makes
+     * either bridge unavailable, the region writer uses Minecraft's normal
+     * CPU block setter while keeping GPU density and material decisions.
+     */
+    public static boolean directPaletteWritesAvailable() {
+        return DirectPaletteWriteCapability.AVAILABLE;
+    }
+
+    private static boolean detectDirectPaletteWriteCapability() {
+        try {
+            ClassLoader loader = GpuTerrainRuntime.class.getClassLoader();
+            Class<?> container = Class.forName(
+                    "net.minecraft.world.level.chunk.PalettedContainer", false, loader);
+            Class<?> data = Class.forName(
+                    "net.minecraft.world.level.chunk.PalettedContainer$Data", false, loader);
+            return GpuPalettedContainerAccess.class.isAssignableFrom(container)
+                    && GpuPalettedContainerDataAccess.class.isAssignableFrom(data);
+        } catch (ClassNotFoundException | LinkageError failure) {
+            GpuNoise.LOGGER.info("Direct palette writes unavailable; using Minecraft's CPU block setter.");
+            return false;
+        }
+    }
+
+    private static final class DirectPaletteWriteCapability {
+        private static final boolean AVAILABLE = detectDirectPaletteWriteCapability();
+    }
     private static volatile boolean terrainBlockOutputVerificationComplete;
     /** Immutable root ordering shared by every chunk after startup verification. */
     private static volatile TerrainBlockOutputLayout terrainBlockOutputLayout;

@@ -201,13 +201,15 @@ abstract class NoiseChunkGeneratorWriteMixin {
         state.debugVoidTerrain = SharedConstants.debugVoidTerrain(chunk.getPos());
         state.debugVoidTerrainCached = true;
         long fillStart = GpuTerrainProfiler.beginFill();
-        // Byepregen changes palette resize behavior. Direct palette writes are
-        // safe only for fresh air sections while this writer owns their locks.
+        // Direct palette writes are safe only when both mixin bridges applied,
+        // for fresh air sections, while this writer owns their locks.
         boolean byepregenLoaded = ModList.get().isLoaded("byepregen");
-        state.directWritesSafe = !byepregenLoaded;
-        if (byepregenLoaded && gpunoise$loggedPaletteCompatibility.compareAndSet(false, true)) {
+        boolean directPaletteWritesAvailable = GpuTerrainRuntime.directPaletteWritesAvailable();
+        state.directWritesSafe = !byepregenLoaded && directPaletteWritesAvailable;
+        if ((byepregenLoaded || !directPaletteWritesAvailable)
+                && gpunoise$loggedPaletteCompatibility.compareAndSet(false, true)) {
             dev.gpunoise.GpuNoise.LOGGER.info(
-                    "Byepregen palette compatibility detected; using normal block writes while GPU density generation remains active.");
+                    "Direct palette write compatibility unavailable; using normal CPU block writes while GPU density generation remains active.");
         }
         for (int sectionIndex = top; sectionIndex >= bottom; sectionIndex--) {
             if (!sections[sectionIndex].hasOnlyAir()) {
