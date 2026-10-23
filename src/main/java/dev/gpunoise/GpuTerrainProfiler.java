@@ -42,6 +42,9 @@ public final class GpuTerrainProfiler {
     private static final LongAdder aquiferStatusPrefillNanos = new LongAdder();
     private static final LongAdder aquiferStatusPrefillSamples = new LongAdder();
     private static final LongAdder aquiferStatusPrefillCenters = new LongAdder();
+    private static final LongAdder aquiferStatusPrefillShaderRows = new LongAdder();
+    private static final LongAdder aquiferStatusPrefillJavaRows = new LongAdder();
+    private static final LongAdder aquiferStatusPrefillCachedRows = new LongAdder();
     private static final LongAdder aquiferStatusPrefillJavaFallbacks = new LongAdder();
     private static final LongAdder aquiferNearestDispatches = new LongAdder();
     private static final LongAdder aquiferNearestRows = new LongAdder();
@@ -261,11 +264,15 @@ public final class GpuTerrainProfiler {
         else vanillaFluidPickerCacheMisses.increment();
     }
 
-    /** Records the C2ME-style batched status kernel and its conservative Java fallbacks. */
-    public static void recordAquiferStatusPrefill(long start, int centers, int javaFallbacks) {
+    /** Records aquifer status work split by shader evaluation, Java evaluation, and cache reuse. */
+    public static void recordAquiferStatusPrefill(long start, int centers, int shaderRows,
+                                                   int javaRows, int cachedRows, int javaFallbacks) {
         if (!ENABLED) return;
         aquiferStatusPrefillCalls.increment();
         aquiferStatusPrefillCenters.add(Math.max(0, centers));
+        aquiferStatusPrefillShaderRows.add(Math.max(0, shaderRows));
+        aquiferStatusPrefillJavaRows.add(Math.max(0, javaRows));
+        aquiferStatusPrefillCachedRows.add(Math.max(0, cachedRows));
         aquiferStatusPrefillJavaFallbacks.add(Math.max(0, javaFallbacks));
         if (start != 0L) {
             aquiferStatusPrefillNanos.add(Math.max(0L, System.nanoTime() - start));
@@ -407,8 +414,10 @@ public final class GpuTerrainProfiler {
                 terrainMissingDecisionRows.sum(), terrainMissingDensityCache.sum(),
                 terrainParityBypasses.sum(), terrainUnavailableDensity.sum(),
                 terrainDensityMismatches.sum());
-        GpuNoise.LOGGER.info("GPU terrain aquifer status prefill: calls={}, centers={}, javaFallbacks={}, sampled={} avgNs={}",
+        GpuNoise.LOGGER.info("GPU terrain aquifer status prefill: calls={}, centers={}, shaderRows={}, javaRows={}, cachedRows={}, javaFallbacks={}, sampled={} avgNs={}",
                 aquiferStatusPrefillCalls.sum(), aquiferStatusPrefillCenters.sum(),
+                aquiferStatusPrefillShaderRows.sum(), aquiferStatusPrefillJavaRows.sum(),
+                aquiferStatusPrefillCachedRows.sum(),
                 aquiferStatusPrefillJavaFallbacks.sum(), aquiferStatusPrefillSamples.sum(),
                 averageNanos(aquiferStatusPrefillNanos, aquiferStatusPrefillSamples));
         GpuNoise.LOGGER.info("GPU terrain aquifer batches: nearestDispatches={}, nearestRows={}, avgNearestRows={}, nearestCoalescedDispatches={}, nearestCoalescedRequests={}, substanceDispatches={}, substanceRows={}, avgSubstanceRows={}, substanceCoalescedDispatches={}, substanceCoalescedRequests={}",

@@ -862,6 +862,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                                                        boolean decisionChain) {
         long prefillStart = GpuTerrainProfiler.beginPhase();
         int javaFallbacks = 0;
+        int shaderRows = 0;
+        int javaRows = 0;
+        int cachedRows = 0;
         // Vanilla NoiseBasedAquifer uses the same status formula as the Vulkan
         // prefill shader. Feed its graph roots through the shader too; the old
         // path eagerly called getAquiferStatus for every center, leaving the
@@ -947,10 +950,14 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 int[] center = centers.get(index);
                 int centerX = center[0], centerY = center[1], centerZ = center[2];
                 Aquifer.FluidStatus precomputed = precomputedStatuses.get(index);
+                if (precomputed != null) cachedRows++;
                 if (precomputed == null && !computeStatusesOnGpu) {
                     long key = BlockPos.asLong(centerX, centerY, centerZ);
                     precomputed = gpunoise$getAquiferStatus(key);
                     precomputedStatuses.set(index, precomputed);
+                    javaRows++;
+                } else if (precomputed == null) {
+                    shaderRows++;
                 }
                 if (precomputed != null) {
                     BlockState fluidType =
@@ -1074,7 +1081,8 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
             for (GpuAquiferStatusRegionCache.Reservation owner : owners) owner.fail(failure);
             throw failure;
         }
-        GpuTerrainProfiler.recordAquiferStatusPrefill(prefillStart, centers.size(), javaFallbacks);
+        GpuTerrainProfiler.recordAquiferStatusPrefill(prefillStart, centers.size(),
+                shaderRows, javaRows, cachedRows, javaFallbacks);
         return combined != null ? combined.withoutFluidStatusRows() : new GpuAquiferPrefillResult(
                 nearestRows == null ? new int[0] : nearestRows, new int[0]);
     }
