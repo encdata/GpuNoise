@@ -664,7 +664,7 @@ public final class GpuTerrainRuntime {
         VulkanSubmissionRing ring = terrainRing;
         GpuDensityGraph graph = terrainGraph;
         if (ring == null || graph == null || region == null
-                || !graph.supportsRouterRoot(GpuTerrainRoots.INITIAL_DENSITY)) {
+                || !supportsTerrainRoot(GpuTerrainRoots.INITIAL_DENSITY)) {
             return java.util.concurrent.CompletableFuture.failedStage(
                     new IllegalStateException("GPU initial-density surface graph is unavailable"));
         }
@@ -688,7 +688,7 @@ public final class GpuTerrainRuntime {
         GpuDensityGraph graph = terrainGraph;
         NoiseRouter router = terrainRouter;
         if (graph == null || router == null || settings == null
-                || !graph.supportsRouterRoot(GpuTerrainRoots.INITIAL_DENSITY)) return;
+                || !supportsTerrainRoot(GpuTerrainRoots.INITIAL_DENSITY)) return;
         int startX = Math.floorDiv(chunkX, 4) * 4;
         int startZ = Math.floorDiv(chunkZ, 4) * 4;
         try {
