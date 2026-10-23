@@ -78,6 +78,10 @@ public final class GpuTerrainProfiler {
     private static final LongAdder blockWriteSamples = new LongAdder();
     private static final LongAdder terrainBlockPreparationCalls = new LongAdder();
     private static final LongAdder terrainBlockPreparationSamples = new LongAdder();
+    private static final LongAdder terrainPreparationAsyncSubmissions = new LongAdder();
+    private static final LongAdder terrainPreparationInlineSubmissions = new LongAdder();
+    private static final AtomicInteger peakTerrainPreparationWorkers = new AtomicInteger();
+    private static final AtomicInteger peakTerrainPreparationQueue = new AtomicInteger();
     private static final LongAdder terrainDecisionSamples = new LongAdder();
     private static final LongAdder terrainGpuDecisionHits = new LongAdder();
     private static final LongAdder terrainMissingDecisionRows = new LongAdder();
@@ -322,6 +326,15 @@ public final class GpuTerrainProfiler {
                 terrainBlockPreparationSamples, start);
     }
 
+    /** Tracks bounded CPU preparation concurrency without reporting throughput. */
+    public static void recordTerrainPreparationSchedule(boolean inline, int activeWorkers, int queuedTasks) {
+        if (!ENABLED) return;
+        if (inline) terrainPreparationInlineSubmissions.increment();
+        else terrainPreparationAsyncSubmissions.increment();
+        peakTerrainPreparationWorkers.accumulateAndGet(Math.max(0, activeWorkers), Math::max);
+        peakTerrainPreparationQueue.accumulateAndGet(Math.max(0, queuedTasks), Math::max);
+    }
+
     /** Counts per-block aquifer decisions that avoid the Java NoiseChunk interpolation path. */
     public static void recordTerrainDecisionUse(long samples, long gpuHits, long missingRows,
                                                 long missingCache, long parityBypasses,
@@ -383,6 +396,9 @@ public final class GpuTerrainProfiler {
                 terrainCachePreparationCalls.sum(), terrainCachePreparationSamples.sum(),
                 averageNanos(terrainCachePreparationNanos, terrainCachePreparationSamples),
                 maxConcurrentTerrainCachePreparations.get());
+        GpuNoise.LOGGER.info("GPU terrain block preparation pool: asyncSubmissions={}, inlineSubmissions={}, peakWorkers={}, peakQueued={}",
+                terrainPreparationAsyncSubmissions.sum(), terrainPreparationInlineSubmissions.sum(),
+                peakTerrainPreparationWorkers.get(), peakTerrainPreparationQueue.get());
         long decisionSamples = terrainDecisionSamples.sum();
         GpuNoise.LOGGER.info("GPU terrain block-decision reuse: gpuApplied={}/{} ({}%), missingRows={}, missingDensityCache={}, parityBypasses={}, unavailableDensity={}, densityMismatches={}",
                 terrainGpuDecisionHits.sum(), decisionSamples,

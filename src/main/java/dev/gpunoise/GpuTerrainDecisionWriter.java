@@ -118,9 +118,17 @@ public final class GpuTerrainDecisionWriter {
             try {
                 preparation[fillIndex] = CompletableFuture.supplyAsync(
                         () -> prepareFill(fill), PREPARATION_EXECUTOR);
+                if (GpuTerrainProfiler.enabled()) {
+                    GpuTerrainProfiler.recordTerrainPreparationSchedule(false,
+                            PREPARATION_EXECUTOR.getActiveCount(), PREPARATION_EXECUTOR.getQueue().size());
+                }
             } catch (RejectedExecutionException saturated) {
                 // Keep the bounded queue from turning pressure into a failed
                 // worldgen stage. The writer can prepare this one fill inline.
+                if (GpuTerrainProfiler.enabled()) {
+                    GpuTerrainProfiler.recordTerrainPreparationSchedule(true,
+                            PREPARATION_EXECUTOR.getActiveCount(), PREPARATION_EXECUTOR.getQueue().size());
+                }
                 preparedInline[fillIndex] = prepareFill(fill);
             }
         }
