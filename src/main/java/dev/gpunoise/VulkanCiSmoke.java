@@ -106,7 +106,7 @@ public final class VulkanCiSmoke {
                     surfaceGrid, 1, 50, surfaceMetadata,
                     new int[]{GpuTerrainRoots.INITIAL_DENSITY}).get(60, TimeUnit.SECONDS);
             if (surfaceOnly.surfaceHeights() == null || surfaceOnly.surfaceHeights().length != 16
-                    || surfaceOnly.blocks().sampleCount() != 0 || surfaceOnly.corners().sampleCount() != 0) {
+                    || !surfaceOnly.blocks().isEmpty() || surfaceOnly.corners().sampleCount() != 0) {
                 throw new IllegalStateException("Surface-only GPU dispatch returned non-compact outputs");
             }
             for (int height : surfaceOnly.surfaceHeights()) {
