@@ -31,29 +31,31 @@ and passes those values into `ChunkNoiseSampler`'s cache.
 | --- | --- |
 | Generated, world-specialized density program | Density graph compiler and persistent Vulkan engine compile graph roots. Custom Java bytecode has bounded automatic translation and diagnostics. |
 | Aligned region generation | `GpuTerrainRootsBatchScheduler` batches up to a 4x4 area. `GpuTerrainDecisionWriter.writeRegion` groups CPU writes by the same region. |
-| Full-volume noise evaluation | Vulkan evaluates supported roots on block grids and publishes them through `GpuChunkDensityCache`. |
+| Full-volume noise evaluation and cell interpolation | One Vulkan terrain-grid command buffer evaluates the graph lattice, materializes interpolated block roots, and returns selected corner and block values in one readback. `GpuTerrainRootsBatchScheduler` batches the chunks. |
 | Aquifer prefill and block decisions | Aquifer inputs are prepared per chunk on Java, then nearest/status and substance decisions are submitted to Vulkan. The resulting decision table stores registry state IDs and fluid-update flags. |
-| One ordered queue/event chain and compact final readback | Density output and aquifer decisions are currently separate submissions with CPU preparation and readback between them. This is the largest remaining CPU/GPU boundary. |
+| One ordered queue/event chain and compact final readback | Grid evaluation and cell interpolation share one command buffer/readback. Aquifer inputs and decisions are a later Vulkan transaction, with CPU query/status preparation between the graph result and that decision chain. This is the largest remaining CPU/GPU boundary. |
 | Compact block-state map | `GpuTerrainDecisionWriter.BlockPaletteBuffer` stores compact IDs and widens for large mod palettes. |
 | Region section commit | `GpuTerrainDecisionWriter.writeRegionBlocks` performs section-layer ownership, writes in region Y/Z/X order, recalculates counts, and primes heightmaps. |
-| Surface-height prefill | GPU Noise has aquifer surface/status caches; it does not yet provide OCL's expanded `estimateSurfaceHeight` area prefill to vanilla's sampler cache. |
+| Expanded surface-height prefill | GPU Noise now scans each submitted chunk's interpolated initial-density columns in the same Vulkan command buffer and reads back 256 heights. OCL also precomputes an expanded area for neighboring chunks and places it in `ChunkNoiseSampler`'s surface-height cache; that expanded neighborhood remains to port. |
 | Async program compile and device permit selection | Vulkan engine initializes asynchronously and `VulkanSubmissionRing` coalesces queued work. Physical device selection and concurrent queue utilization still need comparison against OCL's per-device permit model. |
 
 ## Next implementation boundary
 
 The next large stage is a region-level Vulkan terrain transaction. It should
-consume the already compiled density graph and region inputs, perform
-interpolation and aquifer/material decisions on device, and return a compact
-state-ID plus postprocessing result for the existing section commit. It must
-retain per-root/per-row admission so unsupported custom functions, blending,
-or parity failures use the existing Java path. Input packing, per-stage
-diagnostics, shader compilation, dispatch, and readback should be profiled as
-one transaction so the cost of CPU/GPU round trips is visible.
+consume the already interpolated block roots and region inputs, perform
+aquifer/material decisions on device, and return compact state IDs plus
+postprocessing data for the existing section commit. Expand the new Vulkan
+surface scan to OCL's neighboring area so vanilla surface lookups reuse it.
+The transaction must retain
+per-root/per-row admission so unsupported custom functions, blending, or
+parity failures use the existing Java path. Input packing,
+per-stage diagnostics, shader compilation, dispatch, and readback should be
+profiled as one transaction so the cost of CPU/GPU round trips is visible.
 
 The current code is not yet equivalent to OCL's single full-region kernel:
 the decision table is assembled separately from root evaluation, and any
-unadmitted decision still enters `NoiseChunk` interpolation and aquifer logic
-in `GpuTerrainDecisionWriter.prepareChunk`. The unused
+unadmitted decision still enters `NoiseChunk`'s CPU interpolation and aquifer
+logic in `GpuTerrainDecisionWriter.prepareChunk`. The unused
 `assets/gpunoise/shaders/terrain_classification.comp` is only a simple
 threshold classifier; it does not implement Minecraft's density interpolation
 or aquifer semantics and must not be enabled as a substitute.

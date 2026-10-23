@@ -1,0 +1,45 @@
+#version 450
+layout(local_size_x = 64) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer BlockRoots { float values[]; };
+// One result per chunk column, in chunk-major Z/X order. INT_MIN requests the
+// existing Java scan when a value is non-finite or too close to its threshold.
+layout(std430, set = 0, binding = 1) writeonly buffer SurfaceHeights { int heights[]; };
+layout(std430, set = 0, binding = 2) readonly buffer ChunkMetadata { uint metadata[]; };
+layout(push_constant) uniform Parameters {
+    uint chunkCount;
+    uint blocksPerChunk;
+    uint rootStride;
+    uint initialDensityRoot;
+    float threshold;
+    float parityEpsilon;
+    uint reserved0;
+    uint reserved1;
+};
+
+void main() {
+    uint columnIndex = gl_GlobalInvocationID.x;
+    if (columnIndex >= chunkCount * 256u) return;
+
+    uint chunk = columnIndex / 256u;
+    uint column = columnIndex % 256u;
+    uint metadataBase = chunk * 12u;
+    int minY = int(metadata[metadataBase + 9u]);
+    uint blocksY = blocksPerChunk / 256u;
+    uint blockBase = chunk * blocksPerChunk;
+    int surface = minY;
+
+    for (uint y = blocksY; y > 0u; --y) {
+        uint block = blockBase + (y - 1u) * 256u + column;
+        float density = values[block * rootStride + initialDensityRoot];
+        if (isnan(density) || isinf(density) || abs(density - threshold) <= parityEpsilon) {
+            heights[columnIndex] = int(0x80000000u);
+            return;
+        }
+        if (density > threshold) {
+            surface = minY + int(y);
+            break;
+        }
+    }
+    heights[columnIndex] = surface;
+}

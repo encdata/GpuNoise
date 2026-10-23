@@ -1034,7 +1034,10 @@ public final class GpuTerrainRuntime {
                     .putInt(grid.cellWidth()).putInt(grid.cellHeight()).flip();
             int[] blockRoots = terrainBlockOutputRootIndexes();
             int[] softwareBlockRoots = graph.supportsRouterRoot(GpuTerrainRoots.FINAL_DENSITY)
-                    ? new int[]{GpuTerrainRoots.FINAL_DENSITY} : new int[0];
+                    ? graph.supportsRouterRoot(GpuTerrainRoots.INITIAL_DENSITY)
+                            ? new int[]{GpuTerrainRoots.FINAL_DENSITY, GpuTerrainRoots.INITIAL_DENSITY}
+                            : new int[]{GpuTerrainRoots.FINAL_DENSITY}
+                    : new int[0];
             int blocksPerChunk = Math.multiplyExact(256, settings.height());
             java.nio.ByteBuffer outputMetadata = GpuInterpolationBatch.metadata(1, grid.gridX() - 1,
                     grid.gridY() - 1, grid.gridZ() - 1, grid.cellWidth(), grid.cellHeight(),
@@ -1119,6 +1122,16 @@ public final class GpuTerrainRuntime {
                 GpuTerrainBatchResult deviceResult = deviceTerrainResults.get(deviceIndex);
                 if (deviceResult.blocks().isEmpty()) continue;
                 blockVerifiedDeviceCount++;
+                GpuTerrainBlockResult.RootView initialDensity = deviceResult.blocks()
+                        .rootView(GpuTerrainRoots.INITIAL_DENSITY);
+                if (initialDensity != null) {
+                    int[] surfaceHeights = deviceResult.surfaceHeights();
+                    if (surfaceHeights == null) {
+                        throw new IllegalStateException(
+                                "GPU omitted surface heights for an initial-density block output");
+                    }
+                    verifyTerrainSurfaceHeights(initialDensity, surfaceHeights, settings);
+                }
                 verifiedBlockRoots &= verifyTerrainBlockOutputs(graph, cpu, deviceResult.blocks(), settings);
                 verifiedInterpolatedRoots &= findInterpolatedBlockOutputRoots(graph, deviceResult.blocks());
             }
@@ -1145,6 +1158,36 @@ public final class GpuTerrainRuntime {
             terrainBlockOutputLayout = null;
             terrainBlockOutputVerificationComplete = true;
             GpuNoise.LOGGER.warn("GPU terrain grid parity dispatch failed; terrain remains CPU-owned.", failure);
+        }
+    }
+
+    private static void verifyTerrainSurfaceHeights(GpuTerrainBlockResult.RootView initialDensity,
+                                                     int[] actual, NoiseSettings settings) {
+        if (actual.length != 256) {
+            throw new IllegalStateException("GPU terrain surface-height output has " + actual.length
+                    + " columns; expected 256");
+        }
+        for (int z = 0; z < 16; z++) {
+            for (int x = 0; x < 16; x++) {
+                int expected = settings.minY();
+                for (int y = settings.height() - 1; y >= 0; y--) {
+                    double density = initialDensity.valueAtUnchecked(x, y, z);
+                    if (!Double.isFinite(density)
+                            || Math.abs(density - 0.390625) <= GRAPH_PARITY_EPSILON) {
+                        expected = Integer.MIN_VALUE;
+                        break;
+                    }
+                    if (density > 0.390625) {
+                        expected = settings.minY() + y + 1;
+                        break;
+                    }
+                }
+                int found = actual[(z << 4) | x];
+                if (found != expected) {
+                    throw new IllegalStateException("GPU terrain surface-height mismatch at column "
+                            + x + "," + z + ": expected " + expected + ", got " + found);
+                }
+            }
         }
     }
 

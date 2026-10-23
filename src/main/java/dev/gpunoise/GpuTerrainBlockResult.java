@@ -58,6 +58,10 @@ final class GpuTerrainBlockResult {
         return roots;
     }
 
+    int blocksPerChunk() {
+        return Math.multiplyExact(Math.multiplyExact(blocksX, blocksY), blocksZ);
+    }
+
     int rootIndexAt(int outputIndex) {
         return rootIndexes[outputIndex];
     }

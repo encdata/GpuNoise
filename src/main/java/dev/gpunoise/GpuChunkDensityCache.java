@@ -38,6 +38,7 @@ public final class GpuChunkDensityCache {
     private GpuTerrainBlockResult.RootView[] readyBlockRoots;
     private GpuTerrainBlockResult.RootView fullFinalDensityBlockRoot;
     private GpuTerrainBlockResult.RootView fullInitialDensityBlockRoot;
+    private int[] readySurfaceHeights;
     private volatile GpuOreVeinDecisionTable oreVeinDecisions;
     private CompletableFuture<GpuOreVeinDecisionTable> oreVeinDecisionBuild;
     private volatile PositionalRandomFactory oreVeinRandomFactory;
@@ -156,10 +157,10 @@ public final class GpuChunkDensityCache {
     }
 
     /**
-     * Resolves NoiseChunk's preliminary surface scan from this completed GPU
-     * full-block GPU output. Returns Integer.MIN_VALUE when the exact column
-     * is unavailable, the dispatch is incomplete, or a threshold-ambiguous
-     * sample needs the Java scanner.
+     * Resolves NoiseChunk's preliminary surface scan from the Vulkan
+     * column-prefill output. Older or unsupported layouts scan the completed
+     * block roots on demand. Returns Integer.MIN_VALUE when the exact column
+     * is unavailable or a threshold-ambiguous sample needs the Java scanner.
      */
     public int preliminarySurfaceLevelFromBlocks(int x, int z) {
         if (!supportsRoot(GpuTerrainRoots.INITIAL_DENSITY) || !containsSurfaceColumn(x, z)) {
@@ -172,6 +173,8 @@ public final class GpuChunkDensityCache {
         }
         int rx = x - minX, rz = z - minZ;
         if (rx >= 16 || rz >= 16) return Integer.MIN_VALUE;
+        int[] precomputed = readySurfaceHeights;
+        if (precomputed != null) return precomputed[(rz << 4) | rx];
         for (int y = minY + maxRelativeY - 1; y >= minY; y--) {
             int ry = y - minY;
             double density = initialDensity.valueAtUnchecked(rx, ry, rz);
@@ -223,6 +226,7 @@ public final class GpuChunkDensityCache {
             readyBlockRoots = createBlockRootViews(readyBlocks);
             fullFinalDensityBlockRoot = fullBlockRoot(GpuTerrainRoots.FINAL_DENSITY);
             fullInitialDensityBlockRoot = fullBlockRoot(GpuTerrainRoots.INITIAL_DENSITY);
+            readySurfaceHeights = values.surfaceHeights();
             if (GpuTerrainRuntime.terrainBlockOutputEnabled()) validateBlockOutput();
         });
     }

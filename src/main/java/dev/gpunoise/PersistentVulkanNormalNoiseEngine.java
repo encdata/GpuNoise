@@ -40,6 +40,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     // interpolationOutput stores the interleaved per-block terrain roots.
     static final int INTERPOLATION_OUTPUT_FLOATS = INTERPOLATION_OUTPUT_MIB * 1024 * 1024 / Float.BYTES;
     private static final int MAX_INTERPOLATORS = 16;
+    private static final int MAX_TERRAIN_SURFACE_COLUMNS = 16 * 256;
     static final int TERRAIN_CORNER_MARKER_FLOATS = CAPACITY * MAX_INTERPOLATORS;
     private static final int MAX_GRAPH_OUTPUTS = 32;
     /** Keep common parity/production root masks warm without retaining unbounded pipelines. */
@@ -53,7 +54,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private final NativeBuffer coordinates, results, permutations, octaves, samplerMetadata;
     private final NativeBuffer graphCoordinates, graphNodes, graphSplinePoints, graphBlendedMetadata,
             graphRoots, graphMthSinTable, terrainCornerMarkers, interpolatorMap;
-    private final NativeBuffer interpolationMetadata, interpolationOutput, aquiferPressureInputs,
+    private final NativeBuffer interpolationMetadata, interpolationOutput, terrainSurfaceOutput, aquiferPressureInputs,
             aquiferNearestInputs, aquiferNearestOutput, biomeTreeBuffer;
     private final long shader, descriptorLayout, pipelineLayout, pipeline, descriptorPool, descriptorSet, commandPool;
     private long graphShader, gridShader, graphPipeline, gridPipeline;
@@ -72,6 +73,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private GpuBiomeSearchTree uploadedBiomeTree;
     private final long interpolationShader, interpolationDescriptorLayout, interpolationPipelineLayout,
             interpolationPipeline, interpolationDescriptorPool, interpolationDescriptorSet;
+    private final long terrainSurfaceShader, terrainSurfaceDescriptorLayout, terrainSurfacePipelineLayout,
+            terrainSurfacePipeline, terrainSurfaceDescriptorPool, terrainSurfaceDescriptorSet;
     private final long aquiferPressureShader, aquiferPressureDescriptorLayout, aquiferPressurePipelineLayout,
             aquiferPressurePipeline, aquiferPressureDescriptorPool, aquiferPressureDescriptorSet;
     private final long aquiferNearestShader, aquiferNearestDescriptorLayout, aquiferNearestPipelineLayout,
@@ -129,6 +132,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private int inFlightTerrainBlockCount;
     private int inFlightTerrainOutputRoots;
     private int inFlightTerrainBlocksPerChunk;
+    private boolean inFlightTerrainHasSurfaceHeights;
     private int inFlightTerrainCornerRoots;
     private int[] inFlightTerrainCornerRootIndexes;
     private int[] inFlightTerrainRootIndexes;
@@ -187,6 +191,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
             interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack);
             interpolationOutput = buffer((long) INTERPOLATION_OUTPUT_FLOATS * Float.BYTES, stack);
+            terrainSurfaceOutput = hostVisibleBuffer((long) MAX_TERRAIN_SURFACE_COLUMNS * Integer.BYTES, stack);
             aquiferPressureInputs = hostVisibleBuffer((long) CAPACITY * GpuAquiferPressure.RECORD_BYTES, stack);
             aquiferNearestInputs = hostVisibleBuffer(AQUIFER_INPUT_BYTES, stack);
             aquiferNearestOutput = buffer(AQUIFER_OUTPUT_BYTES, stack);
@@ -208,6 +213,14 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             interpolationPipelineLayout = interpolationPipelineLayout(stack); interpolationPipeline = interpolationPipeline(stack);
             interpolationDescriptorPool = interpolationDescriptorPool(stack); interpolationDescriptorSet = interpolationDescriptorSet(stack);
             interpolationDescriptors(stack);
+            terrainSurfaceShader = loadShader(stack,
+                    "/assets/gpunoise/shaders/terrain_surface_height.comp.spv", "terrain surface-height shader");
+            terrainSurfaceDescriptorLayout = terrainSurfaceDescriptorLayout(stack);
+            terrainSurfacePipelineLayout = terrainSurfacePipelineLayout(stack);
+            terrainSurfacePipeline = terrainSurfacePipeline(stack);
+            terrainSurfaceDescriptorPool = terrainSurfaceDescriptorPool(stack);
+            terrainSurfaceDescriptorSet = terrainSurfaceDescriptorSet(stack);
+            terrainSurfaceDescriptors(stack);
             aquiferPressureShader = loadShader(stack, "/assets/gpunoise/shaders/aquifer_pressure.comp.spv", "aquifer pressure shader");
             aquiferPressureDescriptorLayout = aquiferPressureDescriptorLayout(stack);
             aquiferPressurePipelineLayout = aquiferPressurePipelineLayout(stack);
@@ -638,6 +651,16 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 blockValues.limit(inFlightTerrainBlockCount * inFlightTerrainOutputRoots);
                 float[] blocks = new float[inFlightTerrainBlockCount * inFlightTerrainOutputRoots];
                 blockValues.get(blocks);
+                int[] surfaceHeights = null;
+                if (inFlightTerrainHasSurfaceHeights) {
+                    int chunkCount = inFlightTerrainBlockCount / inFlightTerrainBlocksPerChunk;
+                    int surfaceCount = Math.multiplyExact(chunkCount, 256);
+                    IntBuffer surfaceValues = persistentMappings.get(terrainSurfaceOutput)
+                            .duplicate().order(ByteOrder.nativeOrder()).asIntBuffer();
+                    surfaceValues.clear().limit(surfaceCount);
+                    surfaceHeights = new int[surfaceCount];
+                    surfaceValues.get(surfaceHeights);
+                }
                 if (GPU_TIMING_ENABLED) recordTerrainBatchDuration(inFlightTerrainPreparationNanos,
                         fenceDuration, stageGpuNanos, System.nanoTime() - readbackStarted);
                 GpuTerrainBatchResult result = new GpuTerrainBatchResult(
@@ -645,9 +668,11 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                                 inFlightTerrainCornerRoots, inFlightTerrainCornerRootIndexes.length,
                                 0, inFlightTerrainCornerRootIndexes),
                         new GpuTerrainBlockResult(blocks, 0, inFlightTerrainBlockCount,
-                                inFlightTerrainRootIndexes, 16, inFlightTerrainBlocksPerChunk / 256, 16));
+                                inFlightTerrainRootIndexes, 16, inFlightTerrainBlocksPerChunk / 256, 16),
+                        surfaceHeights);
                 check(vkResetFences(device, fence), "reset async terrain fence");
                 inFlightTerrain = null;
+                inFlightTerrainHasSurfaceHeights = false;
                 terrainFuture.complete(result);
             } else {
                 long gpuCommandNanos = GPU_TIMING_ENABLED ? readGpuTimestamp(stack) : -1L;
@@ -661,6 +686,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         } catch (Throwable failure) {
             inFlightGraphRoots = null;
             inFlightTerrain = null;
+            inFlightTerrainHasSurfaceHeights = false;
             inFlightAquiferPrefill = null;
             inFlightAquiferRows = null;
             inFlightAquiferRowStage = null;
@@ -839,6 +865,15 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 samplesPerChunk, blocksPerChunk);
         int sampleCount = Math.multiplyExact(chunkCount, samplesPerChunk);
         int blockCount = Math.multiplyExact(chunkCount, blocksPerChunk);
+        int initialDensityOutput = -1;
+        for (int output = 0; output < outputRootIndexes.length; output++) {
+            if (outputRootIndexes[output] == GpuTerrainRoots.INITIAL_DENSITY) {
+                initialDensityOutput = output;
+                break;
+            }
+        }
+        boolean computeSurfaceHeights = initialDensityOutput >= 0
+                && chunkCount * 256 <= MAX_TERRAIN_SURFACE_COLUMNS;
         if (packed.nodeCount() > GRAPH_NODE_CAPACITY || rootCount > 16 || outputRoots > rootCount
                 || markerCount > MAX_INTERPOLATORS || graph.registerCount() > 256
                 || (long) sampleCount * rootCount * Float.BYTES > results.size
@@ -908,7 +943,27 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             writeGpuTimestamp(2, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
             vkCmdDispatch(commandBuffer, (blockCount + 63) / 64, 1, 1);
             writeGpuTimestamp(3, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-            VkBufferMemoryBarrier.Buffer finalBarriers = VkBufferMemoryBarrier.calloc(2, stack);
+            if (computeSurfaceHeights) {
+                VkBufferMemoryBarrier.Buffer blockOutputBarrier = VkBufferMemoryBarrier.calloc(1, stack)
+                        .sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_SHADER_READ_BIT).buffer(interpolationOutput.buffer)
+                        .size((long) blockCount * outputRoots * Float.BYTES);
+                vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, null, blockOutputBarrier, null);
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, terrainSurfacePipeline);
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                        terrainSurfacePipelineLayout, 0, stack.longs(terrainSurfaceDescriptorSet), null);
+                ByteBuffer surfacePush = stack.malloc(32).order(ByteOrder.nativeOrder())
+                        .putInt(chunkCount).putInt(blocksPerChunk).putInt(outputRoots)
+                        .putInt(initialDensityOutput).putFloat(0.390625F)
+                        .putFloat((float) GpuTerrainRuntime.GRAPH_PARITY_EPSILON)
+                        .putInt(0).putInt(0).flip();
+                vkCmdPushConstants(commandBuffer, terrainSurfacePipelineLayout,
+                        VK_SHADER_STAGE_COMPUTE_BIT, 0, surfacePush);
+                vkCmdDispatch(commandBuffer, (chunkCount * 256 + 63) / 64, 1, 1);
+            }
+            VkBufferMemoryBarrier.Buffer finalBarriers = VkBufferMemoryBarrier.calloc(
+                    computeSurfaceHeights ? 3 : 2, stack);
             finalBarriers.get(0).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
                     .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(results.buffer)
                     // The fused shader writes only the parity-admitted corner
@@ -920,6 +975,11 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             finalBarriers.get(1).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
                     .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(interpolationOutput.buffer)
                     .size((long) blockCount * outputRoots * Float.BYTES);
+            if (computeSurfaceHeights) {
+                finalBarriers.get(2).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(terrainSurfaceOutput.buffer)
+                        .size((long) chunkCount * 256 * Integer.BYTES);
+            }
             vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
                     0, null, finalBarriers, null);
             check(vkEndCommandBuffer(commandBuffer), "end grid interpolation command buffer");
@@ -935,6 +995,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             inFlightTerrainBlockCount = blockCount;
             inFlightTerrainOutputRoots = outputRoots;
             inFlightTerrainBlocksPerChunk = blocksPerChunk;
+            inFlightTerrainHasSurfaceHeights = computeSurfaceHeights;
             inFlightTerrainCornerRoots = rootCount;
             inFlightTerrainCornerRootIndexes = cornerRootIndexes.clone();
             inFlightTerrainRootIndexes = outputRootIndexes.clone();
@@ -2052,6 +2113,12 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long interpolationDescriptorPool(MemoryStack s){VkDescriptorPoolSize.Buffer z=VkDescriptorPoolSize.calloc(1,s).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(5);VkDescriptorPoolCreateInfo i=VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(z);LongBuffer h=s.longs(0);check(vkCreateDescriptorPool(device,i,null,h),"interpolation pool");return h.get(0);}
     private long interpolationDescriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(interpolationDescriptorPool).pSetLayouts(s.longs(interpolationDescriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"interpolation set");return h.get(0);}
     private void interpolationDescriptors(MemoryStack s){NativeBuffer[] bs={results,terrainCornerMarkers,interpolationMetadata,graphCoordinates,interpolationOutput};VkWriteDescriptorSet.Buffer w=VkWriteDescriptorSet.calloc(bs.length,s);for(int i=0;i<bs.length;i++){VkDescriptorBufferInfo.Buffer bi=VkDescriptorBufferInfo.calloc(1,s).buffer(bs[i].buffer).range(bs[i].size);w.get(i).sType$Default().dstSet(interpolationDescriptorSet).dstBinding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bi);}vkUpdateDescriptorSets(device,w,null);}
+    private long terrainSurfaceDescriptorLayout(MemoryStack s){VkDescriptorSetLayoutBinding.Buffer b=VkDescriptorSetLayoutBinding.calloc(3,s);for(int i=0;i<3;i++)b.get(i).binding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);VkDescriptorSetLayoutCreateInfo i=VkDescriptorSetLayoutCreateInfo.calloc(s).sType$Default().pBindings(b);LongBuffer h=s.longs(0);check(vkCreateDescriptorSetLayout(device,i,null,h),"terrain surface layout");return h.get(0);}
+    private long terrainSurfacePipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(32);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(terrainSurfaceDescriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"terrain surface pipeline layout");return h.get(0);}
+    private long terrainSurfacePipeline(MemoryStack s){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(terrainSurfaceShader).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(terrainSurfacePipelineLayout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),"terrain surface pipeline");return h.get(0);}
+    private long terrainSurfaceDescriptorPool(MemoryStack s){VkDescriptorPoolSize.Buffer z=VkDescriptorPoolSize.calloc(1,s).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(3);VkDescriptorPoolCreateInfo i=VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(1).pPoolSizes(z);LongBuffer h=s.longs(0);check(vkCreateDescriptorPool(device,i,null,h),"terrain surface pool");return h.get(0);}
+    private long terrainSurfaceDescriptorSet(MemoryStack s){VkDescriptorSetAllocateInfo i=VkDescriptorSetAllocateInfo.calloc(s).sType$Default().descriptorPool(terrainSurfaceDescriptorPool).pSetLayouts(s.longs(terrainSurfaceDescriptorLayout));LongBuffer h=s.longs(0);check(vkAllocateDescriptorSets(device,i,h),"terrain surface set");return h.get(0);}
+    private void terrainSurfaceDescriptors(MemoryStack s){NativeBuffer[] bs={interpolationOutput,terrainSurfaceOutput,interpolationMetadata};VkWriteDescriptorSet.Buffer w=VkWriteDescriptorSet.calloc(bs.length,s);for(int i=0;i<bs.length;i++){VkDescriptorBufferInfo.Buffer bi=VkDescriptorBufferInfo.calloc(1,s).buffer(bs[i].buffer).range(bs[i].size);w.get(i).sType$Default().dstSet(terrainSurfaceDescriptorSet).dstBinding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).pBufferInfo(bi);}vkUpdateDescriptorSets(device,w,null);}
     private long aquiferPressureDescriptorLayout(MemoryStack s){VkDescriptorSetLayoutBinding.Buffer b=VkDescriptorSetLayoutBinding.calloc(2,s);for(int i=0;i<2;i++)b.get(i).binding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);VkDescriptorSetLayoutCreateInfo i=VkDescriptorSetLayoutCreateInfo.calloc(s).sType$Default().pBindings(b);LongBuffer h=s.longs(0);check(vkCreateDescriptorSetLayout(device,i,null,h),"aquifer pressure layout");return h.get(0);}
     private long aquiferPressurePipelineLayout(MemoryStack s){VkPushConstantRange.Buffer r=VkPushConstantRange.calloc(1,s).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).size(4);VkPipelineLayoutCreateInfo i=VkPipelineLayoutCreateInfo.calloc(s).sType$Default().pSetLayouts(s.longs(aquiferPressureDescriptorLayout)).pPushConstantRanges(r);LongBuffer h=s.longs(0);check(vkCreatePipelineLayout(device,i,null,h),"aquifer pressure pipeline layout");return h.get(0);}
     private long aquiferPressurePipeline(MemoryStack s){VkPipelineShaderStageCreateInfo st=VkPipelineShaderStageCreateInfo.calloc(s).sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(aquiferPressureShader).pName(s.UTF8("main"));VkComputePipelineCreateInfo.Buffer i=VkComputePipelineCreateInfo.calloc(1,s).sType$Default().stage(st).layout(aquiferPressurePipelineLayout);LongBuffer h=s.longs(0);check(vkCreateComputePipelines(device,VK_NULL_HANDLE,i,null,h),"aquifer pressure pipeline");return h.get(0);}
@@ -2236,6 +2303,11 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         vkDestroyDescriptorSetLayout(device, interpolationDescriptorLayout, null);
         vkDestroyDescriptorPool(device, interpolationDescriptorPool, null);
         vkDestroyShaderModule(device, interpolationShader, null);
+        vkDestroyPipeline(device, terrainSurfacePipeline, null);
+        vkDestroyPipelineLayout(device, terrainSurfacePipelineLayout, null);
+        vkDestroyDescriptorSetLayout(device, terrainSurfaceDescriptorLayout, null);
+        vkDestroyDescriptorPool(device, terrainSurfaceDescriptorPool, null);
+        vkDestroyShaderModule(device, terrainSurfaceShader, null);
         vkDestroyPipeline(device, aquiferPressurePipeline, null);
         vkDestroyPipelineLayout(device, aquiferPressurePipelineLayout, null);
         vkDestroyDescriptorSetLayout(device, aquiferPressureDescriptorLayout, null);
@@ -2276,6 +2348,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         interpolatorMap.destroy(device);
         interpolationMetadata.destroy(device);
         interpolationOutput.destroy(device);
+        terrainSurfaceOutput.destroy(device);
         aquiferPressureInputs.destroy(device);
         aquiferNearestInputs.destroy(device);
         aquiferNearestOutput.destroy(device);
