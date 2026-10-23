@@ -60,6 +60,8 @@ public final class GpuTerrainProfiler {
     private static final LongAdder aquiferRegionStatusCacheMisses = new LongAdder();
     private static final LongAdder aquiferRegionSurfaceCacheHits = new LongAdder();
     private static final LongAdder aquiferRegionSurfaceCacheMisses = new LongAdder();
+    private static final LongAdder vanillaFluidPickerCacheHits = new LongAdder();
+    private static final LongAdder vanillaFluidPickerCacheMisses = new LongAdder();
     private static final LongAdder[] aquiferPhaseNanos = createCounterArray(AQUIFER_PHASE_NAMES.length);
     private static final LongAdder[] aquiferPhaseSamples = createCounterArray(AQUIFER_PHASE_NAMES.length);
     private static final LongAdder blockWrites = new LongAdder();
@@ -249,6 +251,12 @@ public final class GpuTerrainProfiler {
         else aquiferRegionSurfaceCacheMisses.increment();
     }
 
+    public static void recordVanillaFluidPickerCache(boolean hit) {
+        if (!ENABLED) return;
+        if (hit) vanillaFluidPickerCacheHits.increment();
+        else vanillaFluidPickerCacheMisses.increment();
+    }
+
     /** Records the C2ME-style batched status kernel and its conservative Java fallbacks. */
     public static void recordAquiferStatusPrefill(long start, int centers, int javaFallbacks) {
         if (!ENABLED) return;
@@ -410,6 +418,8 @@ public final class GpuTerrainProfiler {
                 aquiferRegionStatusCacheHits.sum(), aquiferRegionStatusCacheMisses.sum());
         GpuNoise.LOGGER.info("GPU terrain aquifer region-surface cache: hits={}, misses={}",
                 aquiferRegionSurfaceCacheHits.sum(), aquiferRegionSurfaceCacheMisses.sum());
+        GpuNoise.LOGGER.info("GPU terrain vanilla fluid-picker row cache: hits={}, misses={}",
+                vanillaFluidPickerCacheHits.sum(), vanillaFluidPickerCacheMisses.sum());
         GpuNoise.LOGGER.info("GPU terrain Java root fallback calls: {}", formatRootFallbacks());
         GpuNoise.LOGGER.info("GPU terrain per-root cache calls: {}", formatRootCalls());
     }

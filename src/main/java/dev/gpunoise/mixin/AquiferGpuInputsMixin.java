@@ -373,6 +373,16 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         // strict GPU root cache here; exact Java evaluation remains an explicit
         // diagnostic mode and the fallback for missing cache coordinates.
         boolean exactAquiferInputs = GpuAquiferRuntimeMode.exactAquiferInputsEnabled();
+        // Minecraft's own picker is pure for each coordinate, so cache the
+        // two adjacent Y slices used by global-fluid and below-global checks.
+        // Keep mod-owned pickers on the original call path because their
+        // implementations may carry their own behavior or state.
+        boolean cacheVanillaGlobalFluidRows = !c2meAquifer
+                && globalFluidPicker.getClass().getName().startsWith("net.minecraft.");
+        Aquifer.FluidStatus[] previousGlobalFluidRow = cacheVanillaGlobalFluidRows
+                ? new Aquifer.FluidStatus[256] : null;
+        Aquifer.FluidStatus[] currentGlobalFluidRow = cacheVanillaGlobalFluidRows
+                ? new Aquifer.FluidStatus[256] : null;
         int directGlobalFluidDecisions = 0;
         int positiveDensityDecisions = 0;
 
@@ -410,9 +420,21 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     // verification or exact Java barrier sampling.
                     DensityFunction.FunctionContext context = gpunoise$verifyAquifer
                             ? new DensityFunction.SinglePointContext(x, y, z) : null;
+                    int localColumn = (z - minZ) * 16 + (x - minX);
                     Aquifer.FluidStatus global = c2meAquifer
                             ? gpunoise$sampleGlobalFluidLevel(c2meGlobalFluidLevels, cache, y)
-                            : globalFluidPicker.computeFluid(x, y, z);
+                            : cacheVanillaGlobalFluidRows
+                            ? currentGlobalFluidRow[localColumn]
+                            : null;
+                    if (global == null) {
+                        global = globalFluidPicker.computeFluid(x, y, z);
+                        if (cacheVanillaGlobalFluidRows) {
+                            currentGlobalFluidRow[localColumn] = global;
+                            GpuTerrainProfiler.recordVanillaFluidPickerCache(false);
+                        }
+                    } else if (cacheVanillaGlobalFluidRows) {
+                        GpuTerrainProfiler.recordVanillaFluidPickerCache(true);
+                    }
                     BlockState globalState = global.at(y);
                     if (globalState.is(Blocks.LAVA)) {
                         GpuAquiferSubstance.Input diagnosticInput = gpunoise$verifyAquifer
@@ -463,10 +485,27 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                     if (!Double.isFinite(barrier)) continue;
                     Aquifer.FluidStatus belowGlobal = c2meAquifer
                             ? gpunoise$sampleGlobalFluidLevel(c2meGlobalFluidLevels, cache, y - 1)
-                            : globalFluidPicker.computeFluid(x, y - 1, z);
+                            : cacheVanillaGlobalFluidRows
+                            ? previousGlobalFluidRow[localColumn]
+                            : null;
+                    if (belowGlobal == null) {
+                        belowGlobal = globalFluidPicker.computeFluid(x, y - 1, z);
+                        if (cacheVanillaGlobalFluidRows) {
+                            previousGlobalFluidRow[localColumn] = belowGlobal;
+                            GpuTerrainProfiler.recordVanillaFluidPickerCache(false);
+                        }
+                    } else if (cacheVanillaGlobalFluidRows) {
+                        GpuTerrainProfiler.recordVanillaFluidPickerCache(true);
+                    }
                     boolean belowIsLava = belowGlobal.at(y - 1).is(Blocks.LAVA);
                     queries.add(index, x, y, z, density, barrier, belowIsLava, c2meAquifer, centers);
                 }
+            }
+            if (cacheVanillaGlobalFluidRows) {
+                Aquifer.FluidStatus[] recycled = previousGlobalFluidRow;
+                previousGlobalFluidRow = currentGlobalFluidRow;
+                currentGlobalFluidRow = recycled;
+                java.util.Arrays.fill(currentGlobalFluidRow, null);
             }
         }
         if (finalDensityBlockView != null) finalDensityBlockView.recordReads(decisionCapacity);
