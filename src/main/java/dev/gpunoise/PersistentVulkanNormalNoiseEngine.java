@@ -151,13 +151,16 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long totalTerrainReadbackNanos;
     private long totalTerrainGridGpuNanos;
     private long totalTerrainFusedBlockGpuNanos;
+    private long totalTerrainSurfaceGpuNanos;
     private long terrainGpuTimestampSamples;
+    private long totalTerrainComputeDispatches;
     private long totalTerrainMetadataUploadBytes;
     private long totalTerrainMarkerCornerBytes;
     private long totalTerrainGraphUploadBytes;
     private long totalTerrainGraphUploadSubmissions;
     private long totalTerrainCornerReadbackBytes;
     private long totalTerrainBlockReadbackBytes;
+    private long totalTerrainSurfaceReadbackBytes;
     private long timestampQueryPool;
     private int timestampValidBits;
     private double timestampPeriodNanos;
@@ -291,6 +294,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
             interpolationMetadata = buffer(100L * GpuInterpolationBatch.METADATA_BYTES, stack);
             interpolationOutput = buffer((long) INTERPOLATION_OUTPUT_FLOATS * Float.BYTES, stack);
+            terrainSurfaceOutput = hostVisibleBuffer((long) MAX_TERRAIN_SURFACE_COLUMNS * Integer.BYTES, stack);
             aquiferPressureInputs = hostVisibleBuffer((long) CAPACITY * GpuAquiferPressure.RECORD_BYTES, stack);
             aquiferNearestInputs = hostVisibleBuffer(AQUIFER_INPUT_BYTES, stack);
             aquiferNearestOutput = buffer(AQUIFER_OUTPUT_BYTES, stack);
@@ -314,6 +318,14 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             interpolationPipelineLayout = interpolationPipelineLayout(stack); interpolationPipeline = interpolationPipeline(stack);
             interpolationDescriptorPool = interpolationDescriptorPool(stack); interpolationDescriptorSet = interpolationDescriptorSet(stack);
             interpolationDescriptors(stack);
+            terrainSurfaceShader = loadShader(stack,
+                    "/assets/gpunoise/shaders/terrain_surface_height.comp.spv", "terrain surface-height shader");
+            terrainSurfaceDescriptorLayout = terrainSurfaceDescriptorLayout(stack);
+            terrainSurfacePipelineLayout = terrainSurfacePipelineLayout(stack);
+            terrainSurfacePipeline = terrainSurfacePipeline(stack);
+            terrainSurfaceDescriptorPool = terrainSurfaceDescriptorPool(stack);
+            terrainSurfaceDescriptorSet = terrainSurfaceDescriptorSet(stack);
+            terrainSurfaceDescriptors(stack);
             aquiferPressureShader = loadShader(stack, "/assets/gpunoise/shaders/aquifer_pressure.comp.spv", "aquifer pressure shader");
             aquiferPressureDescriptorLayout = aquiferPressureDescriptorLayout(stack);
             aquiferPressurePipelineLayout = aquiferPressurePipelineLayout(stack);
@@ -642,7 +654,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 inFlightAquiferDecisionChain = false;
                 aquiferFuture.complete(new GpuAquiferPrefillResult(nearestRows, statusRows, decisionRows));
             } else if (terrainFuture != null) {
-                long[] stageGpuNanos = GPU_TIMING_ENABLED ? readTerrainGpuTimestamps(stack) : null;
+                long[] stageGpuNanos = GPU_TIMING_ENABLED
+                        ? readTerrainGpuTimestamps(stack, inFlightTerrainHasSurfaceHeights) : null;
                 float[] corners = readSelectedRootResults(inFlightSamples, inFlightTerrainCornerRoots,
                         inFlightTerrainCornerRootIndexes);
                 FloatBuffer blockValues = persistentMappings.get(interpolationOutput).duplicate()
@@ -662,7 +675,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     surfaceValues.get(surfaceHeights);
                 }
                 if (GPU_TIMING_ENABLED) recordTerrainBatchDuration(inFlightTerrainPreparationNanos,
-                        fenceDuration, stageGpuNanos, System.nanoTime() - readbackStarted);
+                        fenceDuration, stageGpuNanos, System.nanoTime() - readbackStarted,
+                        inFlightTerrainHasSurfaceHeights);
                 GpuTerrainBatchResult result = new GpuTerrainBatchResult(
                         new GpuTerrainRootsResult(corners, 0, corners.length,
                                 inFlightTerrainCornerRoots, inFlightTerrainCornerRootIndexes.length,
@@ -735,14 +749,18 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     }
 
     private void recordTerrainBatchDuration(long preparationNanos, long fenceNanos,
-                                            long[] stageGpuNanos, long readbackNanos) {
+                                            long[] stageGpuNanos, long readbackNanos,
+                                            boolean hasSurfaceHeights) {
         totalTerrainPreparationNanos += preparationNanos;
         totalTerrainFenceNanos += fenceNanos;
         totalTerrainReadbackNanos += readbackNanos;
-        if (stageGpuNanos.length == 2 && stageGpuNanos[0] >= 0L && stageGpuNanos[1] >= 0L) {
+        if (stageGpuNanos.length >= 2 && stageGpuNanos[0] >= 0L && stageGpuNanos[1] >= 0L) {
             totalTerrainGridGpuNanos += stageGpuNanos[0];
             totalTerrainFusedBlockGpuNanos += stageGpuNanos[1];
-            terrainGpuTimestampSamples++;
+            if (!hasSurfaceHeights || stageGpuNanos.length >= 3 && stageGpuNanos[2] >= 0L) {
+                terrainGpuTimestampSamples++;
+                if (hasSurfaceHeights) totalTerrainSurfaceGpuNanos += stageGpuNanos[2];
+            }
         }
         long completed = ++completedTerrainBatchSamples;
         if ((completed & 7L) == 0L) {
@@ -750,8 +768,10 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     : totalTerrainGridGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
             double averageFusedBlockGpuMs = terrainGpuTimestampSamples == 0 ? -1.0
                     : totalTerrainFusedBlockGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
-            GpuNoise.LOGGER.info("GPU full terrain profile: batches={}, terrainQueueSubmissions={}, computeDispatches={}, avgCpuPrepareMs={}, avgSubmitToFenceMs={}, avgReadbackMs={}, gridMetadataUploadMiBPerBatch={}, graphResourceUploadMiBPerGraphChange={}, graphResourceUploadSubmissions={}, markerCornerBufferMiBPerBatch={}, cornerReadbackMiBPerBatch={}, blockReadbackMiBPerBatch={}, avgGridGpuMs={}, avgFusedBlockGpuMs={}, gpuTimingSamples={}",
-                    completed, completed, completed * 2L,
+            double averageSurfaceGpuMs = terrainGpuTimestampSamples == 0 ? -1.0
+                    : totalTerrainSurfaceGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
+            GpuNoise.LOGGER.info("GPU full terrain profile: batches={}, terrainQueueSubmissions={}, computeDispatches={}, avgCpuPrepareMs={}, avgSubmitToFenceMs={}, avgReadbackMs={}, gridMetadataUploadMiBPerBatch={}, graphResourceUploadMiBPerGraphChange={}, graphResourceUploadSubmissions={}, markerCornerBufferMiBPerBatch={}, cornerReadbackMiBPerBatch={}, blockReadbackMiBPerBatch={}, surfaceHeightReadbackMiBPerBatch={}, avgGridGpuMs={}, avgFusedBlockGpuMs={}, avgSurfaceHeightGpuMs={}, gpuTimingSamples={}",
+                    completed, completed, totalTerrainComputeDispatches,
                     totalTerrainPreparationNanos / (double) completed / 1_000_000.0,
                     totalTerrainFenceNanos / (double) completed / 1_000_000.0,
                     totalTerrainReadbackNanos / (double) completed / 1_000_000.0,
@@ -762,7 +782,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     totalTerrainMarkerCornerBytes / (double) completed / (1024.0 * 1024.0),
                     totalTerrainCornerReadbackBytes / (double) completed / (1024.0 * 1024.0),
                     totalTerrainBlockReadbackBytes / (double) completed / (1024.0 * 1024.0),
-                    averageGridGpuMs, averageFusedBlockGpuMs,
+                    totalTerrainSurfaceReadbackBytes / (double) completed / (1024.0 * 1024.0),
+                    averageGridGpuMs, averageFusedBlockGpuMs, averageSurfaceGpuMs,
                     terrainGpuTimestampSamples);
         }
     }
@@ -960,7 +981,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                         .putInt(0).putInt(0).flip();
                 vkCmdPushConstants(commandBuffer, terrainSurfacePipelineLayout,
                         VK_SHADER_STAGE_COMPUTE_BIT, 0, surfacePush);
+                writeGpuTimestamp(4, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
                 vkCmdDispatch(commandBuffer, (chunkCount * 256 + 63) / 64, 1, 1);
+                writeGpuTimestamp(5, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             }
             VkBufferMemoryBarrier.Buffer finalBarriers = VkBufferMemoryBarrier.calloc(
                     computeSurfaceHeights ? 3 : 2, stack);
@@ -1003,6 +1026,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             totalTerrainMarkerCornerBytes += (long) sampleCount * markerCount * Float.BYTES;
             totalTerrainCornerReadbackBytes += cornerReadbackBytes;
             totalTerrainBlockReadbackBytes += blockReadbackBytes;
+            totalTerrainSurfaceReadbackBytes += computeSurfaceHeights
+                    ? (long) chunkCount * 256 * Integer.BYTES : 0L;
+            totalTerrainComputeDispatches += computeSurfaceHeights ? 3L : 2L;
             inFlightTerrain = new CompletableFuture<>();
             return inFlightTerrain;
         }
@@ -2230,13 +2256,16 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
 
     private record BlockGraphProgram(long shader, long pipeline) { }
 
-    private long[] readTerrainGpuTimestamps(MemoryStack stack) {
-        if (timestampQueryPool == 0L) return new long[]{-1L, -1L};
-        ByteBuffer results = stack.malloc(4 * Long.BYTES).order(ByteOrder.nativeOrder());
-        int status = vkGetQueryPoolResults(device, timestampQueryPool, 0, 4, results,
+    private long[] readTerrainGpuTimestamps(MemoryStack stack, boolean hasSurfaceHeights) {
+        long[] unavailable = hasSurfaceHeights
+                ? new long[]{-1L, -1L, -1L} : new long[]{-1L, -1L};
+        if (timestampQueryPool == 0L) return unavailable;
+        ByteBuffer results = stack.malloc(6 * Long.BYTES).order(ByteOrder.nativeOrder());
+        int status = vkGetQueryPoolResults(device, timestampQueryPool, 0,
+                hasSurfaceHeights ? 6 : 4, results,
                 Long.BYTES, VK_QUERY_RESULT_64_BIT);
-        if (status != VK_SUCCESS) return new long[]{-1L, -1L};
-        long[] elapsed = new long[2];
+        if (status != VK_SUCCESS) return unavailable;
+        long[] elapsed = hasSurfaceHeights ? new long[3] : new long[2];
         for (int stage = 0; stage < elapsed.length; stage++) {
             long ticks = results.getLong((stage * 2 + 1) * Long.BYTES)
                     - results.getLong(stage * 2 * Long.BYTES);
