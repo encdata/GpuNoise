@@ -645,9 +645,7 @@ void main(){
     }
     // Temporary CI probe runs after the root loop so it remains visible even
     // when the decoded output count is zero.
-    if (sampleIndex == 0u && nodeCount == 9u && count == 8u
-            && g.minX == -32 && g.minY == -64 && g.minZ == 48
-            && g.gridX == 2 && g.gridY == 2 && g.gridZ == 2) {
+    if (sampleIndex == 0u && nodeCount == 9u) {
         float diagnosticBase = 9000000.0
                 + 1000000.0
                 + (fusedTerrainGrid ? 1000000.0 : 0.0)
