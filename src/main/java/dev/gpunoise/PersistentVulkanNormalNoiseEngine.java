@@ -153,6 +153,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private long totalTerrainFusedBlockGpuNanos;
     private long totalTerrainSurfaceGpuNanos;
     private long terrainGpuTimestampSamples;
+    private long terrainSurfaceGpuTimestampSamples;
     private long totalTerrainComputeDispatches;
     private long totalTerrainMetadataUploadBytes;
     private long totalTerrainMarkerCornerBytes;
@@ -757,10 +758,11 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         if (stageGpuNanos.length >= 2 && stageGpuNanos[0] >= 0L && stageGpuNanos[1] >= 0L) {
             totalTerrainGridGpuNanos += stageGpuNanos[0];
             totalTerrainFusedBlockGpuNanos += stageGpuNanos[1];
-            if (!hasSurfaceHeights || stageGpuNanos.length >= 3 && stageGpuNanos[2] >= 0L) {
-                terrainGpuTimestampSamples++;
-                if (hasSurfaceHeights) totalTerrainSurfaceGpuNanos += stageGpuNanos[2];
-            }
+            terrainGpuTimestampSamples++;
+        }
+        if (hasSurfaceHeights && stageGpuNanos.length >= 3 && stageGpuNanos[2] >= 0L) {
+            totalTerrainSurfaceGpuNanos += stageGpuNanos[2];
+            terrainSurfaceGpuTimestampSamples++;
         }
         long completed = ++completedTerrainBatchSamples;
         if ((completed & 7L) == 0L) {
@@ -768,8 +770,8 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     : totalTerrainGridGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
             double averageFusedBlockGpuMs = terrainGpuTimestampSamples == 0 ? -1.0
                     : totalTerrainFusedBlockGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
-            double averageSurfaceGpuMs = terrainGpuTimestampSamples == 0 ? -1.0
-                    : totalTerrainSurfaceGpuNanos / (double) terrainGpuTimestampSamples / 1_000_000.0;
+            double averageSurfaceGpuMs = terrainSurfaceGpuTimestampSamples == 0 ? -1.0
+                    : totalTerrainSurfaceGpuNanos / (double) terrainSurfaceGpuTimestampSamples / 1_000_000.0;
             GpuNoise.LOGGER.info("GPU full terrain profile: batches={}, terrainQueueSubmissions={}, computeDispatches={}, avgCpuPrepareMs={}, avgSubmitToFenceMs={}, avgReadbackMs={}, gridMetadataUploadMiBPerBatch={}, graphResourceUploadMiBPerGraphChange={}, graphResourceUploadSubmissions={}, markerCornerBufferMiBPerBatch={}, cornerReadbackMiBPerBatch={}, blockReadbackMiBPerBatch={}, surfaceHeightReadbackMiBPerBatch={}, avgGridGpuMs={}, avgFusedBlockGpuMs={}, avgSurfaceHeightGpuMs={}, gpuTimingSamples={}",
                     completed, completed, totalTerrainComputeDispatches,
                     totalTerrainPreparationNanos / (double) completed / 1_000_000.0,
