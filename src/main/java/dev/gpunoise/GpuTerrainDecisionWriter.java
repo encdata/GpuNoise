@@ -17,12 +17,22 @@ import java.util.Map;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /** CPU terrain writer driven by parity-admitted Vulkan aquifer decisions. */
 public final class GpuTerrainDecisionWriter {
     private static final int TRACE_X = Integer.getInteger("gpunoise.traceAquiferBlockX", Integer.MIN_VALUE);
     private static final int TRACE_Y = Integer.getInteger("gpunoise.traceAquiferBlockY", Integer.MIN_VALUE);
     private static final int TRACE_Z = Integer.getInteger("gpunoise.traceAquiferBlockZ", Integer.MIN_VALUE);
+    private static final int PREPARATION_THREADS = Math.max(1, Math.min(4,
+            Integer.getInteger("gpunoise.terrainPreparationThreads",
+                    Math.max(1, Runtime.getRuntime().availableProcessors() / 2))));
+    private static final ThreadPoolExecutor PREPARATION_EXECUTOR = createPreparationExecutor();
 
     private GpuTerrainDecisionWriter() {}
 
@@ -65,7 +75,6 @@ public final class GpuTerrainDecisionWriter {
         ArrayList<ChunkAccess> heightmapsToPrime = new ArrayList<>(fills.size());
         boolean[] writeProtected = new boolean[fills.size()];
         PreparedChunk[] prepared = new PreparedChunk[fills.size()];
-        RegionPalette palette = new RegionPalette(first.defaultBlock());
         for (int fillIndex = 0; fillIndex < fills.size(); fillIndex++) {
             ChunkFill fill = fills.get(fillIndex);
             if (Math.floorDiv(fill.chunk().getPos().x, 4) != regionX
@@ -89,9 +98,12 @@ public final class GpuTerrainDecisionWriter {
             }
         }
         // Resolve interpolation and Java material fallbacks before section
-        // ownership, just as OCL consumes its completed device block map.
-        // This keeps all expensive terrain evaluation out of the writer's
-        // critical section and makes the later block pass region ordered.
+        // ownership. Each NoiseChunk and density cache belongs to one fill,
+        // so these preparations can run independently while the final region
+        // commit remains ordered and exclusively owned by this writer.
+        @SuppressWarnings("unchecked")
+        CompletableFuture<PreparedChunk>[] preparation = new CompletableFuture[fills.size()];
+        PreparedChunk[] preparedInline = new PreparedChunk[fills.size()];
         for (int fillIndex = 0; fillIndex < fills.size(); fillIndex++) {
             if (writeProtected[fillIndex]) continue;
             ChunkFill fill = fills.get(fillIndex);
@@ -103,12 +115,19 @@ public final class GpuTerrainDecisionWriter {
                     || bottomSection > topSection) {
                 throw new IllegalArgumentException("terrain write range is outside chunk sections");
             }
-            GpuTerrainRuntime.bindFillCache(fill.cache());
             try {
-                prepared[fillIndex] = prepareChunk(fill, palette);
-            } finally {
-                GpuTerrainRuntime.clearFillCache();
+                preparation[fillIndex] = CompletableFuture.supplyAsync(
+                        () -> prepareFill(fill), PREPARATION_EXECUTOR);
+            } catch (RejectedExecutionException saturated) {
+                // Keep the bounded queue from turning pressure into a failed
+                // worldgen stage. The writer can prepare this one fill inline.
+                preparedInline[fillIndex] = prepareFill(fill);
             }
+        }
+        for (int fillIndex = 0; fillIndex < fills.size(); fillIndex++) {
+            CompletableFuture<PreparedChunk> task = preparation[fillIndex];
+            if (task != null) prepared[fillIndex] = task.join();
+            else prepared[fillIndex] = preparedInline[fillIndex];
         }
         PreparedChunk[] byTile = new PreparedChunk[16];
         for (PreparedChunk output : prepared) {
@@ -140,6 +159,26 @@ public final class GpuTerrainDecisionWriter {
             throw new IllegalStateException("terrain region writer did not produce every chunk result");
         }
         return List.copyOf(written);
+    }
+
+    private static ThreadPoolExecutor createPreparationExecutor() {
+        ThreadFactory factory = runnable -> {
+            Thread thread = new Thread(runnable, "GPU Noise terrain preparation");
+            thread.setDaemon(true);
+            return thread;
+        };
+        return new ThreadPoolExecutor(PREPARATION_THREADS, PREPARATION_THREADS,
+                30L, TimeUnit.SECONDS, new ArrayBlockingQueue<>(64), factory,
+                new ThreadPoolExecutor.AbortPolicy());
+    }
+
+    private static PreparedChunk prepareFill(ChunkFill fill) {
+        GpuTerrainRuntime.bindFillCache(fill.cache());
+        try {
+            return prepareChunk(fill, new RegionPalette(fill.defaultBlock()));
+        } finally {
+            GpuTerrainRuntime.clearFillCache();
+        }
     }
 
     /**
