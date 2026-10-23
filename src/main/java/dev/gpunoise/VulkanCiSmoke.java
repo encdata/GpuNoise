@@ -1427,16 +1427,21 @@ public final class VulkanCiSmoke {
     }
 
     private static void verifyGpuBeardifier(VulkanSubmissionRing ring) throws Exception {
-        List<Beardifier.Rigid> pieces = List.of(
-                new Beardifier.Rigid(new BoundingBox(-5, -3, -5, 5, 3, 5), TerrainAdjustment.NONE, 0),
-                new Beardifier.Rigid(new BoundingBox(-3, -4, -2, 2, 2, 3), TerrainAdjustment.BURY, 1),
-                new Beardifier.Rigid(new BoundingBox(-2, -2, -3, 3, 4, 2), TerrainAdjustment.BEARD_THIN, 0),
-                new Beardifier.Rigid(new BoundingBox(-4, -3, -1, 1, 3, 4), TerrainAdjustment.BEARD_BOX, 2),
-                new Beardifier.Rigid(new BoundingBox(-1, -4, -4, 4, 1, 1), TerrainAdjustment.ENCAPSULATE, 0));
-        List<JigsawJunction> junctions = List.of(
-                new JigsawJunction(1, 2, -1, 0,
-                        net.minecraft.world.level.levelgen.structure.pools.StructureTemplatePool.Projection.RIGID));
         float[] kernel = BeardifierAccessor.gpunoise$kernel();
+        for (TerrainAdjustment adjustment : TerrainAdjustment.values()) {
+            List<Beardifier.Rigid> pieces = List.of(new Beardifier.Rigid(
+                    new BoundingBox(-3, -4, -3, 3, 4, 3), adjustment, 1));
+            verifyGpuBeardifierCase(ring, pieces, List.of(), kernel, "piece " + adjustment);
+        }
+        List<JigsawJunction> junctions = List.of(new JigsawJunction(1, 0, -1, 0,
+                net.minecraft.world.level.levelgen.structure.pools.StructureTemplatePool.Projection.RIGID));
+        verifyGpuBeardifierCase(ring, List.of(), junctions, kernel, "jigsaw junction");
+        System.out.println("Vulkan CI smoke: Beardifier adjustment and junction parity completed");
+    }
+
+    private static void verifyGpuBeardifierCase(VulkanSubmissionRing ring, List<Beardifier.Rigid> pieces,
+                                                 List<JigsawJunction> junctions, float[] kernel,
+                                                 String label) throws Exception {
         GpuBeardifierInputs inputs = new GpuBeardifierInputs(pieces, junctions, kernel);
         int sampleCount = 256;
         ByteBuffer records = inputs.pack(-8, 0, -8, 1);
@@ -1445,17 +1450,25 @@ public final class VulkanCiSmoke {
             Beardifier reference = new Beardifier(
                     new it.unimi.dsi.fastutil.objects.ObjectArrayList<>(pieces).iterator(),
                     new it.unimi.dsi.fastutil.objects.ObjectArrayList<>(junctions).iterator());
+            boolean nonzeroReference = false;
             for (int index = 0; index < sampleCount; index++) {
                 int x = -8 + (index & 15);
                 int z = -8 + (index >>> 4);
                 double expected = reference.compute(
                         new DensityFunction.SinglePointContext(x, 0, z));
+                nonzeroReference |= Math.abs(expected) > 1.0e-5;
                 if (Math.abs(actual[index] - expected) > GpuTerrainRuntime.GRAPH_PARITY_EPSILON) {
-                    throw new IllegalStateException("Vulkan Beardifier mismatch at (" + x + ",0," + z
-                            + "): expected=" + expected + ", got=" + actual[index]);
+                    throw new IllegalStateException("Vulkan Beardifier " + label + " mismatch at ("
+                            + x + ",0," + z + "): expected=" + expected + ", got=" + actual[index]);
                 }
             }
-            System.out.println("Vulkan CI smoke: Beardifier piece and junction parity completed");
+            if (!pieces.isEmpty() && pieces.getFirst().terrainAdjustment() != TerrainAdjustment.NONE
+                    && !nonzeroReference) {
+                throw new IllegalStateException("Java Beardifier fixture produced no contribution for " + label);
+            }
+            if (!junctions.isEmpty() && !nonzeroReference) {
+                throw new IllegalStateException("Java Beardifier fixture produced no contribution for " + label);
+            }
         } finally {
             GpuTerrainInputBufferPool.release(records);
         }
