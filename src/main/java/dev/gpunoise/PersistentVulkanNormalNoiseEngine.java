@@ -97,6 +97,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     private GpuDensityGraphBuffer.Packed graphResourcesPacked;
     private int[] uploadedGraphRoots;
     private int[] uploadedBlockGraphRoots;
+    private int[] uploadedCornerGraphRoots;
     private GpuDensityGraph interpolatorMapGraph;
     private final long fence;
     private final VkCommandBuffer commandBuffer;
@@ -179,7 +180,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             coordinates = buffer(CAPACITY * 16L, stack); // vec4 position; sampler id occupies unused w
             // Graph dispatches can return up to 16 router roots per sample.
             results = buffer(CAPACITY * (long) MAX_GRAPH_OUTPUTS * Float.BYTES, stack);
-            graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack); graphNodes = deviceLocalBuffer((long) GRAPH_NODE_STORAGE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack); graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 2L * 64L * 16L, stack); graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack); graphRoots = hostVisibleBuffer(128L, stack);
+            graphCoordinates = hostVisibleBuffer(CAPACITY * 16L, stack); graphNodes = deviceLocalBuffer((long) GRAPH_NODE_STORAGE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack); graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 2L * 64L * 16L, stack); graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack); graphRoots = hostVisibleBuffer(192L, stack);
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
             terrainCornerMarkers = deviceLocalBuffer((long) TERRAIN_CORNER_MARKER_FLOATS * Float.BYTES, stack);
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
@@ -267,7 +268,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             graphNodes = deviceLocalBuffer((long) GRAPH_NODE_STORAGE_CAPACITY * GpuDensityGraphBuffer.NODE_BYTES, stack);
             graphSplinePoints = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 2L * 64L * 16L, stack);
             graphBlendedMetadata = deviceLocalBuffer((long) GRAPH_NODE_CAPACITY * 192L, stack);
-            graphRoots = hostVisibleBuffer(128L, stack);
+            graphRoots = hostVisibleBuffer(192L, stack);
             graphMthSinTable = deviceLocalBuffer(65_536L * Float.BYTES, stack);
             terrainCornerMarkers = deviceLocalBuffer((long) TERRAIN_CORNER_MARKER_FLOATS * Float.BYTES, stack);
             interpolatorMap = hostVisibleBuffer((1L + MAX_INTERPOLATORS + 256L) * Integer.BYTES, stack);
@@ -624,22 +625,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                 long[] stageGpuNanos = GPU_TIMING_ENABLED ? readTerrainGpuTimestamps(stack) : null;
                 float[] corners = readSelectedRootResults(inFlightSamples, inFlightTerrainCornerRoots,
                         inFlightTerrainCornerRootIndexes);
-                if (Boolean.getBoolean("gpunoise.debugRootProbe")) {
-                    int probeOffset = 1024 * Float.BYTES;
-                    GpuNoise.LOGGER.info("GPU compact-root probe slot=" + System.identityHashCode(this)
-                            + ", selected=" + java.util.Arrays.toString(inFlightTerrainCornerRootIndexes)
-                            + ", shader=" + persistentResults.getFloat(probeOffset) + "/"
-                            + persistentResults.getFloat(probeOffset + Float.BYTES) + "/"
-                            + persistentResults.getFloat(probeOffset + 2 * Float.BYTES) + "/"
-                            + persistentResults.getFloat(probeOffset + 3 * Float.BYTES) + "/"
-                            + persistentResults.getFloat(probeOffset + 4 * Float.BYTES) + "/"
-                            + persistentResults.getFloat(probeOffset + 5 * Float.BYTES) + "/"
-                            + persistentResults.getFloat(probeOffset + 6 * Float.BYTES)
-                            + ", hostRaw=" + persistentResults.getFloat(0) + "/"
-                            + persistentResults.getFloat(Float.BYTES)
-                            + ", copied=" + corners[0] + "/"
-                            + (corners.length > 1 ? corners[1] : Float.NaN));
-                }
                 FloatBuffer blockValues = persistentMappings.get(interpolationOutput).duplicate()
                         .order(ByteOrder.nativeOrder()).asFloatBuffer();
                 blockValues.clear();
@@ -875,10 +860,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             int[] routerRootRegisters = graph.routerRoots();
             for (int i = 0; i < cornerRootIndexes.length; i++)
                 cornerRootRegisters[i] = routerRootRegisters[cornerRootIndexes[i]];
-            // The first root table is the output layout for this dispatch. In
-            // fused terrain mode that means parity-admitted corner roots; the
-            // second table remains the compact block-output layout.
-            uploadGraphRoots(cornerRootRegisters, blockRootRegisters, stack);
+            uploadGraphRoots(routerRootRegisters, blockRootRegisters, cornerRootRegisters, stack);
             ByteBuffer metadata = outputMetadata.duplicate().order(ByteOrder.nativeOrder());
             metadata.limit(metadata.position() + chunkCount * GpuInterpolationBatch.METADATA_BYTES);
             put(interpolationMetadata, metadata, stack);
@@ -894,10 +876,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, graphPipelineLayout, 0, stack.longs(graphDescriptorSet), null);
             ByteBuffer graphPush = stack.malloc(16).order(ByteOrder.nativeOrder())
                     .putInt(sampleCount).putInt(packed.nodeCount())
-                    // In the fused grid shader the low root-count bits hold
-                    // the compact output count; the full router count is not
-                    // needed after static graph evaluation.
-                    .putInt(cornerRootIndexes.length | 0x8000_0000)
+                    .putInt(rootCount | (cornerRootIndexes.length << 16) | 0x8000_0000)
                     .putInt(samplesPerChunk).flip();
             vkCmdPushConstants(commandBuffer, graphPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, graphPush);
             beginTerrainGpuTimestamps();
@@ -930,10 +909,7 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
                     // visibility dependency scoped to bytes actually written;
                     // the logical router root count is only used to evaluate
                     // the graph and is not the output stride in this path.
-                    .size(Boolean.getBoolean("gpunoise.debugRootProbe")
-                            ? Math.max((long) sampleCount * cornerRootIndexes.length * Float.BYTES,
-                                    1031L * Float.BYTES)
-                            : (long) sampleCount * cornerRootIndexes.length * Float.BYTES);
+                    .size((long) sampleCount * cornerRootIndexes.length * Float.BYTES);
             finalBarriers.get(1).sType$Default().srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT)
                     .dstAccessMask(VK_ACCESS_HOST_READ_BIT).buffer(interpolationOutput.buffer)
                     .size((long) blockCount * outputRoots * Float.BYTES);
@@ -1040,8 +1016,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     /** Reads contiguous router-root corners; GPU-only marker corners stay in device-local memory. */
     private float[] readRootResults(int samples, int roots) {
         float[] output = new float[Math.multiplyExact(samples, roots)];
-        FloatBuffer source = persistentResults.duplicate().order(ByteOrder.nativeOrder()).asFloatBuffer();
-        source.clear();
+        ByteBuffer view = persistentResults.duplicate().order(ByteOrder.nativeOrder());
+        view.clear();
+        FloatBuffer source = view.asFloatBuffer();
         source.limit(output.length);
         source.get(output);
         return output;
@@ -1053,7 +1030,9 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         for (int root = 0; identity && root < roots; root++) identity = selectedRoots[root] == root;
         if (identity) return readRootResults(samples, roots);
         float[] output = new float[Math.multiplyExact(samples, selectedRoots.length)];
-        FloatBuffer source = persistentResults.duplicate().order(ByteOrder.nativeOrder()).asFloatBuffer();
+        ByteBuffer view = persistentResults.duplicate().order(ByteOrder.nativeOrder());
+        view.clear();
+        FloatBuffer source = view.asFloatBuffer();
         int destination = 0;
         for (int sample = 0; sample < samples; sample++) {
             int sourceBase = sample * selectedRoots.length;
@@ -1611,21 +1590,29 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
     }
 
     private void uploadGraphRoots(int[] roots, MemoryStack stack) {
-        uploadGraphRoots(roots, roots, stack);
+        uploadGraphRoots(roots, roots, roots, stack);
     }
 
     private void uploadGraphRoots(int[] roots, int[] blockRoots, MemoryStack stack) {
-        if (roots.length > 16 || blockRoots.length > 16)
+        uploadGraphRoots(roots, blockRoots, roots, stack);
+    }
+
+    private void uploadGraphRoots(int[] roots, int[] blockRoots, int[] cornerRoots,
+                                  MemoryStack stack) {
+        if (roots.length > 16 || blockRoots.length > 16 || cornerRoots.length > 16)
             throw new IllegalArgumentException("GPU root tables are limited to 16 roots");
         if (uploadedGraphRoots != null && java.util.Arrays.equals(uploadedGraphRoots, roots)
-                && uploadedBlockGraphRoots != null && java.util.Arrays.equals(uploadedBlockGraphRoots, blockRoots)) return;
-        ByteBuffer bytes = stack.malloc(32 * Integer.BYTES).order(ByteOrder.nativeOrder());
+                && uploadedBlockGraphRoots != null && java.util.Arrays.equals(uploadedBlockGraphRoots, blockRoots)
+                && uploadedCornerGraphRoots != null && java.util.Arrays.equals(uploadedCornerGraphRoots, cornerRoots)) return;
+        ByteBuffer bytes = stack.malloc(48 * Integer.BYTES).order(ByteOrder.nativeOrder());
         for (int i = 0; i < 16; i++) bytes.putInt(i < roots.length ? roots[i] : 0);
         for (int i = 0; i < 16; i++) bytes.putInt(i < blockRoots.length ? blockRoots[i] : 0);
+        for (int i = 0; i < 16; i++) bytes.putInt(i < cornerRoots.length ? cornerRoots[i] : 0);
         bytes.flip();
         put(graphRoots, bytes, stack);
         uploadedGraphRoots = roots.clone();
         uploadedBlockGraphRoots = blockRoots.clone();
+        uploadedCornerGraphRoots = cornerRoots.clone();
     }
 
     private GpuDensityGraphBuffer.Packed packedGraph(GpuDensityGraph graph) {
@@ -1915,7 +1902,6 @@ final class PersistentVulkanNormalNoiseEngine implements AutoCloseable {
         try {
             Map<String, String> gridDefines = new java.util.HashMap<>(defines);
             gridDefines.put("GRID_INPUT", "1");
-        if (Boolean.getBoolean("gpunoise.debugRootProbe")) gridDefines.put("ROOT_DEBUG_PROBE", "1");
             nextGridShader = compileRuntimeShader(source, "terrain grid", gridDefines, graph, packed, false);
         } catch (Throwable failure) {
             vkDestroyShaderModule(device, nextGraphShader, null);
