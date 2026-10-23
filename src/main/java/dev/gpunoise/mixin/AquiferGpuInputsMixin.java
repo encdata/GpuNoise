@@ -1046,28 +1046,25 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 int flags = combined == null ? outputs[base + 2] : combined.fluidStatusValue(index, 2);
                 int fluidStateId = combined == null ? outputs[base + 3] : combined.fluidStatusValue(index, 3);
                 Aquifer.FluidStatus status;
-                if ((flags & GpuAquiferFluidStatus.FLAG_CPU_FALLBACK) != 0
-                        || source < 0 || source > GpuAquiferFluidStatus.SURFACE_SAMPLES) {
+                int fallbackReason = flags & ~GpuAquiferFluidStatus.FLAG_CPU_FALLBACK;
+                if ((flags & GpuAquiferFluidStatus.FLAG_CPU_FALLBACK) != 0) {
                     status = gpunoise$getAquiferStatus(key);
                     javaFallbacks++;
-                    GpuTerrainProfiler.recordAquiferStatusFallback(flags);
-                } else if (source == 0) {
-                    BlockState fluidType = Block.stateById(fluidStateId);
-                    if (fluidType == null) {
-                        status = gpunoise$getAquiferStatus(key);
-                        javaFallbacks++;
-                    } else {
-                        status = new Aquifer.FluidStatus(level, fluidType);
-                    }
+                } else if (source < 0 || source > GpuAquiferFluidStatus.SURFACE_SAMPLES) {
+                    status = gpunoise$getAquiferStatus(key);
+                    javaFallbacks++;
+                    fallbackReason |= GpuAquiferFluidStatus.FLAG_FALLBACK_INVALID_SOURCE;
                 } else {
                     BlockState fluidType = Block.stateById(fluidStateId);
                     if (fluidType == null) {
                         status = gpunoise$getAquiferStatus(key);
                         javaFallbacks++;
+                        fallbackReason |= GpuAquiferFluidStatus.FLAG_FALLBACK_INVALID_STATE;
                     } else {
                         status = new Aquifer.FluidStatus(level, fluidType);
                     }
                 }
+                if (fallbackReason != 0) GpuTerrainProfiler.recordAquiferStatusFallback(fallbackReason);
                 status = gpunoise$verifySharedAquiferStatus(graphIdentity, key, status);
                 statusCache.put(key, status);
                 GpuAquiferStatusRegionCache.Reservation reservation = reservations.get(index);

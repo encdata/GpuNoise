@@ -34,6 +34,10 @@ public final class GpuAquiferFluidStatus {
     public static final int FLAG_FALLBACK_SURFACE_INPUT = 1 << 3;
     public static final int FLAG_FALLBACK_THRESHOLD = 1 << 4;
     public static final int FLAG_FALLBACK_SPREAD_BOUNDARY = 1 << 5;
+    /** Java-side validation rejected a GPU row's selected global-fluid source. */
+    public static final int FLAG_FALLBACK_INVALID_SOURCE = 1 << 6;
+    /** Java-side registry lookup could not resolve a returned fluid state ID. */
+    public static final int FLAG_FALLBACK_INVALID_STATE = 1 << 7;
     public static final int LAVA_DISABLED_LEVEL = -32512;
     static final float DECISION_EPSILON = 5.0e-3f;
 
