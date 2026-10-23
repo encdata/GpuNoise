@@ -125,6 +125,9 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
     private static final AtomicBoolean gpunoise$gpuAquiferInputsLogged = new AtomicBoolean();
 
     @org.spongepowered.asm.mixin.Unique
+    private static final AtomicBoolean gpunoise$vanillaAquiferStatusShaderLogged = new AtomicBoolean();
+
+    @org.spongepowered.asm.mixin.Unique
     private static final int gpunoise$aquiferDecisionConcurrency = (int) Math.max(1L,
             Math.min(8L, Long.getLong("gpunoise.aquiferDecisionConcurrency", 3L)));
 
@@ -859,6 +862,13 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                                                                        boolean decisionChain) {
         long prefillStart = GpuTerrainProfiler.beginPhase();
         int javaFallbacks = 0;
+        // Vanilla NoiseBasedAquifer uses the same status formula as the Vulkan
+        // prefill shader. Feed its graph roots through the shader too; the old
+        // path eagerly called getAquiferStatus for every center, leaving the
+        // most expensive part of OCL's prefill on Java. Unknown fluid pickers
+        // and missing graph roots retain the exact Java status path.
+        boolean computeStatusesOnGpu = c2meStatusOnGpu
+                || gpunoise$canComputeVanillaAquiferStatuses(cache);
         int expectedCenters = Math.min(GpuAquiferFluidStatus.MAX_PREFILL_CENTERS,
                 Math.max(16, queries.size() / 32));
         Set<Long> seenCenters = new HashSet<>(expectedCenters);
@@ -928,7 +938,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         GpuAquiferFluidStatus.BatchWriter statusWriter = null;
         try {
             statusWriter = centers.isEmpty()
-                    ? null : new GpuAquiferFluidStatus.BatchWriter(centers.size(), !c2meStatusOnGpu);
+                    ? null : new GpuAquiferFluidStatus.BatchWriter(centers.size(), !computeStatusesOnGpu);
             float[] surfaces = new float[GpuAquiferFluidStatus.SURFACE_SAMPLES];
             int[] globalLevels = new int[GpuAquiferFluidStatus.GLOBAL_LEVEL_SAMPLES];
             int[] globalKinds = new int[GpuAquiferFluidStatus.GLOBAL_LEVEL_SAMPLES];
@@ -937,7 +947,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                 int[] center = centers.get(index);
                 int centerX = center[0], centerY = center[1], centerZ = center[2];
                 Aquifer.FluidStatus precomputed = precomputedStatuses.get(index);
-                if (precomputed == null && !c2meStatusOnGpu) {
+                if (precomputed == null && !computeStatusesOnGpu) {
                     long key = BlockPos.asLong(centerX, centerY, centerZ);
                     precomputed = gpunoise$getAquiferStatus(key);
                     precomputedStatuses.set(index, precomputed);
@@ -1050,6 +1060,7 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
                         status = new Aquifer.FluidStatus(level, fluidType);
                     }
                 }
+                status = gpunoise$verifySharedAquiferStatus(graphIdentity, key, status);
                 statusCache.put(key, status);
                 GpuAquiferStatusRegionCache.Reservation reservation = reservations.get(index);
                 if (reservation != null && reservation.isOwner()) reservation.complete(status);
@@ -1066,6 +1077,21 @@ abstract class AquiferGpuInputsMixin implements GpuAquiferCoordinatePlanner, Gpu
         GpuTerrainProfiler.recordAquiferStatusPrefill(prefillStart, centers.size(), javaFallbacks);
         return combined != null ? combined.withoutFluidStatusRows() : new GpuAquiferPrefillResult(
                 nearestRows == null ? new int[0] : nearestRows, new int[0]);
+    }
+
+    @org.spongepowered.asm.mixin.Unique
+    private boolean gpunoise$canComputeVanillaAquiferStatuses(GpuChunkDensityCache cache) {
+        if (cache == null || !globalFluidPicker.getClass().getName().startsWith("net.minecraft.")) return false;
+        boolean supported = cache.supportsRoot(GpuTerrainRoots.FLOODEDNESS)
+                && cache.supportsRoot(GpuTerrainRoots.SPREAD)
+                && cache.supportsRoot(GpuTerrainRoots.LAVA)
+                && cache.supportsRoot(GpuTerrainRoots.EROSION)
+                && cache.supportsRoot(GpuTerrainRoots.DEPTH);
+        if (supported && gpunoise$vanillaAquiferStatusShaderLogged.compareAndSet(false, true)) {
+            dev.gpunoise.GpuNoise.LOGGER.info(
+                    "GPU aquifer fluid-status shader enabled for vanilla NoiseBasedAquifer; admitted graph roots feed the status prefill");
+        }
+        return supported;
     }
 
     @org.spongepowered.asm.mixin.Unique

@@ -32,8 +32,8 @@ and passes those values into `ChunkNoiseSampler`'s cache.
 | Generated, world-specialized density program | Density graph compiler and persistent Vulkan engine compile graph roots. Custom Java bytecode has bounded automatic translation and diagnostics. |
 | Aligned region generation | `GpuTerrainRootsBatchScheduler` batches up to a 4x4 area. `GpuTerrainDecisionWriter.writeRegion` groups CPU writes by the same region. |
 | Full-volume noise evaluation and cell interpolation | One Vulkan terrain-grid command buffer evaluates the graph lattice, materializes interpolated block roots, and returns selected corner and block values in one readback. `GpuTerrainRootsBatchScheduler` batches the chunks. |
-| Aquifer prefill and block decisions | Aquifer inputs are prepared per chunk on Java, then nearest/status and substance decisions are submitted to Vulkan. The resulting decision table stores registry state IDs and fluid-update flags. |
-| One ordered queue/event chain and compact final readback | Grid evaluation and cell interpolation share one command buffer/readback. Aquifer inputs and decisions are a later Vulkan transaction, with CPU query/status preparation between the graph result and that decision chain. This is the largest remaining CPU/GPU boundary. |
+| Aquifer prefill and block decisions | Aquifer query coordinates and vanilla global-fluid samples are prepared on Java. Vanilla `NoiseBasedAquifer` status formulas now use the Vulkan status shader when all five roots are admitted; unknown pickers or missing roots use exact Java statuses. Nearest/status and substance kernels can be chained into one Vulkan submission, and the decision table stores registry state IDs and fluid-update flags. |
+| One ordered queue/event chain and compact final readback | Grid evaluation and cell interpolation share one command buffer/readback. Aquifer inputs and decisions remain a later Vulkan transaction, with CPU query-coordinate, surface-input, and global-fluid preparation between the graph result and that decision chain. This is the largest remaining CPU/GPU boundary. |
 | Compact block-state map | `GpuTerrainDecisionWriter.BlockPaletteBuffer` stores compact IDs and widens for large mod palettes. |
 | Region section commit | `GpuTerrainDecisionWriter.writeRegionBlocks` performs section-layer ownership, writes in region Y/Z/X order, recalculates counts, and primes heightmaps. |
 | Surface-height prefill | GPU Noise asynchronously evaluates the expanded initial-density grid and surface scan in one Vulkan submission per capacity-bounded range. The 4x4 requested area carries OCL's exact four-chunk halo, yielding a 48x48 quart grid; only 16 heights per grid chunk are read back and stitched into OCL's X-major layout. The path is gated by verified initial-density parity and disables itself after a runtime parity mismatch. |
@@ -44,11 +44,11 @@ and passes those values into `ChunkNoiseSampler`'s cache.
 The next large stage is a region-level Vulkan terrain transaction. It should
 consume the already interpolated block roots and region inputs, perform
 aquifer/material decisions on device, and return compact state IDs plus
-postprocessing data for the existing section commit. The current aquifer path
-still walks every block on Java to build center/status queries, waits for
-separate nearest/status/substance kernels, then publishes per-chunk decision
-tables. Port OCL's generated full-volume decision kernel and combine those
-inputs and dispatches into the aligned region transaction. Preserve
+postprocessing data for the section commit. The current aquifer path still
+walks every block on Java to build center queries and does not combine the
+whole region's density, surface, fluid-status, nearest-center, and substance
+work into one transaction. Port OCL's generated full-volume decision kernel
+and combine those inputs and dispatches into the aligned region transaction. Preserve
 per-root/per-row admission so unsupported custom functions, blending, or
 parity failures use the existing Java path. Profile packing, dispatch,
 readback, and CPU commit separately so the actual source of stalls is clear.
