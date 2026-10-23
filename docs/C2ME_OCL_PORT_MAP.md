@@ -36,7 +36,7 @@ and passes those values into `ChunkNoiseSampler`'s cache.
 | One ordered queue/event chain and compact final readback | Grid evaluation and cell interpolation share one command buffer/readback. Aquifer inputs and decisions are a later Vulkan transaction, with CPU query/status preparation between the graph result and that decision chain. This is the largest remaining CPU/GPU boundary. |
 | Compact block-state map | `GpuTerrainDecisionWriter.BlockPaletteBuffer` stores compact IDs and widens for large mod palettes. |
 | Region section commit | `GpuTerrainDecisionWriter.writeRegionBlocks` performs section-layer ownership, writes in region Y/Z/X order, recalculates counts, and primes heightmaps. |
-| Surface-height prefill | GPU Noise scans raw initial-density grid corners at cell-height boundaries in the same Vulkan command buffer, matching `NoiseChunk.preliminarySurfaceLevel`, and reads back 16 heights per chunk at quart coordinates when the horizontal cell width is four blocks. The 5x5 speculative chunk tile can supply some neighboring values through shared caches, but it does not guarantee OCL's full halo. OCL's `Stage1Cache.getAreaCache` assembles a `(36 + 4*(sizeX-1)) x (36 + 4*(sizeZ-1))` quart grid beginning four chunks before the requested area; for a single chunk this is a 36x36 surface grid, with a four-chunk border on every side. GPU Noise still needs a bounded expanded-region surface prefill that does not retain full block outputs for every halo chunk. |
+| Surface-height prefill | GPU Noise asynchronously evaluates the expanded initial-density grid and surface scan in one Vulkan submission per capacity-bounded range. The 4x4 requested area carries OCL's exact four-chunk halo, yielding a 48x48 quart grid; only 16 heights per grid chunk are read back and stitched into OCL's X-major layout. The path is gated by verified initial-density parity and disables itself after a runtime parity mismatch. |
 | Async program compile and device permit selection | Vulkan engine initializes asynchronously and `VulkanSubmissionRing` coalesces queued work. Physical device selection and concurrent queue utilization still need comparison against OCL's per-device permit model. |
 
 ## Next implementation boundary
@@ -44,18 +44,14 @@ and passes those values into `ChunkNoiseSampler`'s cache.
 The next large stage is a region-level Vulkan terrain transaction. It should
 consume the already interpolated block roots and region inputs, perform
 aquifer/material decisions on device, and return compact state IDs plus
-postprocessing data for the existing section commit. Expand the new Vulkan
-surface scan to OCL's four-chunk halo so vanilla surface lookups reuse it. The
-current 5x5 tile is only opportunistic coverage: lookups outside available
-claimed caches correctly use the Java scan, so it is not equivalent to OCL's
-area cache yet. The expanded surface stage should batch initial-density grid
-work separately from full chunk block output and keep only compact surface
-heights for the halo.
-The transaction must retain
+postprocessing data for the existing section commit. The current aquifer path
+still walks every block on Java to build center/status queries, waits for
+separate nearest/status/substance kernels, then publishes per-chunk decision
+tables. Port OCL's generated full-volume decision kernel and combine those
+inputs and dispatches into the aligned region transaction. Preserve
 per-root/per-row admission so unsupported custom functions, blending, or
-parity failures use the existing Java path. Input packing,
-per-stage diagnostics, shader compilation, dispatch, and readback should be
-profiled as one transaction so the cost of CPU/GPU round trips is visible.
+parity failures use the existing Java path. Profile packing, dispatch,
+readback, and CPU commit separately so the actual source of stalls is clear.
 
 The current code is not yet equivalent to OCL's single full-region kernel:
 the decision table is assembled separately from root evaluation, and any

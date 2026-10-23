@@ -113,7 +113,24 @@ public final class VulkanCiSmoke {
                 if (height != -56) throw new IllegalStateException(
                         "Surface-only GPU dispatch returned " + height + " instead of top cell boundary -56");
             }
-            System.out.println("Vulkan CI smoke: grid-only initial-density surface dispatch passed");
+            GpuTerrainSurfaceRegion surfaceRegion = new GpuTerrainSurfaceRegion(
+                    -7, 9, 4, 4, -64, 384, 4, 8);
+            List<GpuTerrainSurfaceRegion.ChunkRange> surfaceRanges = surfaceRegion.ranges(
+                    PersistentVulkanNormalNoiseEngine.CAPACITY,
+                    PersistentVulkanNormalNoiseEngine.MAX_TERRAIN_SURFACE_COLUMNS);
+            int[] regionSurface = new int[surfaceRegion.surfaceValueCount()];
+            for (GpuTerrainSurfaceRegion.ChunkRange range : surfaceRanges) {
+                GpuTerrainBatchResult result = ring.submitGraphGridSurfaceHeights(multiRootGraph,
+                        surfaceRegion.gridMetadata(range), range.chunkCount(),
+                        surfaceRegion.samplesPerChunk(), surfaceRegion.surfaceMetadata(range),
+                        new int[]{GpuTerrainRoots.INITIAL_DENSITY}).get(60, TimeUnit.SECONDS);
+                surfaceRegion.stitch(range, result.surfaceHeights(), regionSurface);
+            }
+            for (int height : regionSurface) {
+                if (height != 320) throw new IllegalStateException(
+                        "Four-by-four halo surface scan returned " + height + " instead of top boundary 320");
+            }
+            System.out.println("Vulkan CI smoke: grid-only chunk and expanded-region surface dispatch passed");
             int[] selectedRootIndexes = {GpuTerrainRoots.RIDGES, GpuTerrainRoots.FINAL_DENSITY,
                     GpuTerrainRoots.EROSION};
             float[] selectedRootResults = ring.submitGraphRoots(multiRootGraph, x, y, z, selectedRootIndexes)
