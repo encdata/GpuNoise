@@ -116,14 +116,17 @@ final class GpuTerrainBatchScheduler implements AutoCloseable {
             }
         }
         if (totalChunks == 0) return;
-        batch = compatible;
+        // Capture a stable dispatch snapshot for the asynchronous completion
+        // callback. `batch` itself is replaced after filtering incompatible
+        // requests, so it is not effectively final.
+        List<Pending> dispatchBatch = List.copyOf(compatible);
 
         List<TerrainNoiseApi.Chunk> chunks = new ArrayList<>(totalChunks);
         int[] x = new int[totalChunks * samplesPerChunk];
         int[] y = new int[x.length];
         int[] z = new int[x.length];
         int chunkOffset = 0;
-        for (Pending item : batch) {
+        for (Pending item : dispatchBatch) {
             chunks.addAll(item.request.chunks());
             int sampleOffset = chunkOffset * samplesPerChunk;
             System.arraycopy(item.request.sampleXRaw(), 0, x, sampleOffset, item.request.sampleXRaw().length);
@@ -135,20 +138,24 @@ final class GpuTerrainBatchScheduler implements AutoCloseable {
         try {
             provider.submit(merged).whenComplete((result, failure) -> {
                 if (failure != null) {
-                    for (Pending item : batch) if (!item.future.isDone()) item.future.completeExceptionally(failure);
+                    for (Pending item : dispatchBatch) {
+                        if (!item.future.isDone()) item.future.completeExceptionally(failure);
+                    }
                     return;
                 }
-            int offset = 0;
-            for (Pending item : batch) {
-                int count = item.request.chunks().size() * outputSamplesPerChunk;
-                if (!item.future.isDone()) {
-                    item.future.complete(result.slice(item.request, offset, count));
+                int offset = 0;
+                for (Pending item : dispatchBatch) {
+                    int count = item.request.chunks().size() * outputSamplesPerChunk;
+                    if (!item.future.isDone()) {
+                        item.future.complete(result.slice(item.request, offset, count));
+                    }
+                    offset += count;
                 }
-                offset += count;
-            }
             });
         } catch (Throwable failure) {
-            for (Pending item : batch) if (!item.future.isDone()) item.future.completeExceptionally(failure);
+            for (Pending item : dispatchBatch) {
+                if (!item.future.isDone()) item.future.completeExceptionally(failure);
+            }
         }
     }
 
