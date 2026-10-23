@@ -4,11 +4,13 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Semaphore;
 
 /** Bounded compact cache for asynchronously prefetched OCL-sized surface regions. */
 public final class GpuTerrainSurfaceRegionCache {
     private static final int MAX_IN_FLIGHT = 32;
     private static final int MAX_COMPLETED = 32;
+    private static final Semaphore IN_FLIGHT_PERMITS = new Semaphore(MAX_IN_FLIGHT);
     private static final ConcurrentHashMap<Key, CompletableFuture<int[]>> IN_FLIGHT = new ConcurrentHashMap<>();
     private static final java.util.Set<Object> DISABLED = ConcurrentHashMap.newKeySet();
     private static final LinkedHashMap<Key, int[]> COMPLETED = new LinkedHashMap<>(32, 0.75f, true);
@@ -21,19 +23,31 @@ public final class GpuTerrainSurfaceRegionCache {
         synchronized (COMPLETED) {
             if (COMPLETED.containsKey(key)) return;
         }
-        if (IN_FLIGHT.containsKey(key) || IN_FLIGHT.size() >= MAX_IN_FLIGHT) return;
+        if (!IN_FLIGHT_PERMITS.tryAcquire()) return;
+        CompletableFuture<int[]> reservation = new CompletableFuture<>();
+        CompletableFuture<int[]> previous = IN_FLIGHT.putIfAbsent(key, reservation);
+        if (previous != null) {
+            IN_FLIGHT_PERMITS.release();
+            return;
+        }
         CompletableFuture<int[]> future;
         try {
             future = GpuTerrainRuntime.submitTerrainSurfaceRegion(region).toCompletableFuture();
         } catch (RuntimeException failure) {
+            IN_FLIGHT.remove(key, reservation);
+            IN_FLIGHT_PERMITS.release();
             return;
         }
-        CompletableFuture<int[]> previous = IN_FLIGHT.putIfAbsent(key, future);
-        if (previous != null) return;
         future.whenComplete((values, failure) -> {
-            IN_FLIGHT.remove(key, future);
+            IN_FLIGHT.remove(key, reservation);
+            IN_FLIGHT_PERMITS.release();
             if (failure != null || values == null || values.length != region.surfaceValueCount()
-                    || DISABLED.contains(graphIdentity)) return;
+                    || DISABLED.contains(graphIdentity)
+                    || GpuTerrainRuntime.aquiferCacheGraphIdentity() != graphIdentity) {
+                reservation.completeExceptionally(failure != null ? failure
+                        : new IllegalStateException("surface region result is stale or invalid"));
+                return;
+            }
             synchronized (COMPLETED) {
                 COMPLETED.put(key, values);
                 while (COMPLETED.size() > MAX_COMPLETED) {
@@ -43,6 +57,7 @@ public final class GpuTerrainSurfaceRegionCache {
                     oldest.remove();
                 }
             }
+            reservation.complete(values);
         });
     }
 
